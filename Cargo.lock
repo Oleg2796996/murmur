@@ -2580,9 +2580,18 @@ dependencies = [
 name = "murmur-transport"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "futures-lite",
+ "hex",
  "iroh",
+ "murmur-id",
+ "postcard",
+ "rand 0.8.7",
  "serde",
+ "serde_json",
+ "sha3",
  "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
