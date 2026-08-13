@@ -10,7 +10,7 @@
 **Step progress:**
 - ✅ Step 1: `murmur-id` (commit `926ce12`) — identity, bech32, CLI
 - ✅ Step 2: `murmur-log` (commit `ee13746`) — append-only log, SHA3 chain, Merkle root, CLI
-- ⏳ Step 3: `murmur-transport` — iroh endpoint + SignedEnvelope
+- ✅ Step 3: `murmur-transport` (commit `a235632`) — Envelope sign/verify + iroh ALPN
 - ⏳ Step 4: integration `murmur` binary
 - ⏳ Step 5: OTS witness
 - ⏳ Step 6: end-to-end
