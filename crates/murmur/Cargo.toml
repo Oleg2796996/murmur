@@ -1,0 +1,43 @@
+[package]
+name = "murmur"
+version = "0.1.0"
+edition = "2021"
+description = "murmur messenger: P2P sends and receives messages into append-only logs"
+license = "MIT"
+
+[features]
+default = []
+# The `iroh` feature pulls iroh + tokio from murmur-transport and makes the
+# binary an actually networked messenger. Without it, the library is
+# available for embedders that bring their own transport.
+iroh = ["murmur-transport/iroh", "dep:tokio", "dep:iroh", "dep:anyhow", "dep:futures-lite"]
+
+[dependencies]
+murmur-id = { path = "../murmur-id" }
+murmur-log = { path = "../murmur-log" }
+murmur-transport = { path = "../murmur-transport" }
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+thiserror = "1"
+clap = { version = "4", features = ["derive", "env"] }
+postcard = { version = "1.0", features = ["alloc", "use-std"] }
+hex = "0.4"
+
+# Enabled by `iroh` feature for the binary main path.
+iroh = { version = "0.25", optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "signal"], optional = true }
+futures-lite = { version = "2", optional = true }
+anyhow = { version = "1", optional = true }
+
+[dev-dependencies]
+rand = "0.8"
+tempfile = "3"
+hex = "0.4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+iroh = { version = "0.25" }
+futures-lite = "2"
+
+[[bin]]
+name = "murmur"
+path = "src/main.rs"

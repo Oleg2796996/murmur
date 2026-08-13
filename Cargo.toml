@@ -6,6 +6,7 @@ members = [
     "crates/murmur-log",
     "crates/murmur-mix",
     "crates/murmur-cold",
+    "crates/murmur",
 ]
 
 [workspace.package]

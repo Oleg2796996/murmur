@@ -164,8 +164,7 @@ impl Log {
     }
 
     /// Append an entry. The entry's `prev_hash` MUST equal the current chain head.
-    pub fn append(&mut self, entry: &Entry) -> Result<[u8; 32], LogError> {
-        // Caller is responsible for setting prev_hash correctly, but we verify.
+    pub fn append(&mut self, entry: &Entry) -> Result<[u8; 32], LogError> {        // Caller is responsible for setting prev_hash correctly, but we verify.
         if entry.prev_hash != self.last_hash {
             return Err(LogError::ChainBroken {
                 seq: entry.seq,
@@ -201,6 +200,24 @@ impl Log {
 
     pub fn is_empty(&self) -> bool {
         self.hashes.is_empty()
+    }
+
+    /// Hash of the chain head (i.e. last appended entry). For an empty log,
+    /// this is `[0; 32]` — the prev_hash that the first entry should carry.
+    pub fn last_hash(&self) -> [u8; 32] {
+        self.last_hash
+    }
+
+    /// Convenience append: builds an entry with the correct seq (current
+    /// length) and prev_hash (current chain head), then appends. Use this
+    /// from embedders that don't want to track prev_hash themselves.
+    pub fn append_payload(
+        &mut self,
+        timestamp: u64,
+        payload: Vec<u8>,
+    ) -> Result<[u8; 32], LogError> {
+        let entry = Entry::new(self.entries_count, timestamp, payload, self.last_hash)?;
+        self.append(&entry)
     }
 
     /// Path to the log file.
