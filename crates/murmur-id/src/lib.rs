@@ -156,6 +156,22 @@ impl IdentityPublic {
     pub fn agreement_pubkey(&self) -> [u8; AGREEMENT_PUBLIC_LEN] {
         self.agreement_pub
     }
+
+    /// Verify an ed25519 signature against this public key.
+    ///
+    /// Returns `false` on any decoding error (malformed signature, bad key).
+    pub fn verify(&self, msg: &[u8], sig_bytes: &[u8; 64]) -> bool {
+        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+        let verifying = match VerifyingKey::from_bytes(&self.signing_pub) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        let sig = match Signature::from_slice(sig_bytes) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        verifying.verify(msg, &sig).is_ok()
+    }
 }
 
 /// The full identity: secrets + derived public keys.

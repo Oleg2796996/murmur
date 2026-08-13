@@ -7,6 +7,14 @@
 **Maintainer:** Oleg (@Oleg2796996)
 **AI co-author:** Matilda
 
+**Step progress:**
+- ✅ Step 1: `murmur-id` (commit `926ce12`) — identity, bech32, CLI
+- ✅ Step 2: `murmur-log` (commit `ee13746`) — append-only log, SHA3 chain, Merkle root, CLI
+- ⏳ Step 3: `murmur-transport` — iroh endpoint + SignedEnvelope
+- ⏳ Step 4: integration `murmur` binary
+- ⏳ Step 5: OTS witness
+- ⏳ Step 6: end-to-end
+
 ---
 
 ## MVP-01 — Identity + P2P Transport + Local Log (2 weeks)
