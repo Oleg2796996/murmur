@@ -1,0 +1,11 @@
+[package]
+name = "murmur-transport"
+version = "0.1.0"
+edition = "2021"
+description = "P2P transport (iroh) for murmur"
+license = "MIT"
+
+[dependencies]
+iroh = "0.25"
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"

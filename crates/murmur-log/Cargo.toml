@@ -1,0 +1,12 @@
+[package]
+name = "murmur-log"
+version = "0.1.0"
+edition = "2021"
+description = "Append-only local log with Merkle anchoring for murmur"
+license = "MIT"
+
+[dependencies]
+sha3 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
