@@ -18,9 +18,29 @@
 - `murmur-transport` — iroh node, signed message envelopes, end-to-end delivery
 - `murmur-log` — append-only log per contact, SHA3 chain, Merkle anchor per day
 
+**Architectural decisions (2026-08-13):**
+- **Serialization:** `postcard` for on-disk/on-wire, `toml` for config.
+- **Address format:** bech32 (Nostr-style `npub1...`) for human-readable identity hashing.
+- **Algorithm:** ed25519 for signatures, X25519 for ECDH (X3DH-style key agreement).
+
+**Step-by-step plan (each step has a gate, no skipping):**
+
+| Step | Crate | Scope | Gate |
+|---|---|---|---|
+| 1 | `murmur-id` | Identity struct, keypair generation, bech32, postcard serde, CLI `new` | `cargo test -p murmur-id` + CLI prints valid `npub1...` |
+| 2 | `murmur-log` | Append-only log per contact, SHA3 chain, Merkle root | `cargo test -p murmur-log` + integrity: 1000 msg verify ✓, tamper 1 byte → verify ✗ |
+| 3 | `murmur-transport` | iroh endpoint + signed envelope `SignedEnvelope { payload, signature, sender_npub }`, direct NodeAddr discovery | 2 procs on 2 machines exchange messages, both `cargo test -p murmur-transport` ✓ |
+| 4 | integration | `murmur send` writes to local log, `murmur listen` writes to remote log | 10 messages in both logs, hashes match |
+| 5 | OTS witness | `murmur-log/src/witness.rs` — background job, hourly batch → Merkle root → OTS calendar | Mock OTS calendar test ✓ |
+| 6 | end-to-end | Full CLI: new identity → send → OTS anchor → verify | 2 machines, 10+ messages, OTS proof verifiable on Bitcoin regtest |
+
 **Deliverables:**
-- `cargo run --bin murmur-cli -- send <pubkey-bech32> <message>` and `receive`
-- Integration test: two processes, 1 message delivery, log persistence across restart
+- `murmur-id new` — generates identity, prints `npub1...`, saves `~/.murmur/identity.bin`
+- `murmur send <npub> <msg>` — sends signed message via iroh
+- `murmur listen` — listens for incoming, writes to log
+- `murmur log verify` — verifies log integrity
+- `murmur log witness` — runs OTS anchoring manually
+- Integration test: 2 processes, 1+ message delivery, log persistence across restart
 - Benchmark: end-to-end RTT, CPU during receive
 
 ---
