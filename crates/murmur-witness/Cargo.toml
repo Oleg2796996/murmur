@@ -1,0 +1,27 @@
+[package]
+name = "murmur-witness"
+version = "0.1.0"
+edition = "2021"
+description = "OpenTimestamps witness layer for murmur logs (minimal dependency footprint)"
+license = "MIT"
+
+[dependencies]
+murmur-log = { path = "../murmur-log" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+chrono = { version = "0.4", features = ["serde"] }
+opentimestamps = "0.2"
+ots = "0.1"
+opentimestamps-cli = "0.2"
+hex = "0.4"
+clap = { version = "4", features = ["derive", "env"] }
+
+[dev-dependencies]
+hex = "0.4"
+tempfile = "3"
+rand = "0.8"
+
+[[bin]]
+name = "murmur-witness"
+path = "src/main.rs"
