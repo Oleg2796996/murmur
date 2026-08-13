@@ -12,7 +12,7 @@
 - ✅ Step 2: `murmur-log` (commit `ee13746`) — append-only log, SHA3 chain, Merkle root, CLI
 - ✅ Step 3: `murmur-transport` (commit `a235632`) — Envelope sign/verify + iroh ALPN
 - ✅ Step 4: integration `murmur` (commit `df15f43`) — CLI + iroh bridge to logs
-- ⏳ Step 5: OTS witness
+- ✅ Step 5: OTS witness (commit `8a7faed`) — submit to OpenTimestamps calendar pool, persistence + pending fallback
 - ⏳ Step 6: end-to-end on 2 machines
 
 ---
