@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/murmur-id",
+    "crates/murmur-transport",
+    "crates/murmur-log",
+    "crates/murmur-mix",
+    "crates/murmur-cold",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+version = "0.1.0"
