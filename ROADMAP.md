@@ -13,7 +13,10 @@
 - ✅ Step 3: `murmur-transport` (commit `a235632`) — Envelope sign/verify + iroh ALPN
 - ✅ Step 4: integration `murmur` (commit `df15f43`) — CLI + iroh bridge to logs
 - ✅ Step 5: OTS witness (commit `8a7faed`) — submit to OpenTimestamps calendar pool, persistence + pending fallback
-- ⏳ Step 6: end-to-end on 2 machines
+- ✅ Step 6: cross-machine E2E (commit `b694052`) — HP ↔ VPS via public IPv4 2.27.1.2:53439 (direct iroh UDP, no relay)
+- ✅ Step 7: relay daemon (commit `a6f343b`) — `murmur-relay` crate deployed on VPS 2.27.1.2:41578 (iroh) + ws://2.27.1.2:8443. Cross-machine E2E HP ↔ VPS relay ✓ (subscriber received envelope with backlog=1).
+- ⏳ Step 8: PWA frontend — manifest.json, service-worker.js with push handler, app.js with pushManager.subscribe, deploy on VPS (nginx + static)
+- ⏳ Step 9: mobile test — 1 Android + 1 iPhone, install PWA, send-relay → VPS push → mobile notification
 
 ---
 
