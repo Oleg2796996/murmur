@@ -2846,11 +2846,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "futures",
  "futures-lite",
  "hex",
  "iroh",
  "murmur-id",
  "murmur-log",
+ "murmur-relay",
  "murmur-transport",
  "postcard",
  "rand 0.8.7",
@@ -2858,6 +2860,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-tungstenite",
  "toml",
 ]
 
@@ -2905,6 +2908,34 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "murmur-relay"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "base64 0.22.1",
+ "clap",
+ "futures",
+ "futures-lite",
+ "hex",
+ "iroh",
+ "murmur-id",
+ "murmur-log",
+ "murmur-transport",
+ "parking_lot",
+ "postcard",
+ "serde",
+ "serde_json",
+ "sha3",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-tungstenite",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

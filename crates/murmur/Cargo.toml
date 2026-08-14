@@ -10,12 +10,13 @@ default = []
 # The `iroh` feature pulls iroh + tokio from murmur-transport and makes the
 # binary an actually networked messenger. Without it, the library is
 # available for embedders that bring their own transport.
-iroh = ["murmur-transport/iroh", "dep:tokio", "dep:iroh", "dep:anyhow", "dep:futures-lite"]
+iroh = ["murmur-transport/iroh", "dep:tokio", "dep:iroh", "dep:anyhow", "dep:futures-lite", "dep:murmur-relay", "dep:tokio-tungstenite", "dep:futures"]
 
 [dependencies]
 murmur-id = { path = "../murmur-id" }
 murmur-log = { path = "../murmur-log" }
 murmur-transport = { path = "../murmur-transport" }
+murmur-relay = { path = "../murmur-relay", optional = true }
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
@@ -29,6 +30,8 @@ iroh = { version = "0.25", optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "signal"], optional = true }
 futures-lite = { version = "2", optional = true }
 anyhow = { version = "1", optional = true }
+tokio-tungstenite = { version = "0.21", optional = true }
+futures = { version = "0.3", optional = true }
 
 [dev-dependencies]
 rand = "0.8"
