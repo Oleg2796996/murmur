@@ -74,8 +74,8 @@ enum Cmd {
         /// Alias of the expected sender (must exist in contacts.toml).
         from_contact: String,
     },
-    /// (feature: iroh) Send a signed envelope via iroh to a peer whose
-    /// `node_id` and direct address are stored in `contacts.toml`.
+    /// (feature: iroh) Send a signed envelope via iroh-direct to a peer
+    /// whose `node_id` and direct address are stored in `contacts.toml`.
     #[cfg(feature = "iroh")]
     SendIroh {
         contact: String,
@@ -85,6 +85,34 @@ enum Cmd {
         /// Message bytes (ignored if --from-file is set).
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         message: Vec<String>,
+    },
+    /// (feature: iroh) Send a signed envelope via a relay node.
+    /// The relay's `<node_id>@<ip>:<port>` is read from a contact's share,
+    /// and the envelope is wrapped in an alias-prefixed frame:
+    /// `[4 bytes BE: alias_len][alias][postcard(Envelope)]`.
+    ///
+    /// The relay accepts envelopes from any sender, verifies the signature,
+    /// then routes by `envelope.recipient_npub` == `<alias>`.
+    #[cfg(feature = "iroh")]
+    SendRelay {
+        contact: String,
+        /// Read message bytes from this file instead of CLI arg.
+        #[arg(long)]
+        from_file: Option<PathBuf>,
+        /// Message bytes (ignored if --from-file is set).
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        message: Vec<String>,
+    },
+    /// (feature: iroh) Subscribe to a relay via WebSocket and print incoming
+    /// envelopes as they arrive. The alias you subscribe to is your own
+    /// contact alias (the relay stores envelopes addressed to it).
+    #[cfg(feature = "iroh")]
+    Subscribe {
+        /// WS URL of the relay, e.g. `ws://127.0.0.1:8443`.
+        #[arg(long)]
+        ws_url: String,
+        /// Alias to receive envelopes for (the recipient's contact alias).
+        contact: String,
     },
 }
 
@@ -214,6 +242,101 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 murmur::iroh_integration::send_envelope_via_endpoint(&endpoint, addr, &env).await
             })?;
             println!("recorded outgoing envelope to {contact}: {}", hex::encode(hash));
+        }
+        #[cfg(feature = "iroh")]
+        Cmd::SendRelay { contact, from_file, message } => {
+            let m = require_murmur(&cfg)?;
+            let peers = load_peers(&cfg.home_dir)?;
+            let (to_npub, to_addr) = peers
+                .get(&contact)
+                .ok_or_else(|| format!("unknown contact '{contact}'"))?
+                .clone();
+            let addr = parse_share_string(&to_addr)
+                .ok_or_else(|| format!("peer '{contact}' has no valid node_addr; run `murmur add-peer {contact} <npub> <node_id>@<ip>:<port>` again"))?;
+            let payload: Vec<u8> = if let Some(p) = from_file {
+                std::fs::read(p)?
+            } else {
+                message.join(" ").into_bytes()
+            };
+            let timestamp = unix_now_secs();
+            let env = m.build_envelope(&to_npub, &payload)?;
+            let hash = m.record_outgoing(&contact, &env, timestamp)?;
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                use murmur_transport::iroh_transport::ALPN;
+                let endpoint = murmur::iroh_integration::spawn_sender_endpoint().await?;
+                let conn = endpoint.connect(addr, ALPN).await?;
+                let (mut send, mut recv) = conn.open_bi().await?;
+                // Build relay frame: alias_len(4 BE) || alias || envelope.
+                let mut frame = Vec::with_capacity(4 + contact.len() + 256);
+                frame.extend_from_slice(&(contact.len() as u32).to_be_bytes());
+                frame.extend_from_slice(contact.as_bytes());
+                let env_bytes = postcard::to_stdvec(&env)?;
+                frame.extend_from_slice(&env_bytes);
+                send.write_all(&frame).await?;
+                send.finish()?;
+                let _ack = recv.read_to_end(8).await?;
+                Ok::<(), anyhow::Error>(())
+            })?;
+            println!("recorded+sent envelope to {contact} via relay: {}", hex::encode(hash));
+        }
+        #[cfg(feature = "iroh")]
+        Cmd::Subscribe { ws_url, contact } => {
+            let m = require_murmur(&cfg)?;
+            let _ = m; // we don't need local identity for subscribe
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                use futures::{SinkExt, StreamExt};
+                use tokio_tungstenite::tungstenite::Message;
+                let (mut ws_tx, mut ws_rx) = tokio_tungstenite::connect_async(&ws_url).await?.0.split();
+                // Send Subscribe via postcard-encoded WsMessage.
+                let sub_msg = murmur_relay::WsMessage::Subscribe { alias: contact.clone() };
+                let sub_bytes = sub_msg.encode()?;
+                ws_tx.send(Message::Binary(sub_bytes)).await?;
+                println!("subscribed to alias={contact} via {ws_url}; waiting for envelopes...");
+                while let Some(msg) = ws_rx.next().await {
+                    match msg? {
+                        Message::Text(t) => {
+                            println!("recv (text): {t}");
+                        }
+                        Message::Binary(b) => {
+                            match murmur_relay::WsMessage::decode(&b) {
+                                Ok(murmur_relay::WsMessage::Push(entry)) => {
+                                    println!(
+                                        "envelope from={} alias={} ts={} hash={} bytes={}",
+                                        entry.from_npub,
+                                        entry.to_alias,
+                                        entry.ts,
+                                        entry.envelope_hash_hex,
+                                        entry.envelope_bytes.len()
+                                    );
+                                }
+                                Ok(murmur_relay::WsMessage::Subscribed { alias, backlog }) => {
+                                    println!("subscribed: alias={alias} backlog={backlog}");
+                                }
+                                Ok(murmur_relay::WsMessage::Pong) => {
+                                    println!("pong");
+                                }
+                                Ok(murmur_relay::WsMessage::Error { message }) => {
+                                    println!("error: {message}");
+                                }
+                                Ok(other) => {
+                                    println!("recv (other): {:?}", other);
+                                }
+                                Err(e) => {
+                                    println!("decode err: {e}");
+                                }
+                            }
+                        }
+                        Message::Close(_) => {
+                            println!("server closed connection");
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                Ok::<(), anyhow::Error>(())
+            })?;
         }
     }
     Ok(())

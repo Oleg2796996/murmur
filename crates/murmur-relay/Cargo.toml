@@ -1,0 +1,53 @@
+[package]
+name = "murmur-relay"
+version = "0.1.0"
+edition = "2021"
+description = "murmur relay server: receives iroh-direct envelopes and pushes them to subscribed WebSocket clients"
+license = "MIT"
+
+[dependencies]
+# Core types
+murmur-id = { path = "../murmur-id" }
+murmur-log = { path = "../murmur-log" }
+murmur-transport = { path = "../murmur-transport", features = ["iroh"] }
+
+# Async runtime + network
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "signal", "sync"] }
+tokio-tungstenite = "0.21"  # WebSocket server
+# iroh is needed for the iroh-listener half: accept envelopes from iroh-direct clients
+iroh = { version = "0.25" }
+
+# Serde / encoding
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+postcard = { version = "1.0", features = ["alloc", "use-std"] }
+hex = "0.4"
+base64 = "0.22"
+toml = "0.8"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Errors
+anyhow = "1"
+thiserror = "1"
+
+# Async helpers
+futures = "0.3"
+async-channel = "2"
+parking_lot = "0.12"
+sha3 = "0.10"
+futures-lite = "2"
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "test-util"] }
+
+[[bin]]
+name = "murmur-relay"
+path = "src/main.rs"
+
+[lib]
+name = "murmur_relay"
+path = "src/lib.rs"

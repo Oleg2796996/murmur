@@ -68,7 +68,7 @@ impl Envelope {
 }
 
 /// Compute the bytes that are signed/verified for an envelope.
-fn signature_input(npub: &str, payload: &[u8]) -> Vec<u8> {
+pub fn signature_input(npub: &str, payload: &[u8]) -> Vec<u8> {
     let mut hasher = Sha3_256::new();
     hasher.update(HASH_DOMAIN);
     hasher.update((npub.len() as u32).to_le_bytes());
@@ -199,5 +199,64 @@ pub mod iroh_transport {
     /// Format: `<node_id>@<ip>:<port>`.
     pub fn build_share_string(node_id: &iroh::net::NodeId, addr: std::net::SocketAddr) -> String {
         format!("{}@{}", node_id, addr)
+    }
+
+    /// Spawn a real-network iroh node for **relay/server use**, accepting
+    /// envelopes from ANY sender (no expected_sender check at the acceptor).
+    /// The caller is responsible for verifying the envelope signature
+    /// inside `on_envelope` (using `Envelope::verify`).
+    ///
+    /// This is the same as `spawn_persistent_node` but skips the
+    /// `NpubMismatch` rejection — relays need to multiplex many senders.
+    pub async fn spawn_relay_node<F: Fn(Envelope) + Send + Sync + 'static>(
+        on_envelope: F,
+    ) -> std::result::Result<iroh::node::MemNode, anyhow::Error> {
+        use iroh::net::relay::RelayMode;
+        use iroh::node::DiscoveryConfig;
+        let acceptor = Arc::new(AnySenderAcceptor { on_envelope });
+        let node = Node::memory()
+            .bind_random_port()
+            .relay_mode(RelayMode::Disabled)
+            .node_discovery(DiscoveryConfig::None)
+            .build()
+            .await?
+            .accept(ALPN.to_vec(), acceptor)
+            .spawn()
+            .await?;
+        Ok(node)
+    }
+
+    /// Like `EnvelopeAcceptor` but accepts envelopes from any sender.
+    /// Signature is NOT verified here — callers must call `Envelope::verify`
+    /// inside their `on_envelope` callback.
+    struct AnySenderAcceptor<F: Fn(Envelope) + Send + Sync + 'static> {
+        on_envelope: F,
+    }
+
+    impl<F: Fn(Envelope) + Send + Sync + 'static> std::fmt::Debug for AnySenderAcceptor<F> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("AnySenderAcceptor").finish_non_exhaustive()
+        }
+    }
+
+    impl<F: Fn(Envelope) + Send + Sync + 'static> iroh::node::ProtocolHandler
+        for AnySenderAcceptor<F>
+    {
+        fn accept(
+            self: Arc<Self>,
+            connecting: iroh::net::endpoint::Connecting,
+        ) -> futures_lite::future::Boxed<std::result::Result<(), anyhow::Error>> {
+            Box::pin(async move {
+                let conn = connecting.await?;
+                let (mut send, mut recv) = conn.accept_bi().await?;
+                let bytes = recv.read_to_end(64 * 1024).await?;
+                let env: Envelope = postcard::from_bytes(&bytes)
+                    .map_err(|e| anyhow::anyhow!("invalid envelope bytes: {e}"))?;
+                (self.on_envelope)(env);
+                send.finish()?;
+                send.stopped().await?;
+                Ok(())
+            })
+        }
     }
 }

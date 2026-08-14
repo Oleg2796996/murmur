@@ -8,6 +8,7 @@ members = [
     "crates/murmur-cold",
     "crates/murmur",
     "crates/murmur-witness",
+    "crates/murmur-relay",
 ]
 
 [workspace.package]
