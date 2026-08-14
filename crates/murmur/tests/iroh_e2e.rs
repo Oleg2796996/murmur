@@ -3,7 +3,7 @@
 
 #![cfg(feature = "iroh")]
 
-use murmur::iroh_integration::{listen, send_envelope_via_endpoint, spawn_sender_endpoint};
+use murmur::iroh_integration::{listen, send_envelope_via_endpoint, spawn_sender_endpoint, build_node_addr};
 use murmur::{Murmur, MurmurError};
 use murmur_id::Identity;
 use std::sync::Arc;
@@ -23,16 +23,18 @@ async fn end_to_end_through_iroh_persists_to_bob_log() {
 
     // bob: spin up his listener, expected to receive from alice.
     let bob_arc = Arc::new(Murmur::load(&bob_home, "bob").unwrap());
-    let bob_node = listen(bob_arc.clone(), alice.public(), "alice".into())
+    let (bob_node, bob_node_id, bob_addr) = listen(bob_arc.clone(), alice.public(), "alice".into())
         .await
         .expect("bob listener up");
-    let bob_node_id = bob_node.node_id();
+    // Sanity: the listener got a real bind address (random port > 0).
+    assert!(bob_addr.port() > 0, "bob should have a real port");
 
     // alice: send an envelope.
     let alice_endpoint = spawn_sender_endpoint().await.expect("alice endpoint");
     let payload = b"hello bob, from your friend alice";
     let env = alice.build_envelope(&bob.public().npub(), payload).unwrap();
-    send_envelope_via_endpoint(&alice_endpoint, bob_node_id, &env)
+    let bob_node_addr = build_node_addr(bob_node_id, bob_addr);
+    send_envelope_via_endpoint(&alice_endpoint, bob_node_addr, &env)
         .await
         .expect("alice sends");
 

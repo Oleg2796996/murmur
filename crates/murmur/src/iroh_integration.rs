@@ -8,24 +8,28 @@ use iroh::net::endpoint::Endpoint;
 use iroh::net::NodeId;
 use iroh::node::MemNode;
 use murmur_id::IdentityPublic;
-use murmur_transport::iroh_transport::{spawn_memory_node, ALPN};
+use murmur_transport::iroh_transport::{spawn_persistent_node, ALPN};
 use murmur_transport::Envelope;
 use std::sync::Arc;
 
 pub type IrohResult<T> = std::result::Result<T, anyhow::Error>;
 
-/// Spawn an iroh listener that accepts envelopes from `expected_sender`
-/// and persists payloads to `<murmur_home>/incoming/<from_contact>.log`.
+/// Spawn an iroh **real-network** listener (UDP socket, not loopback) that
+/// accepts envelopes from `expected_sender` and persists payloads to
+/// `<murmur_home>/incoming/<from_contact>.log`.
 ///
-/// Returns the live `MemNode` handle for inspection (e.g. to print node id
-/// or shut down).
+/// Uses `bind_random_port` + `RelayMode::Disabled` + `DiscoveryConfig::None`
+/// so it does NOT contact n0 relays. Callers must supply the node's
+/// public direct address (e.g. via Tailscale) for cross-machine connect.
+///
+/// Returns the live `MemNode` handle plus `(node_id, first bind addr)`
+/// for printing a share-link.
 pub async fn listen(
     murmur: Arc<Murmur>,
     expected_sender: IdentityPublic,
     from_contact: String,
-) -> IrohResult<MemNode> {
+) -> IrohResult<(MemNode, NodeId, std::net::SocketAddr)> {
     let on_envelope = move |env: Envelope| {
-        // Build the entry: payload + timestamp (now).
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -40,21 +44,36 @@ pub async fn listen(
         }
     };
 
-    let node = spawn_memory_node(expected_sender, on_envelope).await?;
-    Ok(node)
+    let node = spawn_persistent_node(expected_sender, on_envelope).await?;
+    let node_id = node.node_id();
+    let addrs = node.local_endpoint_addresses().await?;
+    let first = addrs
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no local endpoint addresses"))?;
+    Ok((node, node_id, first))
 }
 
-/// Send an envelope to `target_node_id` using a plain iroh endpoint
+/// Build a `NodeAddr` for a peer (no relay, single direct address).
+pub fn build_node_addr(node_id: NodeId, direct: std::net::SocketAddr) -> iroh::net::NodeAddr {
+    iroh::net::NodeAddr::from_parts(node_id, None, vec![direct])
+}
+
+/// Send an envelope to `target_node_addr` using a plain iroh endpoint
 /// (the sender doesn't need its own murmur ALPN). Returns after the
 /// receiver acks.
+///
+/// `target_node_addr` carries both the node_id and direct addresses
+/// (and optionally a relay URL). For cross-machine E2E without relay,
+/// construct with `build_node_addr(node_id, "ip:port")`.
 pub async fn send_envelope_via_endpoint(
     sender_endpoint: &Endpoint,
-    target_node_id: NodeId,
+    target_node_addr: iroh::net::NodeAddr,
     envelope: &Envelope,
 ) -> IrohResult<()> {
     let bytes = postcard::to_stdvec(envelope)?;
     let conn = sender_endpoint
-        .connect_by_node_id(target_node_id, ALPN)
+        .connect(target_node_addr, ALPN)
         .await?;
     let (mut send, mut recv) = conn.open_bi().await?;
     send.write_all(&bytes).await?;

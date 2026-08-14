@@ -168,4 +168,36 @@ pub mod iroh_transport {
         let node = Node::memory().build().await?.accept(ALPN.to_vec(), acceptor).spawn().await?;
         Ok(node)
     }
+
+    /// Spawn a real-network iroh node with the murmur ALPN registered.
+    /// Uses `bind_random_port`, `RelayMode::Disabled`, and
+    /// `DiscoveryConfig::None` so it does NOT contact n0 relays or
+    /// Pkarr DNS — the operator must provide exact direct addresses via
+    /// `NodeAddr` for cross-machine connect.
+    ///
+    /// Step 6 E2E builder. For loopback tests, prefer `spawn_memory_node`.
+    pub async fn spawn_persistent_node<F: Fn(Envelope) + Send + Sync + 'static>(
+        expected_sender: IdentityPublic,
+        on_envelope: F,
+    ) -> std::result::Result<iroh::node::MemNode, anyhow::Error> {
+        use iroh::net::relay::RelayMode;
+        use iroh::node::DiscoveryConfig;
+        let acceptor = Arc::new(EnvelopeAcceptor { expected_sender, on_envelope });
+        let node = Node::memory()
+            .bind_random_port()
+            .relay_mode(RelayMode::Disabled)
+            .node_discovery(DiscoveryConfig::None)
+            .build()
+            .await?
+            .accept(ALPN.to_vec(), acceptor)
+            .spawn()
+            .await?;
+        Ok(node)
+    }
+
+    /// Build a share-string for a node, given its first direct address.
+    /// Format: `<node_id>@<ip>:<port>`.
+    pub fn build_share_string(node_id: &iroh::net::NodeId, addr: std::net::SocketAddr) -> String {
+        format!("{}@{}", node_id, addr)
+    }
 }
