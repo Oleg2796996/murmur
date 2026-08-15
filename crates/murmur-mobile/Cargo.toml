@@ -37,10 +37,3 @@ rand_core = { version = "0.6", features = ["std"] }
 default = ["tauri-runtime"]
 tauri-runtime = ["dep:tauri", "dep:tauri-build"]
 custom-protocol = ["tauri/custom-protocol"]
-
-[profile.release]
-panic = "abort"
-codegen-units = 1
-lto = true
-opt-level = "s"
-strip = true
