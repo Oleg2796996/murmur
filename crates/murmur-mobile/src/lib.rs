@@ -15,19 +15,26 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 /// Shared state held by Tauri runtime.
+///
+/// We keep only Sync-friendly values here (Vec<u8> for serialized secret,
+/// IdentityPublic for the public half). The full Identity (which contains
+/// `IdentitySecret` — not Sync due to Zeroize-on-Drop internal types) is
+/// reconstructed on demand via `Identity::from_bytes`.
 pub struct AppState {
-    pub identity: Mutex<Option<murmur_id::Identity>>,
+    pub identity_public: Mutex<Option<murmur_id::IdentityPublic>>,
+    pub identity_secret_bytes: Mutex<Option<Vec<u8>>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            identity: Mutex::new(None),
+            identity_public: Mutex::new(None),
+            identity_secret_bytes: Mutex::new(None),
         }
     }
 }
 
-/// Result envelope for commands.
+/// Result envelope for commands. Used in tests and non-Tauri paths.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CmdResult<T: Serialize> {
     pub ok: bool,
@@ -55,40 +62,41 @@ impl<T: Serialize> CmdResult<T> {
 #[cfg(feature = "tauri-runtime")]
 mod tauri_layer {
     use super::*;
-    use std::sync::Arc;
 
     /// Generate a new murmur identity (npub1...).
     #[tauri::command]
     pub async fn identity_new(
-        state: tauri::State<'_, Arc<AppState>>,
-    ) -> CmdResult<murmur_id::IdentityPublic> {
+        state: tauri::State<'_, AppState>,
+    ) -> Result<murmur_id::IdentityPublic, String> {
         let id = murmur_id::Identity::generate(&mut OsRng);
+        let bytes = id.to_bytes().map_err(|e| e.to_string())?;
         let pub_id = id.public();
-        *state.identity.lock().await = Some(id);
-        CmdResult::ok(pub_id)
+        *state.identity_public.lock().await = Some(pub_id.clone());
+        *state.identity_secret_bytes.lock().await = Some(bytes);
+        Ok(pub_id)
     }
 
     /// Return the currently loaded identity's npub (or error).
     #[tauri::command]
     pub async fn identity_npub(
-        state: tauri::State<'_, Arc<AppState>>,
-    ) -> CmdResult<String> {
-        let guard = state.identity.lock().await;
-        match guard.as_ref() {
-            Some(id) => CmdResult::ok(id.public().npub()),
-            None => CmdResult::err("no identity loaded"),
-        }
+        state: tauri::State<'_, AppState>,
+    ) -> Result<String, String> {
+        let guard = state.identity_public.lock().await;
+        guard
+            .as_ref()
+            .map(|p| p.npub())
+            .ok_or_else(|| "no identity loaded".to_string())
     }
 
     /// Echo — used as a sanity ping for the IPC bridge.
     #[tauri::command]
-    pub async fn ping(msg: String) -> CmdResult<String> {
-        CmdResult::ok(format!("pong: {msg}"))
+    pub async fn ping(msg: String) -> Result<String, String> {
+        Ok(format!("pong: {msg}"))
     }
 
     #[cfg_attr(mobile, tauri::mobile_entry_point)]
     pub fn run() {
-        let state = Arc::new(AppState::default());
+        let state = AppState::default();
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env()
@@ -124,6 +132,14 @@ mod tests {
         let a = murmur_id::Identity::generate(&mut OsRng);
         let b = murmur_id::Identity::generate(&mut OsRng);
         assert_ne!(a.public().npub(), b.public().npub());
+    }
+
+    #[test]
+    fn identity_roundtrip_via_bytes() {
+        let id = murmur_id::Identity::generate(&mut OsRng);
+        let bytes = id.to_bytes().unwrap();
+        let restored = murmur_id::Identity::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.public().npub(), id.public().npub());
     }
 
     #[test]
