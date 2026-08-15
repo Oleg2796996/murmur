@@ -1,8 +1,9 @@
 //! `murmur-relay` — WebSocket + iroh-direct relay daemon.
 
 use clap::Parser;
-use murmur_relay::{iroh_server, PendingStore, RelayConfig, SubscriberHub, WsServer};
+use murmur_relay::{iroh_server, push, PendingStore, RelayConfig, SubscriberHub, WsServer};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -29,8 +30,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pending = PendingStore::new(&cfg.home_dir)?;
     let hub = SubscriberHub::new();
 
+    // VAPID keys + push server (HTTP for push subscriptions + delivery).
+    let vapid = push::VapidKeys::load_or_generate(&cfg.home_dir, cfg.vapid_subject.clone())?;
+    let push_server = Arc::new(push::PushServer::new(&cfg.home_dir, cfg.push_bind.clone(), vapid.clone())?);
+    info!(vapid_pub = %vapid.public_b64url(), "VAPID ready");
+
+    // Spawn push HTTP server (handles /push/register_subscribe, /push/unsubscribe, /vapid_public_key, /healthz).
+    let push_for_serve = push_server.clone();
+    tokio::spawn(async move {
+        if let Err(e) = push_for_serve.serve().await {
+            tracing::error!(err=%e, "push HTTP server exited");
+        }
+    });
+
     // Spawn iroh-direct listener
-    let (node_id, direct_addr) = iroh_server::spawn(pending.clone(), hub.clone()).await?;
+    let (node_id, direct_addr) = iroh_server::spawn(pending.clone(), hub.clone(), push_server.clone()).await?;
     let share_link = murmur_transport::iroh_transport::build_share_string(&node_id, direct_addr);
     println!("iroh listening on {}", direct_addr);
     println!("iroh share-link: {}", share_link);

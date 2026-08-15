@@ -15,6 +15,13 @@ pub struct RelayConfig {
     /// iroh bind mode. Default "random_port" (uses bind_random_port).
     #[serde(default = "default_iroh_bind")]
     pub iroh_bind: String,
+    /// HTTP bind for push registration + delivery. Default `0.0.0.0:8444`.
+    #[serde(default = "default_push_bind")]
+    pub push_bind: String,
+    /// VAPID subject — typically "mailto:admin@example.com".
+    /// Used to identify the relay to push services (FCM / Mozilla / Apple).
+    #[serde(default = "default_vapid_subject")]
+    pub vapid_subject: String,
 }
 
 fn default_ws_bind() -> String {
@@ -23,6 +30,14 @@ fn default_ws_bind() -> String {
 
 fn default_iroh_bind() -> String {
     "0.0.0.0:0".to_string() // random port
+}
+
+fn default_push_bind() -> String {
+    "0.0.0.0:8444".to_string()
+}
+
+fn default_vapid_subject() -> String {
+    "mailto:admin@murmur.local".to_string()
 }
 
 impl RelayConfig {
