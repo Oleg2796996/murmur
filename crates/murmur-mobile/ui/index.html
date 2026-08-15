@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0e0e10">
+    <title>murmur</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>murmur</h1>
+        <p class="subtitle">metadata-private messaging</p>
+    </header>
+
+    <main>
+        <section id="identity" class="card">
+            <h2>Identity</h2>
+            <div id="identity-status">No identity loaded.</div>
+            <button id="btn-new-id">Generate new identity</button>
+            <pre id="npub-out" class="hidden"></pre>
+        </section>
+
+        <section id="ping" class="card">
+            <h2>IPC sanity</h2>
+            <input id="ping-input" type="text" placeholder="message">
+            <button id="btn-ping">ping</button>
+            <pre id="ping-out"></pre>
+        </section>
+
+        <section id="send" class="card hidden">
+            <h2>Send</h2>
+            <p class="hint">Coming in 9b — uses murmur-transport</p>
+        </section>
+
+        <section id="receive" class="card hidden">
+            <h2>Receive</h2>
+            <p class="hint">Coming in 9b — listens via iroh</p>
+        </section>
+    </main>
+
+    <footer>
+        <span>murmur-mobile Step 9a</span>
+    </footer>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>

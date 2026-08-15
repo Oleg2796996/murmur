@@ -1,0 +1,128 @@
+:root {
+    --bg: #0e0e10;
+    --card: #1a1a1d;
+    --text: #e0e0e0;
+    --accent: #6cf0a0;
+    --muted: #707075;
+    --border: #2c2c30;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-size: 15px;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+}
+
+header {
+    padding: 24px 16px 16px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+    margin: 0;
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+    color: var(--accent);
+}
+
+.subtitle {
+    margin: 4px 0 0;
+    color: var(--muted);
+    font-size: 12px;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+}
+
+main {
+    padding: 16px;
+    max-width: 720px;
+    margin: 0 auto;
+}
+
+.card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+}
+
+.card h2 {
+    margin: 0 0 12px;
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+}
+
+button {
+    background: var(--accent);
+    color: #000;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 8px;
+}
+
+button:hover { opacity: 0.85; }
+button:disabled {
+    background: var(--muted);
+    color: #444;
+    cursor: not-allowed;
+}
+
+input {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 14px;
+    font-family: inherit;
+}
+
+input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+pre {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-top: 10px;
+    font-size: 12px;
+    overflow-x: auto;
+    word-break: break-all;
+    color: var(--accent);
+    white-space: pre-wrap;
+}
+
+.hint {
+    color: var(--muted);
+    font-style: italic;
+    font-size: 13px;
+}
+
+.hidden { display: none !important; }
+
+footer {
+    text-align: center;
+    padding: 16px;
+    color: var(--muted);
+    font-size: 11px;
+    border-top: 1px solid var(--border);
+    margin-top: 32px;
+}
