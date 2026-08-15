@@ -152,6 +152,8 @@ mod tests {
             home_dir: dir.clone(),
             ws_bind: "127.0.0.1:0".into(),
             iroh_bind: "0.0.0.0:0".into(),
+            push_bind: "127.0.0.1:0".into(),
+            vapid_subject: "mailto:t@murmur.local".into(),
         };
         let hub = SubscriberHub::new();
         let pending = PendingStore::new(&dir).unwrap();

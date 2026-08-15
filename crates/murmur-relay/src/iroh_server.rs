@@ -21,6 +21,7 @@
 //! public key). Invalid → drop with a warn log.
 
 use crate::pending::{PendingEntry, PendingStore};
+use crate::push::{PushPayload, PushServer};
 use crate::subscriber::SubscriberHub;
 use murmur_transport::Envelope;
 use std::net::SocketAddr;
@@ -33,6 +34,7 @@ use tracing::{error, info, warn};
 pub async fn spawn(
     pending: PendingStore,
     hub: SubscriberHub,
+    push: Arc<PushServer>,
 ) -> anyhow::Result<(iroh::net::NodeId, SocketAddr)> {
     let pending = Arc::new(pending);
     let hub = Arc::new(hub);
@@ -40,6 +42,7 @@ pub async fn spawn(
     let on_envelope_raw = move |bytes: Vec<u8>| {
         let pending = pending.clone();
         let hub = hub.clone();
+        let push = push.clone();
 
         // Parse frame: alias_len(4 BE) || alias || envelope
         if bytes.len() < 4 {
@@ -95,6 +98,18 @@ pub async fn spawn(
         }
         let n = hub.broadcast(&entry);
         info!(alias=%alias, hash=%entry.envelope_hash_hex, subs=n, "envelope accepted + fanout");
+
+        // Push delivery (fire-and-forget on a tokio task).
+        let push = push.clone();
+        let payload = PushPayload::from_entry(&entry);
+        let alias_for_log = alias.clone();
+        tokio::spawn(async move {
+            match push.deliver(&payload).await {
+                Ok(n) if n > 0 => info!(alias=%alias_for_log, delivered=n, "push delivered"),
+                Ok(_) => {} // no subscribers, that's fine
+                Err(e) => warn!(err=%e, "push deliver failed"),
+            }
+        });
     };
 
     // spawn_relay_node passes raw bytes; we need our own acceptor that splits frame.

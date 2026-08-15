@@ -181,9 +181,7 @@ mod tests {
         // read from after first entry: total offset = len of first (4 bytes len + 4+5 fields...)
         // Easier: skip first by reading offset.
         // Each entry: 4 (len) + postcard payload size. Read all then drop first.
-        let mut offset = 0u64;
-        // Compute size of first by reading partial — easier: just re-read everything and skip.
-        let _ = offset;
+        let _ = all;
         let after = store.read_from("bob", 1).unwrap_or_default();
         // offset=1 reads garbage len, returns err or empty
         assert!(after.is_empty() || after.len() < 3);
