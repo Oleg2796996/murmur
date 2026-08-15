@@ -85,16 +85,12 @@ impl VapidKeys {
         let key_pair = ES256KeyPair::generate();
         let pem = key_pair.to_pem()?;
 
-        // Derive uncompressed public key (64 bytes) for the client.
-        let uncompressed = key_pair.public_key().public_key().to_bytes_uncompressed();
-        let public_uncompressed = if uncompressed.len() == 65 {
-            &uncompressed[1..] // strip 0x04 prefix
-        } else {
-            &uncompressed[..]
-        };
+        // Derive uncompressed public key (SEC1: 0x04 || X || Y, 65 bytes).
+        // Per RFC 8292 (VAPID) the public key is sent in uncompressed SEC1 form.
+        let public_uncompressed = key_pair.public_key().public_key().to_bytes_uncompressed();
 
         let private_b64url = base64_url_encode(pem.as_bytes());
-        let public_b64url = base64_url_encode(public_uncompressed);
+        let public_b64url = base64_url_encode(&public_uncompressed);
 
         let k = VapidKeys {
             private_b64url,
@@ -622,7 +618,7 @@ mod tests {
         assert_eq!(k1.public_b64url, k2.public_b64url);
         // public key must be 64 bytes (32 X + 32 Y) -> 86 base64url chars (no padding)
         let pub_bytes = base64_url_decode(&k1.public_b64url).unwrap();
-        assert_eq!(pub_bytes.len(), 64);
+        assert_eq!(pub_bytes.len(), 65);
     }
 
     #[test]
