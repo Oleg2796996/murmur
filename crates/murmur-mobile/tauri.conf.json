@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "murmur",
+  "version": "0.1.0",
+  "identifier": "local.murmur.app",
+  "build": {
+    "frontendDist": "./ui"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "murmur",
+        "width": 480,
+        "height": 720,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon-192.png"
+    ],
+    "category": "Social",
+    "shortDescription": "metadata-private messenger",
+    "longDescription": "murmur — decentralized messenger focused on metadata privacy."
+  }
+}

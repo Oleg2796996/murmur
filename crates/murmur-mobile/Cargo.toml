@@ -1,0 +1,46 @@
+[package]
+name = "murmur-mobile"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Tauri 2.x shell for murmur — desktop + mobile (iOS/Android)"
+authors = ["Oleg <oleg@murmur.local>", "Matilda <matilda@murmur.local>"]
+
+[lib]
+name = "murmur_mobile_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "murmur-mobile"
+path = "src/main.rs"
+required-features = ["tauri-runtime"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [], optional = true }
+
+[dependencies]
+tauri = { version = "2", features = [], optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+murmur-id = { path = "../murmur-id" }
+murmur-log = { path = "../murmur-log" }
+murmur-transport = { path = "../murmur-transport" }
+rand_core = { version = "0.6", features = ["std"] }
+
+# Default: Tauri runtime enabled (full build). Tests use --no-default-features
+# to skip the GTK/glib webview deps so we can run on bare-bones dev hosts.
+[features]
+default = ["tauri-runtime"]
+tauri-runtime = ["dep:tauri", "dep:tauri-build"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
