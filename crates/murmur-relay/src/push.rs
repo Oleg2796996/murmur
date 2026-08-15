@@ -242,6 +242,7 @@ pub struct PushServer {
     pub store: PushStore,
     vapid: VapidKeys,
     delivered: Arc<Mutex<u64>>,
+    static_dir: Option<PathBuf>,
 }
 
 impl PushServer {
@@ -252,7 +253,13 @@ impl PushServer {
             store,
             vapid,
             delivered: Arc::new(Mutex::new(0)),
+            static_dir: None,
         })
+    }
+
+    pub fn with_static_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.static_dir = dir;
+        self
     }
 
     pub fn vapid_public_b64url(&self) -> &str {
@@ -311,19 +318,22 @@ impl PushServer {
     pub async fn serve(&self) -> anyhow::Result<()> {
         let listener = tokio::net::TcpListener::bind(&self.bind).await?;
         info!(bind = %self.bind, "push HTTP server listening");
+        let static_dir = self.static_dir.clone();
         loop {
             let (stream, _addr) = listener.accept().await?;
             let io = TokioIo::new(stream);
             let store = self.store.clone_handle();
             let vapid_pub = self.vapid.public_b64url().to_string();
+            let static_dir = static_dir.clone();
             tokio::spawn(async move {
                 let svc = service_fn(move |req: Request<Incoming>| {
                     let store = store.clone_handle();
                     let vapid_pub = vapid_pub.clone();
+                    let static_dir = static_dir.clone();
                     async move {
                         let method = req.method().clone();
                         let path = req.uri().path().to_string();
-                        match (method, path.as_str()) {
+                        match (method.clone(), path.as_str()) {
                             (Method::GET, "/healthz") => Ok::<_, std::convert::Infallible>(
                                 Response::builder()
                                     .status(StatusCode::OK)
@@ -345,6 +355,18 @@ impl PushServer {
                             (Method::POST, "/push/unsubscribe") => {
                                 handle_unsubscribe(req, store).await
                             }
+                            (Method::GET, _) => {
+                                if let Some(resp) = serve_static(&path, &static_dir) {
+                                    Ok(resp)
+                                } else {
+                                    Ok(
+                                        Response::builder()
+                                            .status(StatusCode::NOT_FOUND)
+                                            .body(Full::new(Bytes::from("not found")))
+                                            .unwrap(),
+                                    )
+                                }
+                            }
                             _ => Ok(
                                 Response::builder()
                                     .status(StatusCode::NOT_FOUND)
@@ -359,6 +381,71 @@ impl PushServer {
                     .await;
             });
         }
+    }
+}
+
+/// Try to serve a static file from `static_dir`. Returns `None` if no static
+/// dir is configured or the file does not exist (or the path is unsafe).
+fn serve_static(path: &str, static_dir: &Option<PathBuf>) -> Option<Response<Full<Bytes>>> {
+    let dir = static_dir.as_ref()?;
+    if !dir.is_dir() {
+        return None;
+    }
+    // Strip query string if any (hyper already separated, but be safe).
+    let clean = path.split('?').next().unwrap_or(path);
+    // Resolve to a relative path under dir, no leading slash.
+    let rel = clean.trim_start_matches('/');
+    if rel.is_empty() {
+        // "/" -> index.html
+        return try_file(dir, "index.html");
+    }
+    // Reject path traversal attempts.
+    if rel.contains("..") {
+        return None;
+    }
+    let candidate = dir.join(rel);
+    if candidate.is_file() {
+        return serve_file(&candidate);
+    }
+    // SPA fallback: if path doesn't end in a file extension and the dir
+    // has an index.html, serve that. (Keeps PWA UX simple.)
+    if !rel.contains('.') {
+        return try_file(dir, "index.html");
+    }
+    None
+}
+
+fn try_file(dir: &Path, name: &str) -> Option<Response<Full<Bytes>>> {
+    let p = dir.join(name);
+    if p.is_file() { serve_file(&p) } else { None }
+}
+
+fn serve_file(path: &Path) -> Option<Response<Full<Bytes>>> {
+    let bytes = std::fs::read(path).ok()?;
+    let mime = mime_from_ext(path.extension().and_then(|s| s.to_str()).unwrap_or(""));
+    Some(
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", mime)
+            .header("cache-control", "no-cache")
+            .body(Full::new(Bytes::from(bytes)))
+            .unwrap(),
+    )
+}
+
+fn mime_from_ext(ext: &str) -> &'static str {
+    match ext.to_ascii_lowercase().as_str() {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "webmanifest" => "application/manifest+json",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "txt" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
     }
 }
 

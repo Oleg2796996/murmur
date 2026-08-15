@@ -22,6 +22,10 @@ pub struct RelayConfig {
     /// Used to identify the relay to push services (FCM / Mozilla / Apple).
     #[serde(default = "default_vapid_subject")]
     pub vapid_subject: String,
+    /// Directory with static PWA files (index.html, app.js, manifest.json, ...).
+    /// If missing, the push HTTP server still serves the API but not the PWA UI.
+    #[serde(default)]
+    pub static_dir: Option<PathBuf>,
 }
 
 fn default_ws_bind() -> String {

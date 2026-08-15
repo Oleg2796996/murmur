@@ -32,7 +32,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // VAPID keys + push server (HTTP for push subscriptions + delivery).
     let vapid = push::VapidKeys::load_or_generate(&cfg.home_dir, cfg.vapid_subject.clone())?;
-    let push_server = Arc::new(push::PushServer::new(&cfg.home_dir, cfg.push_bind.clone(), vapid.clone())?);
+    // If static_dir is set, serve PWA files alongside the push API.
+    // If not set, default to `<home_dir>/pwa` if it exists.
+    let static_dir = cfg.static_dir.clone().or_else(|| {
+        let candidate = cfg.home_dir.join("pwa");
+        if candidate.is_dir() { Some(candidate) } else { None }
+    });
+    if let Some(ref dir) = static_dir {
+        info!(static_dir = %dir.display(), "PWA static dir enabled");
+    }
+    let push_server = Arc::new(
+        push::PushServer::new(&cfg.home_dir, cfg.push_bind.clone(), vapid.clone())?
+            .with_static_dir(static_dir.clone()),
+    );
     info!(vapid_pub = %vapid.public_b64url(), "VAPID ready");
 
     // Spawn push HTTP server (handles /push/register_subscribe, /push/unsubscribe, /vapid_public_key, /healthz).
