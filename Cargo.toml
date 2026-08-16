@@ -10,6 +10,7 @@ members = [
     "crates/murmur-witness",
     "crates/murmur-relay",
     "crates/murmur-mobile",
+    "crates/murmur-id-wasm",
 ]
 
 [workspace.package]
