@@ -121,8 +121,8 @@ async function onGenerate() {
 
         // Try to expand the pubkey hex for the curious.
         if (backend.wasm) {
-            const hex = backend.wasm.npub_to_pubkey_hex(result.data);
-            if (hex.ok) {
+            const hex = await backend.wasm.npub_to_pubkey_hex(result.data);
+            if (hex && hex.ok) {
                 el("pubkey-out").textContent = `pubkey hex: ${hex.data}`;
                 el("pubkey-out").classList.remove("hidden");
             }
