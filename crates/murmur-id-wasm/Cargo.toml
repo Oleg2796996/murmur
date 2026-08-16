@@ -1,0 +1,35 @@
+[package]
+name = "murmur-id-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "WASM bindings for murmur-id (browser/JS interop)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+murmur-id = { path = "../murmur-id" }
+wasm-bindgen = "0.2"
+getrandom = { version = "0.2", features = ["js"] }
+rand = "0.8"
+rand_chacha = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+web-sys = { version = "0.3", features = ["console"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[package.metadata.wasm-pack.profile.release]
+# wasm-opt on this host is too old to handle bulk-memory ops from stable
+# rustc. Disable post-build optimisation; size is fine for a v0.1 dev preview.
+wasm-opt = false
+
+# Profile tuned for size — first-load UX matters on mobile.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

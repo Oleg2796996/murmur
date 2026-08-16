@@ -1,53 +1,58 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <meta name="theme-color" content="#0e1117">
-  <title>murmur</title>
-  <link rel="manifest" href="/manifest.json">
-  <link rel="stylesheet" href="/style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0e0e10">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="murmur">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+    <title>murmur</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <h1>🫀 murmur</h1>
-    <span id="status" class="status offline">offline</span>
-  </header>
+    <header>
+        <h1>murmur</h1>
+        <p class="subtitle">metadata-private messaging</p>
+        <p class="runtime-badge"><span id="rt-tau">…</span></p>
+    </header>
 
-  <main>
-    <section id="identity-section">
-      <h2>Identity</h2>
-      <p id="npub-display"><em>no identity yet</em></p>
-      <p class="hint">Your private key is stored in localStorage. Use it from the murmur CLI to send messages.</p>
-      <button id="btn-generate">Generate new identity</button>
-      <button id="btn-export">Export nprv</button>
-    </section>
+    <main>
+        <section id="identity" class="card">
+            <h2>Identity</h2>
+            <div id="identity-status">No identity loaded.</div>
+            <button id="btn-new-id">Generate new identity</button>
+            <pre id="npub-out" class="hidden"></pre>
+            <pre id="pubkey-out" class="hidden"></pre>
+        </section>
 
-    <section id="relay-section">
-      <h2>Relay</h2>
-      <label>
-        Relay URL
-        <input id="relay-url" type="text" value="wss://2.27.1.2:8443/ws">
-      </label>
-      <button id="btn-connect">Connect</button>
-      <span id="ws-status" class="status offline">disconnected</span>
-      <p class="hint">Subscribe to receive incoming messages. Server must be online.</p>
-    </section>
+        <section id="ping" class="card">
+            <h2>IPC sanity</h2>
+            <input id="ping-input" type="text" placeholder="message">
+            <button id="btn-ping">ping</button>
+            <pre id="ping-out"></pre>
+        </section>
 
-    <section id="push-section">
-      <h2>Notifications</h2>
-      <p id="push-status">Push notifications are <strong>off</strong>.</p>
-      <button id="btn-enable-push">Enable notifications</button>
-      <button id="btn-disable-push" disabled>Disable notifications</button>
-      <p class="hint">You'll get a notification when someone sends you a message while the app is closed.</p>
-    </section>
+        <section id="send" class="card hidden">
+            <h2>Send</h2>
+            <p class="hint">Coming in 9b — uses murmur-transport</p>
+        </section>
 
-    <section id="inbox-section">
-      <h2>Inbox <span id="inbox-count" class="badge">0</span></h2>
-      <ul id="inbox"></ul>
-    </section>
-  </main>
+        <section id="receive" class="card hidden">
+            <h2>Receive</h2>
+            <p class="hint">Coming in 9b — listens via iroh</p>
+        </section>
+    </main>
 
-  <script src="/app.js"></script>
+    <footer>
+        <span>murmur-mobile Step 9a</span>
+        <span id="wasm-status"></span>
+    </footer>
+
+    <script type="module" src="app.js"></script>
 </body>
 </html>
