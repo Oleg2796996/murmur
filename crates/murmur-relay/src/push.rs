@@ -230,6 +230,11 @@ impl PushPayload {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
     }
+
+    /// Public, JSON-friendly value (used over WebSocket).
+    pub fn to_json_value(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or(serde_json::json!({}))
+    }
 }
 
 /// HTTP server that accepts push-subscriptions + delivers pushes on envelope receive.
@@ -239,22 +244,56 @@ pub struct PushServer {
     vapid: VapidKeys,
     delivered: Arc<Mutex<u64>>,
     static_dir: Option<PathBuf>,
+    /// Pending store (shared with iroh + ws server). Set after construction
+    /// via `with_pending_hub` once the relay wires everything together.
+    pub(crate) pending: crate::PendingStore,
+    pub(crate) hub: crate::SubscriberHub,
+}
+
+impl Clone for PushServer {
+    fn clone(&self) -> Self {
+        Self {
+            bind: self.bind.clone(),
+            store: self.store.clone_handle(),
+            vapid: self.vapid.clone(),
+            delivered: Arc::clone(&self.delivered),
+            static_dir: self.static_dir.clone(),
+            pending: self.pending.clone(),
+            hub: self.hub.clone(),
+        }
+    }
 }
 
 impl PushServer {
     pub fn new(home: &Path, bind: String, vapid: VapidKeys) -> anyhow::Result<Self> {
         let store = PushStore::new(home)?;
+        let home_dir = home.to_path_buf();
         Ok(Self {
             bind,
             store,
             vapid,
             delivered: Arc::new(Mutex::new(0)),
             static_dir: None,
+            // Placeholder — replaced immediately by `with_pending_hub` in main.rs.
+            pending: crate::PendingStore::new(&home_dir)?,
+            hub: crate::SubscriberHub::new(),
         })
     }
 
     pub fn with_static_dir(mut self, dir: Option<PathBuf>) -> Self {
         self.static_dir = dir;
+        self
+    }
+
+    /// Wire the pending store + subscriber hub so this HTTP server can accept
+    /// `POST /envelope` and broadcast through the same path as iroh-direct.
+    pub fn with_pending_hub(
+        mut self,
+        pending: crate::PendingStore,
+        hub: crate::SubscriberHub,
+    ) -> Self {
+        self.pending = pending;
+        self.hub = hub;
         self
     }
 
@@ -311,21 +350,30 @@ impl PushServer {
     }
 
     /// Run the HTTP server forever.
-    pub async fn serve(&self) -> anyhow::Result<()> {
+    pub async fn serve(self) -> anyhow::Result<()> {
         let listener = tokio::net::TcpListener::bind(&self.bind).await?;
         info!(bind = %self.bind, "push HTTP server listening");
         let static_dir = self.static_dir.clone();
+        let pending = self.pending.clone();
+        let hub = self.hub.clone();
+        let push_self = Arc::new(self);
         loop {
             let (stream, _addr) = listener.accept().await?;
             let io = TokioIo::new(stream);
-            let store = self.store.clone_handle();
-            let vapid_pub = self.vapid.public_b64url().to_string();
+            let store = push_self.store.clone_handle();
+            let vapid_pub = push_self.vapid.public_b64url().to_string();
             let static_dir = static_dir.clone();
+            let pending = pending.clone();
+            let hub = hub.clone();
+            let push_arc = Arc::clone(&push_self);
             tokio::spawn(async move {
                 let svc = service_fn(move |req: Request<Incoming>| {
                     let store = store.clone_handle();
                     let vapid_pub = vapid_pub.clone();
                     let static_dir = static_dir.clone();
+                    let pending = pending.clone();
+                    let hub = hub.clone();
+                    let push_self = Arc::clone(&push_arc);
                     async move {
                         let method = req.method().clone();
                         let path = req.uri().path().to_string();
@@ -335,6 +383,15 @@ impl PushServer {
                                     .status(StatusCode::OK)
                                     .header("content-type", "text/plain")
                                     .body(Full::new(Bytes::from("ok")))
+                                    .unwrap(),
+                            ),
+                            (Method::OPTIONS, _) => Ok(
+                                Response::builder()
+                                    .status(StatusCode::NO_CONTENT)
+                                    .header("access-control-allow-origin", "*")
+                                    .header("access-control-allow-methods", "GET, POST, OPTIONS")
+                                    .header("access-control-allow-headers", "content-type")
+                                    .body(Full::new(Bytes::new()))
                                     .unwrap(),
                             ),
                             (Method::GET, "/vapid_public_key") => Ok(
@@ -350,6 +407,10 @@ impl PushServer {
                             }
                             (Method::POST, "/push/unsubscribe") => {
                                 handle_unsubscribe(req, store).await
+                            }
+                            (Method::POST, "/envelope") => {
+                                let push: &PushServer = &push_self;
+                                handle_post_envelope(req, pending, hub, push).await
                             }
                             (Method::GET, _) => {
                                 if let Some(resp) = serve_static(&path, &static_dir) {
@@ -526,6 +587,114 @@ async fn handle_unsubscribe(
         .header("access-control-allow-origin", "*")
         .body(Full::new(Bytes::from(r#"{"ok":true}"#)))
         .unwrap())
+}
+
+/// `POST /envelope?to=<alias>` — accept a signed envelope from a PWA
+/// (or any HTTP client) and route it through the same persistence+fanout
+/// pipeline as the iroh-direct path.
+///
+/// Body: either `application/octet-stream` (raw postcard-encoded `Envelope`)
+/// or `application/json` (browser-friendly shortcut; the JSON bytes are
+/// wrapped verbatim and the from_npub is read from the JSON object).
+/// Query: `?to=<recipient_alias>` — required.
+async fn handle_post_envelope(
+    req: Request<Incoming>,
+    pending: crate::PendingStore,
+    hub: crate::SubscriberHub,
+    push: &PushServer,
+) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    // 1. Extract `?to=<alias>` from query string.
+    let to_alias = match req
+        .uri()
+        .query()
+        .and_then(|q| {
+            q.split('&')
+                .find_map(|kv| kv.strip_prefix("to=").map(|s| s.to_string()))
+        }) {
+        Some(a) if !a.is_empty() => a,
+        _ => {
+            return Ok(json_error(
+                StatusCode::BAD_REQUEST,
+                "missing or empty ?to=<alias> query param",
+            ));
+        }
+    };
+
+    let ct = req
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    // 2. Read raw body.
+    let body = match req.collect().await {
+        Ok(c) => c.to_bytes(),
+        Err(e) => {
+            return Ok(json_error(
+                StatusCode::BAD_REQUEST,
+                &format!("body read: {e}"),
+            ));
+        }
+    };
+
+    let env_bytes: Vec<u8>;
+    let from_npub_hint: Option<String>;
+    if ct.starts_with("application/json") {
+        let parsed: serde_json::Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                return Ok(json_error(
+                    StatusCode::BAD_REQUEST,
+                    &format!("bad json: {e}"),
+                ));
+            }
+        };
+        from_npub_hint = parsed
+            .get("from")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        // Wrap as {"_kind":"json_envelope","to":<alias>,"payload":<orig>}
+        let wrapper = serde_json::json!({
+            "_kind": "json_envelope",
+            "to": to_alias,
+            "payload": parsed,
+        });
+        env_bytes = serde_json::to_vec(&wrapper).unwrap_or_else(|_| b"{}_".to_vec());
+    } else {
+        env_bytes = body.to_vec();
+        from_npub_hint = None;
+    }
+
+    // 4. Hand off to shared envelope logic.
+    let push_arc = Arc::new(push.clone());
+    match crate::envelope::accept_envelope(
+        to_alias.clone(),
+        env_bytes,
+        &pending,
+        &hub,
+        Some(&push_arc),
+    ) {
+        Ok((hash, n)) => {
+            let mut resp = serde_json::json!({
+                "ok": true,
+                "hash": hash,
+                "broadcast": n,
+                "to": to_alias,
+            });
+            if let Some(from) = from_npub_hint {
+                resp["from"] = serde_json::Value::String(from);
+            }
+            let resp = resp.to_string();
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "application/json")
+                .header("access-control-allow-origin", "*")
+                .body(Full::new(Bytes::from(resp)))
+                .unwrap())
+        }
+        Err(e) => Ok(json_error(StatusCode::BAD_REQUEST, &e)),
+    }
 }
 
 fn json_error(status: StatusCode, msg: &str) -> Response<Full<Bytes>> {

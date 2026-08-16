@@ -1,7 +1,7 @@
 //! `murmur-relay` — WebSocket + iroh-direct relay daemon.
 
 use clap::Parser;
-use murmur_relay::{iroh_server, push, PendingStore, RelayConfig, SubscriberHub, WsServer};
+use murmur_relay::{iroh_server, push, PushServer, PendingStore, RelayConfig, SubscriberHub, WsServer};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
@@ -43,14 +43,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let push_server = Arc::new(
         push::PushServer::new(&cfg.home_dir, cfg.push_bind.clone(), vapid.clone())?
-            .with_static_dir(static_dir.clone()),
+            .with_static_dir(static_dir.clone())
+            .with_pending_hub(pending.clone(), hub.clone()),
     );
     info!(vapid_pub = %vapid.public_b64url(), "VAPID ready");
 
-    // Spawn push HTTP server (handles /push/register_subscribe, /push/unsubscribe, /vapid_public_key, /healthz).
-    let push_for_serve = push_server.clone();
+    // Spawn push HTTP server (handles /push/register_subscribe, /push/unsubscribe, /vapid_public_key, /healthz, /envelope).
+    let push_for_serve: Arc<PushServer> = push_server.clone();
     tokio::spawn(async move {
-        if let Err(e) = push_for_serve.serve().await {
+        // `serve` takes self by value, so clone out of the Arc.
+        let owned = (*push_for_serve).clone();
+        if let Err(e) = owned.serve().await {
             tracing::error!(err=%e, "push HTTP server exited");
         }
     });

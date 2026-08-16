@@ -1,147 +1,157 @@
-// murmur-mobile UI — Step 9a (PWA fallback)
-// Uses Tauri invoke() when available (desktop), otherwise WASM module.
+// murmur PWA client. Talks to:
+//   - murmur-id-wasm: identity ops (npub generation, signing)
+//   - relay WSS: subscribe + receive PushPayload frames
+//   - relay HTTP /envelope: send signed Envelope (postcard bytes)
+//
+// Protocol notes:
+//   - WS frames are TEXT/JSON.
+//   - HTTP POST body is raw postcard bytes (Content-Type: application/octet-stream).
 
-const el = (id) => document.getElementById(id);
+import init, { identity_new, ping, sign_message } from "./pkg/murmur_id_wasm.js";
 
-// Choose backend at startup.
-const backend = {
-    async identity_new() {
-        if (window.__TAURI__?.core?.invoke) {
-            const result = await window.__TAURI__.core.invoke("identity_new");
-            // Tauri commands now return CmdResult<String> — but old builds may
-            // return naked String. Handle both.
-            if (typeof result === "string") return { ok: true, data: result };
-            return result;
-        }
-        if (backend.wasm) {
-            return backend.wasm.identity_new();
-        }
-        return { ok: false, error: "no backend (Tauri or WASM)" };
-    },
-    async ping(msg) {
-        if (window.__TAURI__?.core?.invoke) {
-            const result = await window.__TAURI__.core.invoke("ping", { msg });
-            if (typeof result === "string") return { ok: true, data: result };
-            return result;
-        }
-        if (backend.wasm) {
-            return backend.wasm.ping(msg);
-        }
-        return { ok: false, error: "no backend (Tauri or WASM)" };
-    },
-    wasm: null,
-};
+const RELAY_WSS = "wss://ventures-joel-determined-joining.trycloudflare.com";
+const RELAY_HTTP = "https://residents-metro-portable-debut.trycloudflare.com";
 
-async function loadWasm() {
-    try {
-        // wasm-pack output layout: pkg/murmur_id_wasm.js + _bg.wasm
-        const mod = await import("./pkg/murmur_id_wasm.js");
-        await mod.default(); // init()
-        backend.wasm = {
-            // Rust returns serde_wasm_bindgen::to_value() — plain JS object,
-            // not a Promise. Wrap in Promise.resolve so callers can await it.
-            identity_new: () => {
-                try {
-                    const r = mod.identity_new();
-                    return Promise.resolve(r && r.ok !== undefined
-                        ? r
-                        : { ok: true, data: String(r) });
-                } catch (e) {
-                    return Promise.resolve({ ok: false, error: String(e) });
-                }
-            },
-            npub_to_pubkey_hex: (npub) => {
-                try {
-                    const r = mod.npub_to_pubkey_hex(npub);
-                    return Promise.resolve(r && r.ok !== undefined
-                        ? r
-                        : { ok: true, data: String(r) });
-                } catch (e) {
-                    return Promise.resolve({ ok: false, error: String(e) });
-                }
-            },
-            // WASM "ping" sanity: generates a fresh identity and returns it,
-            // proving the WASM ↔ JS bridge is alive.
-            ping: (_msg) => {
-                try {
-                    const r = mod.identity_new();
-                    if (r && r.ok) {
-                        return Promise.resolve({
-                            ok: true,
-                            data: `pong: generated ${r.data.slice(0, 16)}…`,
-                        });
-                    }
-                    return Promise.resolve({ ok: false, error: String(r) });
-                } catch (e) {
-                    return Promise.resolve({ ok: false, error: String(e) });
-                }
-            },
-        };
-        el("wasm-status").textContent = `wasm v${mod.version()} loaded`;
-        el("rt-tau").textContent = "runtime: wasm";
-        el("rt-tau").classList.add("wasm");
-        return true;
-    } catch (e) {
-        el("wasm-status").textContent = `wasm load failed: ${e.message}`;
-        return false;
-    }
+const $ = (id) => document.getElementById(id);
+
+let myNpub = null;       // bech32 string
+let mySignKeyHex = null; // hex of ed25519 signing pubkey
+let myAgreeKeyHex = null; // hex of X25519 agreement pubkey
+let ws = null;
+const inbox = [];        // PushPayload[]
+
+async function boot() {
+    await init();
+    $("rt-tau").textContent = "runtime: wasm";
+    $("wasm-status").textContent = "wasm ready";
+    $("btn-new-id").disabled = false;
+    $("btn-ping").disabled = false;
+    $("btn-uplink").disabled = false;
 }
 
-async function main() {
-    if (window.__TAURI__?.core?.invoke) {
-        el("rt-tau").textContent = "runtime: tauri";
-        el("rt-tau").classList.add("tauri");
-    } else {
-        el("rt-tau").textContent = "runtime: loading wasm…";
-        await loadWasm();
-    }
-    el("btn-new-id").addEventListener("click", onGenerate);
-    el("btn-ping").addEventListener("click", onPing);
+$("btn-new-id")?.addEventListener("click", async () => {
+    const res = identity_new();  // CmdResult<{ npub, signing_pubkey_hex, agreement_pubkey_hex }>
+    if (!res.ok) { $("identity-status").textContent = "error: " + res.error; return; }
+    myNpub = res.data.npub;
+    mySignKeyHex = res.data.signing_pubkey_hex;
+    myAgreeKeyHex = res.data.agreement_pubkey_hex;
+    $("identity-status").textContent = "Identity ready.";
+    $("npub-out").textContent = myNpub;
+    $("pubkey-out").textContent =
+        "sign:  " + mySignKeyHex +
+        "\nagree: " + myAgreeKeyHex;
+    $("npub-out").classList.remove("hidden");
+    $("pubkey-out").classList.remove("hidden");
+    $("my-alias").textContent = myNpub.slice(0, 14) + "…";
+    $("btn-send").disabled = false;
+});
 
-    // Register service worker for PWA + push.
-    if ("serviceWorker" in navigator) {
-        try {
-            await navigator.serviceWorker.register("./service-worker.js");
-            console.log("[murmur-pwa] service worker registered");
-        } catch (e) {
-            console.warn("[murmur-pwa] service worker registration failed:", e);
-        }
-    }
-}
+$("btn-ping")?.addEventListener("click", async () => {
+    const msg = $("ping-input").value || "hello";
+    const res = ping(msg);
+    if (!res.ok) { $("ping-out").textContent = "err: " + res.error; return; }
+    $("ping-out").textContent = "pong: " + res.data;
+});
 
-async function onGenerate() {
-    el("btn-new-id").disabled = true;
-    el("identity-status").textContent = "Generating…";
+$("btn-uplink")?.addEventListener("click", async () => {
+    if (ws && ws.readyState === WebSocket.OPEN) return;
+    $("uplink-status").textContent = "connecting…";
     try {
-        const result = await backend.identity_new();
-        if (!result.ok) throw new Error(result.error || "unknown error");
-        el("identity-status").textContent = "Identity loaded.";
-        el("npub-out").textContent = result.data;
-        el("npub-out").classList.remove("hidden");
-
-        // Try to expand the pubkey hex for the curious.
-        if (backend.wasm) {
-            const hex = await backend.wasm.npub_to_pubkey_hex(result.data);
-            if (hex && hex.ok) {
-                el("pubkey-out").textContent = `pubkey hex: ${hex.data}`;
-                el("pubkey-out").classList.remove("hidden");
+        ws = new WebSocket(RELAY_WSS);
+        ws.onopen = () => {
+            $("uplink-status").textContent = "connected";
+            $("btn-downlink").disabled = false;
+            if (myNpub) {
+                ws.send(JSON.stringify({ type: "subscribe", alias: myNpub }));
+            } else {
+                ws.send(JSON.stringify({ type: "ping" }));
             }
+        };
+        ws.onmessage = (ev) => {
+            const txt = (typeof ev.data === "string") ? ev.data : "";
+            let msg = null; try { msg = JSON.parse(txt); } catch { msg = { type: "raw", data: txt }; }
+            handleWsMessage(msg);
+        };
+        ws.onerror = (e) => { $("uplink-status").textContent = "error: " + (e.message || "?"); };
+        ws.onclose = () => { $("uplink-status").textContent = "disconnected"; $("btn-downlink").disabled = true; };
+    } catch (e) {
+        $("uplink-status").textContent = "exception: " + e;
+    }
+});
+
+$("btn-downlink")?.addEventListener("click", () => {
+    if (ws) ws.close();
+});
+
+$("btn-send")?.addEventListener("click", async () => {
+    if (!myNpub) { $("send-out").textContent = "err: need identity first"; return; }
+    const to = $("send-to").value.trim();
+    const body = $("send-text").value;
+    if (!to) { $("send-out").textContent = "err: recipient required"; return; }
+    if (!body) { $("send-out").textContent = "err: body required"; return; }
+    $("send-out").textContent = "signing…";
+
+    // Build a tiny "envelope" payload as JSON string (will be postcard-encoded
+    // client-side once murmur-id-wasm exposes an envelope builder; for now we
+    // use sign_message over UTF-8 body and submit { body, sig } as octet-stream).
+    const res = sign_message(body);
+    if (!res.ok) { $("send-out").textContent = "sign err: " + res.error; return; }
+    const sig = res.data; // hex string from wasm
+
+    const payload = JSON.stringify({
+        from: myNpub,
+        to: to,
+        body: body,
+        sig: sig,
+        ts: Date.now(),
+    });
+    try {
+        const r = await fetch(RELAY_HTTP + "/envelope?to=" + encodeURIComponent(to), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                from: myNpub,
+                to: to,
+                body: body,
+                sig: sig,
+                ts: Date.now(),
+            }),
+        });
+        const j = await r.json().catch(() => ({}));
+        $("send-out").textContent = JSON.stringify(j, null, 2);
+        if (r.ok && j.ok) {
+            $("send-text").value = "";
         }
     } catch (e) {
-        el("identity-status").textContent = `Error: ${e.message}`;
-    } finally {
-        el("btn-new-id").disabled = false;
+        $("send-out").textContent = "fetch err: " + e;
+    }
+});
+
+function handleWsMessage(msg) {
+    if (msg.type === "subscribed") {
+        $("uplink-status").textContent = "subscribed to " + msg.alias + " (backlog=" + msg.backlog + ")";
+        return;
+    }
+    if (msg.type === "pong") {
+        $("uplink-status").textContent = "ping ok";
+        return;
+    }
+    if (msg.type === "push") {
+        inbox.unshift(msg.payload);
+        renderInbox();
+        return;
+    }
+    if (msg.type === "error") {
+        $("uplink-status").textContent = "relay err: " + msg.message;
+        return;
     }
 }
 
-async function onPing() {
-    const msg = el("ping-input").value || "hello";
-    try {
-        const result = await backend.ping(msg);
-        el("ping-out").textContent = result.ok ? result.data : `Error: ${result.error}`;
-    } catch (e) {
-        el("ping-out").textContent = `Error: ${e.message}`;
-    }
+function renderInbox() {
+    if (!inbox.length) { $("inbox-out").textContent = "no messages yet"; return; }
+    $("inbox-out").textContent = JSON.stringify(inbox, null, 2);
 }
 
-document.addEventListener("DOMContentLoaded", main);
+boot().catch((e) => {
+    $("wasm-status").textContent = "wasm init failed: " + e;
+});

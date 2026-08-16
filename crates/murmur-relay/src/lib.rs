@@ -26,6 +26,7 @@
 //! - VPS does NOT need to be trusted for metadata privacy — see README.
 
 pub mod config;
+pub mod envelope;
 pub mod pending;
 pub mod subscriber;
 pub mod ws_server;
@@ -37,3 +38,4 @@ pub use pending::{PendingStore, PendingEntry};
 pub use subscriber::{SubscriberHub, WsMessage};
 pub use ws_server::WsServer;
 pub use push::{VapidKeys, PushSubscription, PushStore, PushServer, PushPayload};
+pub use envelope::accept_envelope;
