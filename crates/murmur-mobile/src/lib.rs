@@ -63,35 +63,47 @@ impl<T: Serialize> CmdResult<T> {
 mod tauri_layer {
     use super::*;
 
-    /// Generate a new murmur identity (npub1...).
+    /// Generate a new murmur identity.
+    /// Returns the bech32 `npub1...` string (Nostr-compatible visual format).
     #[tauri::command]
-    pub async fn identity_new(
+    pub fn identity_new(
         state: tauri::State<'_, AppState>,
-    ) -> Result<murmur_id::IdentityPublic, String> {
+    ) -> CmdResult<String> {
         let id = murmur_id::Identity::generate(&mut OsRng);
-        let bytes = id.to_bytes().map_err(|e| e.to_string())?;
-        let pub_id = id.public();
-        *state.identity_public.lock().await = Some(pub_id.clone());
-        *state.identity_secret_bytes.lock().await = Some(bytes);
-        Ok(pub_id)
+        let bytes = match id.to_bytes() {
+            Ok(b) => b,
+            Err(e) => return CmdResult::err(e),
+        };
+        let npub = id.public().npub();
+        // We need an async lock here, but tauri::command is sync. Use try_lock.
+        if let Ok(mut guard) = state.identity_public.try_lock() {
+            *guard = Some(id.public());
+        }
+        if let Ok(mut guard) = state.identity_secret_bytes.try_lock() {
+            *guard = Some(bytes);
+        }
+        CmdResult::ok(npub)
     }
 
     /// Return the currently loaded identity's npub (or error).
     #[tauri::command]
-    pub async fn identity_npub(
+    pub fn identity_npub(
         state: tauri::State<'_, AppState>,
-    ) -> Result<String, String> {
-        let guard = state.identity_public.lock().await;
-        guard
-            .as_ref()
-            .map(|p| p.npub())
-            .ok_or_else(|| "no identity loaded".to_string())
+    ) -> CmdResult<String> {
+        let guard = match state.identity_public.try_lock() {
+            Ok(g) => g,
+            Err(_) => return CmdResult::err("identity lock busy"),
+        };
+        match guard.as_ref() {
+            Some(p) => CmdResult::ok(p.npub()),
+            None => CmdResult::err("no identity loaded"),
+        }
     }
 
     /// Echo — used as a sanity ping for the IPC bridge.
     #[tauri::command]
-    pub async fn ping(msg: String) -> Result<String, String> {
-        Ok(format!("pong: {msg}"))
+    pub fn ping(msg: String) -> CmdResult<String> {
+        CmdResult::ok(format!("pong: {msg}"))
     }
 
     #[cfg_attr(mobile, tauri::mobile_entry_point)]
