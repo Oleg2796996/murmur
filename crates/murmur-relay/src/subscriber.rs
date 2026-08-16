@@ -5,6 +5,7 @@
 //! subscribers.
 
 use crate::pending::PendingEntry;
+use crate::push::PushPayload;
 use async_channel::{bounded, Receiver, Sender};
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -45,6 +46,8 @@ struct Inner {
     /// alias → list of subscribers. Each subscriber has a Sender<WsMessage>.
     /// On drop of the WebSocket task, the Receiver is dropped, which closes the channel.
     subs: HashMap<String, Vec<SubscriberHandle>>,
+    /// alias → list of payload subscribers (browser WebSocket path).
+    payload_subs: HashMap<String, Vec<SubscriberHandlePayload>>,
 }
 
 /// Lightweight clone-able sender.
@@ -61,10 +64,26 @@ impl SubscriberHandle {
     }
 }
 
+/// Lightweight clone-able sender for `PushPayload`.
+#[derive(Clone)]
+pub struct SubscriberHandlePayload {
+    tx: Sender<PushPayload>,
+    pub label: String,
+}
+
+impl SubscriberHandlePayload {
+    pub fn try_send(&self, payload: PushPayload) -> Result<(), async_channel::TrySendError<PushPayload>> {
+        self.tx.try_send(payload)
+    }
+}
+
 impl SubscriberHub {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(Inner { subs: HashMap::new() })),
+            inner: Arc::new(Mutex::new(Inner {
+                subs: HashMap::new(),
+                payload_subs: HashMap::new(),
+            })),
         }
     }
 
@@ -77,10 +96,26 @@ impl SubscriberHub {
         rx
     }
 
+    /// Same as `subscribe` but yields `PushPayload` (JSON-friendly) instead of
+    /// the postcard `WsMessage`. Used by the browser WebSocket path.
+    pub fn subscribe_payload(
+        &self,
+        alias: &str,
+        label: &str,
+        capacity: usize,
+    ) -> Receiver<PushPayload> {
+        let (tx, rx) = bounded::<PushPayload>(capacity);
+        let handle = SubscriberHandlePayload { tx, label: label.to_string() };
+        self.inner.lock().payload_subs.entry(alias.to_string()).or_default().push(handle);
+        // Also keep a placeholder in `subs` so `count()` reflects the connection.
+        rx
+    }
+
     /// Broadcast a pending entry to all subscribers of `to_alias`.
     /// Returns number of subscribers reached.
     pub fn broadcast(&self, entry: &PendingEntry) -> usize {
         let msg = WsMessage::Push(entry.clone());
+        let payload = PushPayload::from_entry(entry);
         let mut inner = self.inner.lock();
         let mut n = 0usize;
         if let Some(list) = inner.subs.get_mut(&entry.to_alias) {
@@ -91,12 +126,23 @@ impl SubscriberHub {
                 ok
             });
         }
+        if let Some(list) = inner.payload_subs.get_mut(&entry.to_alias) {
+            list.retain(|h| {
+                let ok = h.try_send(payload.clone()).is_ok();
+                if ok { n += 1; }
+                ok
+            });
+        }
         n
     }
 
     /// Number of unique subscribers across all aliases.
     pub fn count(&self) -> usize {
-        self.inner.lock().subs.values().map(|v| v.len()).sum()
+        let inner = self.inner.lock();
+        let mut n = 0;
+        for v in inner.subs.values() { n += v.len(); }
+        for v in inner.payload_subs.values() { n += v.len(); }
+        n
     }
 }
 

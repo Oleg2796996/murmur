@@ -20,13 +20,13 @@
 //! verifies it against `Envelope::sender_npub` (must match the embedded
 //! public key). Invalid → drop with a warn log.
 
-use crate::pending::{PendingEntry, PendingStore};
-use crate::push::{PushPayload, PushServer};
+use crate::pending::PendingStore;
+use crate::push::PushServer;
 use crate::subscriber::SubscriberHub;
 use murmur_transport::Envelope;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::warn;
 
 /// Spawn the iroh listener half of the relay.
 ///
@@ -61,55 +61,11 @@ pub async fn spawn(
                 return;
             }
         };
-        let env_bytes = &bytes[4 + alias_len..];
-        let env: Envelope = match postcard::from_bytes(env_bytes) {
-            Ok(e) => e,
-            Err(e) => {
-                warn!(err=%e, "dropping: bad envelope postcard");
-                return;
-            }
-        };
-        // Verify signature against embedded sender_npub.
-        let claimed_sender = match murmur_id::IdentityPublic::from_npub(&env.sender_npub) {
-            Ok(p) => p,
-            Err(e) => {
-                warn!(err=%e, "dropping: bad sender_npub");
-                return;
-            }
-        };
-        if env.verify(&claimed_sender).is_err() {
-            warn!("dropping: signature invalid");
-            return;
-        }
-        let hash_hex = hex::encode(sha3_256(&env.payload));
-        let entry = PendingEntry {
-            to_alias: alias.clone(),
-            from_npub: env.sender_npub.clone(),
-            ts: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-            envelope_bytes: env_bytes.to_vec(),
-            envelope_hash_hex: hash_hex,
-        };
-        if let Err(e) = pending.append(&entry) {
-            error!("pending.append err: {e}");
-            return;
-        }
-        let n = hub.broadcast(&entry);
-        info!(alias=%alias, hash=%entry.envelope_hash_hex, subs=n, "envelope accepted + fanout");
+        let env_bytes = bytes[4 + alias_len..].to_vec();
 
-        // Push delivery (fire-and-forget on a tokio task).
-        let push = push.clone();
-        let payload = PushPayload::from_entry(&entry);
-        let alias_for_log = alias.clone();
-        tokio::spawn(async move {
-            match push.deliver(&payload).await {
-                Ok(n) if n > 0 => info!(alias=%alias_for_log, delivered=n, "push delivered"),
-                Ok(_) => {} // no subscribers, that's fine
-                Err(e) => warn!(err=%e, "push deliver failed"),
-            }
-        });
+        if let Err(e) = crate::envelope::accept_envelope(alias.clone(), env_bytes, &pending, &hub, Some(&push)) {
+            warn!(alias=%alias, err=%e, "dropping envelope");
+        }
     };
 
     // spawn_relay_node passes raw bytes; we need our own acceptor that splits frame.
@@ -172,14 +128,4 @@ impl<F: Fn(Vec<u8>) + Send + Sync + 'static> iroh::node::ProtocolHandler for Raw
             Ok(())
         })
     }
-}
-
-fn sha3_256(data: &[u8]) -> [u8; 32] {
-    use sha3::{Digest, Sha3_256};
-    let mut h = Sha3_256::new();
-    h.update(data);
-    let out = h.finalize();
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&out);
-    arr
 }

@@ -2,7 +2,7 @@
 
 use crate::config::RelayConfig;
 use crate::pending::PendingStore;
-use crate::subscriber::{SubscriberHub, WsMessage};
+use crate::subscriber::SubscriberHub;
 use futures::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -56,33 +56,56 @@ impl WsServer {
         let ws = tokio_tungstenite::accept_async(stream).await?;
         let (mut ws_tx, mut ws_rx) = ws.split();
 
-        let mut rx_list: Vec<(String, async_channel::Receiver<WsMessage>)> = Vec::new();
+        let mut rx_list: Vec<(String, async_channel::Receiver<crate::push::PushPayload>)> = Vec::new();
 
         loop {
             tokio::select! {
                 ws_in = ws_rx.next() => {
                     match ws_in {
-                        Some(Ok(Message::Binary(b))) => {
-                            match WsMessage::decode(&b) {
-                                Ok(WsMessage::Subscribe { alias }) => {
-                                    let backlog = self.pending.read_all(&alias).map(|v| v.len()).unwrap_or(0);
-                                    let rx = self.hub.subscribe(&alias, &label, 16);
-                                    rx_list.push((alias.clone(), rx));
-                                    let conf = WsMessage::Subscribed { alias, backlog };
-                                    let bytes = conf.encode()?;
-                                    ws_tx.send(Message::Binary(bytes)).await?;
-                                }
-                                Ok(WsMessage::Ping) => {
-                                    let pong = WsMessage::Pong.encode()?;
-                                    ws_tx.send(Message::Binary(pong)).await?;
-                                }
-                                Ok(other) => {
-                                    warn!(?label, "unexpected client msg: {:?}", other);
-                                }
+                        Some(Ok(Message::Text(txt))) => {
+                            // Web clients send JSON over Text frames.
+                            let parsed: serde_json::Value = match serde_json::from_str(&txt) {
+                                Ok(v) => v,
                                 Err(e) => {
-                                    error!(?label, "decode err: {e}");
+                                    send_err(&mut ws_tx, &format!("bad json: {e}")).await?;
+                                    continue;
+                                }
+                            };
+                            let ty = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            match ty {
+                                "subscribe" => {
+                                    let alias = match parsed.get("alias").and_then(|v| v.as_str()) {
+                                        Some(a) => a.to_string(),
+                                        None => {
+                                            send_err(&mut ws_tx, "missing alias").await?;
+                                            continue;
+                                        }
+                                    };
+                                    let backlog = self.pending.read_all(&alias).map(|v| v.len()).unwrap_or(0);
+                                    let rx = self.hub.subscribe_payload(&alias, &label, 16);
+                                    rx_list.push((alias.clone(), rx));
+                                    let resp = serde_json::json!({
+                                        "type": "subscribed",
+                                        "alias": alias,
+                                        "backlog": backlog,
+                                    });
+                                    ws_tx.send(Message::Text(resp.to_string())).await?;
+                                }
+                                "ping" => {
+                                    let pong = serde_json::json!({ "type": "pong" });
+                                    ws_tx.send(Message::Text(pong.to_string())).await?;
+                                }
+                                _ => {
+                                    send_err(&mut ws_tx, "unknown type").await?;
                                 }
                             }
+                        }
+                        Some(Ok(Message::Binary(b))) => {
+                            // Legacy postcard path — accepted but ignored for now.
+                            // Browser clients should use Text frames (JSON).
+                            // We still reply with a text-mode error so the connection stays sane.
+                            let _ = b;
+                            send_err(&mut ws_tx, "binary frames unsupported; use text/JSON").await?;
                         }
                         Some(Ok(Message::Close(_))) | None => {
                             debug!(%peer, %label, "ws closed");
@@ -97,10 +120,13 @@ impl WsServer {
                         }
                     }
                 }
-                outbound = poll_receivers(&mut rx_list) => {
-                    if let Some(msg) = outbound {
-                        let bytes = msg.encode()?;
-                        ws_tx.send(Message::Binary(bytes)).await?;
+                outbound = poll_receivers_payload(&mut rx_list) => {
+                    if let Some(payload) = outbound {
+                        let msg = serde_json::json!({
+                            "type": "push",
+                            "payload": payload.to_json_value(),
+                        });
+                        ws_tx.send(Message::Text(msg.to_string())).await?;
                     }
                 }
             }
@@ -108,10 +134,23 @@ impl WsServer {
     }
 }
 
-/// Poll all receivers in `rx_list`. Returns first available message.
-async fn poll_receivers(
-    rx_list: &mut Vec<(String, async_channel::Receiver<WsMessage>)>,
-) -> Option<WsMessage> {
+/// Helper: send a typed error frame to the client.
+async fn send_err(
+    ws_tx: &mut futures::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+        Message,
+    >,
+    msg: &str,
+) -> anyhow::Result<()> {
+    let body = serde_json::json!({ "type": "error", "message": msg }).to_string();
+    ws_tx.send(Message::Text(body)).await?;
+    Ok(())
+}
+
+/// Poll all payload receivers in `rx_list`. Returns first available payload.
+async fn poll_receivers_payload(
+    rx_list: &mut Vec<(String, async_channel::Receiver<crate::push::PushPayload>)>,
+) -> Option<crate::push::PushPayload> {
     if rx_list.is_empty() {
         std::future::pending::<()>().await;
         return None;
@@ -180,19 +219,18 @@ mod tests {
         let url = format!("ws://{addr}");
         let (mut client_tx, mut client_rx) = tokio_tungstenite::connect_async(&url).await.unwrap().0.split();
 
-        let sub = WsMessage::Subscribe { alias: "oleg-hp".into() };
-        client_tx.send(Message::Binary(sub.encode().unwrap())).await.unwrap();
+        // Send a JSON subscribe over Text frame (browser-style).
+        client_tx.send(Message::Text(r#"{"type":"subscribe","alias":"oleg-hp"}"#.into())).await.unwrap();
 
         let ack = client_rx.next().await.unwrap().unwrap();
         match ack {
-            Message::Binary(b) => match WsMessage::decode(&b).unwrap() {
-                WsMessage::Subscribed { alias, backlog } => {
-                    assert_eq!(alias, "oleg-hp");
-                    assert_eq!(backlog, 0);
-                }
-                _ => panic!("not subscribed"),
-            },
-            _ => panic!("not binary"),
+            Message::Text(txt) => {
+                let v: serde_json::Value = serde_json::from_str(&txt).unwrap();
+                assert_eq!(v["type"], "subscribed");
+                assert_eq!(v["alias"], "oleg-hp");
+                assert_eq!(v["backlog"], 0);
+            }
+            _ => panic!("not text"),
         }
 
         let entry = PendingEntry {
@@ -211,11 +249,13 @@ mod tests {
             client_rx.next(),
         ).await.unwrap().unwrap().unwrap();
         match pushed {
-            Message::Binary(b) => match WsMessage::decode(&b).unwrap() {
-                WsMessage::Push(e) => assert_eq!(e.envelope_hash_hex, "h"),
-                _ => panic!("not push"),
-            },
-            _ => panic!("not binary"),
+            Message::Text(txt) => {
+                let v: serde_json::Value = serde_json::from_str(&txt).unwrap();
+                assert_eq!(v["type"], "push");
+                assert_eq!(v["payload"]["envelope_hash_hex"], "h");
+                assert_eq!(v["payload"]["from_npub"], "npub1alice");
+            }
+            _ => panic!("not text"),
         }
     }
 
