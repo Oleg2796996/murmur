@@ -38,17 +38,40 @@ async function loadWasm() {
         const mod = await import("./pkg/murmur_id_wasm.js");
         await mod.default(); // init()
         backend.wasm = {
-            identity_new: () => mod.identity_new().then(r => r.toJSON ? r.toJSON() : r),
-            ping: (msg) => {
-                // WASM has no echo — for sanity we round-trip the message
-                // through the bech32 roundtrip (parser self-test).
+            // Rust returns serde_wasm_bindgen::to_value() — plain JS object,
+            // not a Promise. Wrap in Promise.resolve so callers can await it.
+            identity_new: () => {
                 try {
-                    const pubkey = mod.npub_to_pubkey_hex(msg);
-                    if (!pubkey.ok) return Promise.resolve({ ok: false, error: pubkey.error });
-                    return Promise.resolve({
-                        ok: true,
-                        data: `pong: npub parsed (${pubkey.data.length / 2} bytes pubkey)`,
-                    });
+                    const r = mod.identity_new();
+                    return Promise.resolve(r && r.ok !== undefined
+                        ? r
+                        : { ok: true, data: String(r) });
+                } catch (e) {
+                    return Promise.resolve({ ok: false, error: String(e) });
+                }
+            },
+            npub_to_pubkey_hex: (npub) => {
+                try {
+                    const r = mod.npub_to_pubkey_hex(npub);
+                    return Promise.resolve(r && r.ok !== undefined
+                        ? r
+                        : { ok: true, data: String(r) });
+                } catch (e) {
+                    return Promise.resolve({ ok: false, error: String(e) });
+                }
+            },
+            // WASM "ping" sanity: generates a fresh identity and returns it,
+            // proving the WASM ↔ JS bridge is alive.
+            ping: (_msg) => {
+                try {
+                    const r = mod.identity_new();
+                    if (r && r.ok) {
+                        return Promise.resolve({
+                            ok: true,
+                            data: `pong: generated ${r.data.slice(0, 16)}…`,
+                        });
+                    }
+                    return Promise.resolve({ ok: false, error: String(r) });
                 } catch (e) {
                     return Promise.resolve({ ok: false, error: String(e) });
                 }
