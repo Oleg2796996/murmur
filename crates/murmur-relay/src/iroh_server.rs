@@ -23,7 +23,6 @@
 use crate::pending::PendingStore;
 use crate::push::PushServer;
 use crate::subscriber::SubscriberHub;
-use murmur_transport::Envelope;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::warn;

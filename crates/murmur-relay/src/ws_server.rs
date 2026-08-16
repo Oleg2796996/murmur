@@ -180,7 +180,7 @@ async fn poll_receivers_payload(
 mod tests {
     use super::*;
     use crate::pending::PendingEntry;
-    use crate::subscriber::WsMessage;
+    use crate::push::PushPayload;
     use tokio_tungstenite::tungstenite::Message;
 
     #[tokio::test]
