@@ -29,19 +29,24 @@ struct ParsedEnv {
 ///   - postcard-encoded `murmur_transport::Envelope` (native callers)
 ///   - our JSON wrapper produced by `handle_post_envelope` for browsers
 fn parse_env(bytes: &[u8]) -> Result<ParsedEnv, String> {
-    // First: try postcard (preferred path, includes native signature).
-    if let Ok(env) = postcard::from_bytes::<Envelope>(bytes) {
-        return Ok(ParsedEnv {
-            sender_npub: env.sender_npub.clone(),
-            payload: env.payload.clone(),
-            signature: env.signature.clone(),
-            json_path: false,
-        });
-    }
-    // Second: try JSON wrapper {"_kind":"json_envelope","to":..,"payload":{"from":..,"body":..,"sig":..,"ts":..}}
-    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) {
-        if v.get("_kind").and_then(|k| k.as_str()) == Some("json_envelope") {
-            let payload_obj = v.get("payload").cloned().unwrap_or(serde_json::json!({}));
+    // Try JSON first — browsers PWA sends `{from,to,body,sig,ts}` and *not*
+    // a postcard envelope. If we tried postcard first, postcard's varint
+    // decoding would happily chew up a JSON object and produce garbage in
+    // every field (especially `sender_npub`), causing bech32 parser to
+    // fail with "missing separator".
+    //
+    // Detection: a JSON object starts with `{`. We only attempt JSON when
+    // the byte is `{` so we avoid double-parsing binary frames.
+    if bytes.first() == Some(&b'{') {
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) {
+            // Accept either the `{from,to,body,sig,ts}` flat form (browser
+            // style) or the wrapped `{_kind:"json_envelope", payload:{...}}`
+            // native form.
+            let payload_obj = if v.get("_kind").and_then(|k| k.as_str()) == Some("json_envelope") {
+                v.get("payload").cloned().unwrap_or(serde_json::json!({}))
+            } else {
+                v.clone()
+            };
             let from = payload_obj
                 .get("from")
                 .and_then(|s| s.as_str())
@@ -56,6 +61,16 @@ fn parse_env(bytes: &[u8]) -> Result<ParsedEnv, String> {
                 .unwrap_or_else(|_| b"{}".to_vec());
             return Ok(ParsedEnv { sender_npub: from, payload, signature, json_path: true });
         }
+        // Fall through to postcard; JSON parse failed.
+    }
+    // Postcard (native callers).
+    if let Ok(env) = postcard::from_bytes::<Envelope>(bytes) {
+        return Ok(ParsedEnv {
+            sender_npub: env.sender_npub.clone(),
+            payload: env.payload.clone(),
+            signature: env.signature.clone(),
+            json_path: false,
+        });
     }
     Err("not a recognised envelope (postcard or json_envelope)".to_string())
 }
