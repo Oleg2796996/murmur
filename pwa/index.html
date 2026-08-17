@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#0e0e10">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" "black-translucent">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="murmur">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -38,16 +38,16 @@
         </section>
 
         <section id="relay" class="card">
-            <h2>Relay</h2>
+            <h2>Relay (polling)</h2>
             <p class="hint">
-                <span id="relay-wss">wss://ventures-joel-determined-joining.trycloudflare.com</span>
-            </p>
-            <p class="hint">
-                <span id="relay-http">https://residents-metro-portable-debut.trycloudflare.com</span>
+                <span id="relay-http">https://collapse-authentic-soma-victorian.trycloudflare.com</span>
             </p>
             <p class="hint">My alias: <code id="my-alias">—</code></p>
+            <label class="hint">Listen alias (default = your npub)
+                <input id="alias-input" type="text" placeholder="ozerov">
+            </label>
             <div class="row">
-                <button id="btn-uplink">Connect (uplink)</button>
+                <button id="btn-uplink">Connect (polling)</button>
                 <button id="btn-downlink" disabled>Disconnect</button>
             </div>
             <pre id="uplink-status">disconnected</pre>
@@ -55,7 +55,7 @@
 
         <section id="send" class="card">
             <h2>Send</h2>
-            <input id="send-to" type="text" placeholder="recipient alias (bech32m npub)">
+            <input id="send-to" type="text" placeholder="recipient alias (ozerov or full npub)">
             <textarea id="send-text" placeholder="message body"></textarea>
             <button id="btn-send" disabled>Sign &amp; send</button>
             <pre id="send-out"></pre>
@@ -68,7 +68,7 @@
     </main>
 
     <footer>
-        <span>murmur-mobile Step 9b</span>
+        <span>murmur-mobile Step 9c (polling)</span>
         <span id="wasm-status"></span>
     </footer>
 
