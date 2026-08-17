@@ -11,7 +11,7 @@
 //!
 //! Outputs `pkg/murmur_id_wasm.js` + `pkg/murmur_id_wasm_bg.wasm`.
 
-use getrandom::getrandom;
+use rand_core::OsRng;
 use serde::Serialize;
 use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
@@ -48,6 +48,11 @@ pub struct IdentityInfo {
     pub npub: String,
     pub signing_pubkey_hex: String,
     pub agreement_pubkey_hex: String,
+    /// 32-byte seed, hex. Required for persistence across reloads via localStorage.
+    /// Note: only safe in browser-only contexts. Production-grade crypto would
+    /// use a hardware-backed keystore; PWA localStorage is "good enough" for this
+    /// prototype.
+    pub signing_sk_hex: String,
 }
 
 /// Private-key slot. Once `identity_new()` is called, the 32-byte seed
@@ -63,25 +68,53 @@ fn hex_lower(bytes: &[u8]) -> String {
     s
 }
 
-/// Generate a new murmur identity. Stores the private seed internally so
-/// subsequent `sign_message` calls can use it.
+/// Generate a new murmur identity. Stores the postcard-serialized secret
+/// internally so subsequent `sign_message` calls can use it.
 #[wasm_bindgen]
 pub fn identity_new() -> JsValue {
-    let mut bytes = [0u8; 32];
-    if let Err(e) = getrandom(&mut bytes) {
-        return to_js(&JsCmdResult::<IdentityInfo>::err(format!("getrandom: {e}")));
-    }
-    // Store the seed BEFORE building Identity so sign_message can rebuild.
-    PRIVATE_KEY_BYTES.with(|cell| *cell.borrow_mut() = Some(bytes.to_vec()));
-    let id = match Identity::from_bytes(&bytes) {
-        Ok(i) => i,
-        Err(e) => return to_js(&JsCmdResult::<IdentityInfo>::err(format!("from_bytes: {e}"))),
+    // Generate a fresh identity using the OS RNG (getrandom on wasm32-unknown-unknown).
+    let id = Identity::generate(&mut rand_core::OsRng);
+    // Persist the postcard-serialized secret so sign_message can rebuild Identity.
+    let secret_bytes = match id.to_bytes() {
+        Ok(b) => b,
+        Err(e) => return to_js(&JsCmdResult::<IdentityInfo>::err(format!("to_bytes: {e}"))),
     };
+    let sk_hex = hex_lower(&secret_bytes);
+    PRIVATE_KEY_BYTES.with(|cell| *cell.borrow_mut() = Some(secret_bytes));
     let pubkey = id.public();
     let info = IdentityInfo {
         npub: pubkey.npub(),
         signing_pubkey_hex: hex_lower(&pubkey.signing_pubkey()),
         agreement_pubkey_hex: hex_lower(&pubkey.agreement_pubkey()),
+        signing_sk_hex: sk_hex,
+    };
+    to_js(&JsCmdResult::ok(info))
+}
+
+/// Restore a previously-generated identity from a 32-byte seed (hex).
+/// Returns the same IdentityInfo as identity_new(), and primes the
+/// in-memory key for subsequent sign_message calls.
+#[wasm_bindgen]
+pub fn identity_restore(sk_hex: String) -> JsValue {
+    let bytes_vec: Vec<u8> = (0..sk_hex.len()).step_by(2)
+        .filter_map(|i| u8::from_str_radix(&sk_hex[i..i + 2], 16).ok())
+        .collect();
+    if bytes_vec.len() != 32 {
+        return to_js(&JsCmdResult::<IdentityInfo>::err(format!(
+            "sk_hex must decode to exactly 32 bytes, got {}", bytes_vec.len()
+        )));
+    }
+    let id = match Identity::from_bytes(&bytes_vec) {
+        Ok(i) => i,
+        Err(e) => return to_js(&JsCmdResult::<IdentityInfo>::err(format!("from_bytes: {e}"))),
+    };
+    PRIVATE_KEY_BYTES.with(|cell| *cell.borrow_mut() = Some(bytes_vec));
+    let pubkey = id.public();
+    let info = IdentityInfo {
+        npub: pubkey.npub(),
+        signing_pubkey_hex: hex_lower(&pubkey.signing_pubkey()),
+        agreement_pubkey_hex: hex_lower(&pubkey.agreement_pubkey()),
+        signing_sk_hex: sk_hex,
     };
     to_js(&JsCmdResult::ok(info))
 }
@@ -90,6 +123,14 @@ pub fn identity_new() -> JsValue {
 #[wasm_bindgen]
 pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Smoke-test roundtrip: takes a UTF-8 string and returns it wrapped in a
+/// `JsCmdResult<String>` so the JS side can verify the WASM module is wired
+/// correctly. Cheap and useful for "is the IPC alive?" checks.
+#[wasm_bindgen]
+pub fn ping(msg: String) -> JsValue {
+    to_js(&JsCmdResult::ok(msg))
 }
 
 /// Sign a UTF-8 message with the in-memory private key. Returns the 64-byte
