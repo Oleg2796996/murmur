@@ -1,168 +1,172 @@
-// murmur PWA client (polling-based, iOS-safe).
-//   - murmur-id-wasm: identity ops
-//   - relay HTTP /envelope: send signed Envelope (JSON)
-//   - relay HTTP /api/inbox: poll for incoming envelopes every 5s
-// No WebSocket — iOS Safari aggressively closes background WS, polling is rock-solid.
+// murmur PWA — minimal, polling-only.
+//   Identity: ed25519 npub generated on first load (kept in localStorage).
+//   Online list: GET /api/online every 5s.
+//   Inbox: GET /api/inbox?alias=<name>&since=N every 3s.
+//   Send: POST /envelope?to=<name> with signed JSON.
+// No buttons to press except "Send" and "New name".
 
-import init, { identity_new, ping, sign_message } from "./pkg/murmur_id_wasm.js";
+import init, { identity_new, identity_restore, sign_message } from "./pkg/murmur_id_wasm.js";
 
-const RELAY_HTTP = "https://collapse-authentic-soma-victorian.trycloudflare.com";
+const RELAY = "https://collapse-authentic-soma-victorian.trycloudflare.com";
+const LS_NPUB = "murmur.npub";
+const LS_KEY = "murmur.sk";        // signing key hex (private — только для PWA)
+const LS_NAME = "murmur.name";      // short alias chosen by user
 
 const $ = (id) => document.getElementById(id);
 
 let myNpub = null;
-let mySignKeyHex = null;
-let myAgreeKeyHex = null;
-let myAlias = "anon";        // под каким именем тебя слушает relay
-let since = 0;               // cursor для /api/inbox
-const inbox = [];
+let myName = "anon";
+let signKeyHex = null;
+let since = 0;
 let pollTimer = null;
+const inbox = [];
 
 async function boot() {
     await init();
-    $("rt-tau").textContent = "runtime: wasm";
-    $("wasm-status").textContent = "wasm ready";
-    $("btn-new-id").disabled = false;
-    $("btn-ping").disabled = false;
-    $("btn-uplink").disabled = false;
+    $("status").textContent = "wasm ready";
+
+    // Restore or generate identity
+    const savedSk = localStorage.getItem(LS_KEY);
+    const savedNpub = localStorage.getItem(LS_NPUB);
+    if (savedSk && savedNpub) {
+        const r = identity_restore(savedSk);
+        if (r.ok) {
+            myNpub = r.data.npub;
+            signKeyHex = savedSk;
+            $("status").textContent = "identity restored";
+        } else {
+            await generateIdentity();
+        }
+    } else {
+        await generateIdentity();
+    }
+    myName = localStorage.getItem(LS_NAME) || shortNpub(myNpub);
+    renderMe();
+    startPolling();
 }
 
-$("btn-new-id")?.addEventListener("click", async () => {
+async function generateIdentity() {
     const res = identity_new();
-    if (!res.ok) { $("identity-status").textContent = "error: " + res.error; return; }
+    if (!res.ok) { $("status").textContent = "identity err: " + res.error; return; }
     myNpub = res.data.npub;
-    mySignKeyHex = res.data.signing_pubkey_hex;
-    myAgreeKeyHex = res.data.agreement_pubkey_hex;
-    myAlias = myNpub; // default: subscribe under your own npub
-    $("identity-status").textContent = "Identity ready.";
-    $("npub-out").textContent = myNpub;
-    $("pubkey-out").textContent =
-        "sign:  " + mySignKeyHex +
-        "\nagree: " + myAgreeKeyHex;
-    $("npub-out").classList.remove("hidden");
-    $("pubkey-out").classList.remove("hidden");
-    $("my-alias").textContent = shortAlias(myNpub);
-    $("alias-input").value = myAlias;
-    $("btn-send").disabled = false;
-    $("btn-uplink").disabled = false;
-});
+    signKeyHex = res.data.signing_sk_hex;   // secret key for re-signing
+    localStorage.setItem(LS_NPUB, myNpub);
+    localStorage.setItem(LS_KEY, signKeyHex);
+    $("status").textContent = "new identity created";
+}
 
-$("btn-ping")?.addEventListener("click", async () => {
-    const msg = $("ping-input").value || "hello";
-    const res = ping(msg);
-    if (!res.ok) { $("ping-out").textContent = "err: " + res.error; return; }
-    $("ping-out").textContent = "pong: " + res.data;
-});
+function renderMe() {
+    $("my-name").textContent = myName;
+    $("my-npub").textContent = myNpub.slice(0, 18) + "…" + myNpub.slice(-6);
+}
 
-$("btn-uplink")?.addEventListener("click", () => {
-    const newAlias = ($("alias-input").value || "").trim() || myNpub;
-    myAlias = newAlias;
-    $("my-alias").textContent = shortAlias(myAlias);
-    $("uplink-status").textContent = "polling: " + shortAlias(myAlias);
-    startPolling();
-});
-
-$("btn-downlink")?.addEventListener("click", () => {
-    stopPolling();
-    $("uplink-status").textContent = "disconnected";
+$("btn-new-name")?.addEventListener("click", async () => {
+    // Спрашиваем короткое имя у пользователя. Оно используется как alias для inbox.
+    const newName = prompt("Твоё имя (напр. ozerov, ivan, alice):", myName);
+    if (!newName) return;
+    myName = newName.trim().slice(0, 32) || shortNpub(myNpub);
+    localStorage.setItem(LS_NAME, myName);
+    renderMe();
+    since = 0;
+    inbox.length = 0;
+    renderInbox();
+    pollInbox();
 });
 
 $("btn-send")?.addEventListener("click", async () => {
-    if (!myNpub) { $("send-out").textContent = "err: need identity first"; return; }
     const to = $("send-to").value.trim();
-    const body = $("send-text").value;
-    if (!to) { $("send-out").textContent = "err: recipient required"; return; }
-    if (!body) { $("send-out").textContent = "err: body required"; return; }
-    $("send-out").textContent = "signing…";
+    const body = $("send-text").value.trim();
+    if (!to) { $("send-out").textContent = "кому?"; return; }
+    if (!body) { $("send-out").textContent = "что?"; return; }
+    $("send-out").textContent = "отправляю…";
 
-    const res = sign_message(body);
-    if (!res.ok) { $("send-out").textContent = "sign err: " + res.error; return; }
-    const sig = res.data;
+    const sig = sign_message(body);
+    if (!sig.ok) { $("send-out").textContent = "sign err"; return; }
 
     try {
-        const r = await fetch(RELAY_HTTP + "/envelope?to=" + encodeURIComponent(to), {
+        const r = await fetch(RELAY + "/envelope?to=" + encodeURIComponent(to), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 from: myNpub,
                 to: to,
                 body: body,
-                sig: sig,
+                sig: sig.data,
                 ts: Date.now(),
             }),
         });
         const j = await r.json().catch(() => ({}));
-        $("send-out").textContent = JSON.stringify(j, null, 2);
-        if (r.ok && j.ok) {
+        if (j.ok) {
             $("send-text").value = "";
-            // сразу подёргать inbox, чтобы увидеть своё же сообщение (если подписан на свой alias)
+            $("send-out").textContent = "ok ✓";
+            // если подписаны на свой alias — увидим в inbox
             pollInbox();
+        } else {
+            $("send-out").textContent = "err: " + JSON.stringify(j);
         }
     } catch (e) {
-        $("send-out").textContent = "fetch err: " + e;
+        $("send-out").textContent = "network err: " + e;
     }
 });
 
 function startPolling() {
-    stopPolling();
-    pollInbox();
-    pollTimer = setInterval(pollInbox, 5000);
-    // visibility change — пнуть сразу когда вернулись
-    document.addEventListener("visibilitychange", onVisibility);
-}
-
-function stopPolling() {
     if (pollTimer) clearInterval(pollTimer);
-    pollTimer = null;
-    document.removeEventListener("visibilitychange", onVisibility);
-}
-
-function onVisibility() {
-    if (document.visibilityState === "visible" && pollTimer) {
-        pollInbox();
-    }
+    pollInbox();
+    pollTimer = setInterval(pollInbox, 3000);
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") pollInbox();
+    });
 }
 
 async function pollInbox() {
+    // online count
     try {
-        const url = RELAY_HTTP + "/api/inbox?alias=" + encodeURIComponent(myAlias) + "&since=" + since;
-        const r = await fetch(url, { method: "GET", cache: "no-store" });
-        if (!r.ok) {
-            $("uplink-status").textContent = "poll err: " + r.status;
-            return;
+        const r = await fetch(RELAY + "/api/online", { cache: "no-store" });
+        if (r.ok) {
+            const j = await r.json();
+            $("online-count").textContent = j.count || 0;
         }
+    } catch {}
+
+    // inbox
+    try {
+        const r = await fetch(RELAY + "/api/inbox?alias=" + encodeURIComponent(myName) + "&since=" + since, { cache: "no-store" });
+        if (!r.ok) { $("status").textContent = "poll " + r.status; return; }
         const j = await r.json();
         if (j.items && j.items.length) {
             for (const it of j.items) {
                 inbox.unshift({
-                    alias: myAlias,
-                    hash: it.hash,
-                    from: it.from_npub,
+                    from: shortNpub(it.from_npub) || it.from_npub,
+                    hash: it.hash.slice(0, 8),
                     ts: it.ts,
-                    body_len: it.body_len,
                 });
             }
             since = j.next_since;
-            renderInbox();
         }
-        $("uplink-status").textContent = "polling: " + shortAlias(myAlias) +
-            " (inbox=" + inbox.length + ", last_id=" + (inbox[0]?.hash?.slice(0, 8) || "-") + ")";
+        $("inbox-count").textContent = inbox.length;
+        $("status").textContent = "online (" + j.count + ") · inbox " + inbox.length;
+        renderInbox();
     } catch (e) {
-        $("uplink-status").textContent = "poll fail: " + e;
+        $("status").textContent = "poll fail: " + e;
     }
 }
 
-function shortAlias(a) {
-    if (!a) return "anon";
-    if (a.length <= 18) return a;
-    return a.slice(0, 14) + "…" + a.slice(-4);
+function renderInbox() {
+    const ul = $("inbox-list");
+    ul.innerHTML = "";
+    for (const m of inbox.slice(0, 20)) {
+        const li = document.createElement("li");
+        const t = new Date(m.ts * 1000).toLocaleTimeString().slice(0, 5);
+        li.textContent = `[${t}] ${m.from}: …`;
+        ul.appendChild(li);
+    }
 }
 
-function renderInbox() {
-    if (!inbox.length) { $("inbox-out").textContent = "no messages yet"; return; }
-    $("inbox-out").textContent = JSON.stringify(inbox, null, 2);
+function shortNpub(s) {
+    if (!s) return "";
+    return s.slice(0, 6) + "…" + s.slice(-4);
 }
 
 boot().catch((e) => {
-    $("wasm-status").textContent = "wasm init failed: " + e;
+    $("status").textContent = "init err: " + e;
 });

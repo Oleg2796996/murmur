@@ -13,7 +13,7 @@ murmur-id = { path = "../murmur-id" }
 wasm-bindgen = "0.2"
 getrandom = { version = "0.2", features = ["js"] }
 rand = "0.8"
-rand_chacha = "0.3"
+rand_core = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"
 web-sys = { version = "0.3", features = ["console"] }

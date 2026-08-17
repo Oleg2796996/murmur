@@ -6,71 +6,46 @@
     <meta name="theme-color" content="#0e0e10">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="murmur">
+    <title>murmur</title>
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
     <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
-    <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
-    <title>murmur</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <header>
         <h1>murmur</h1>
-        <p class="subtitle">metadata-private messaging</p>
-        <p class="runtime-badge"><span id="rt-tau">…</span></p>
+        <p class="subtitle" id="status">connecting…</p>
     </header>
 
     <main>
-        <section id="identity" class="card">
-            <h2>Identity</h2>
-            <div id="identity-status">No identity loaded.</div>
-            <button id="btn-new-id">Generate new identity</button>
-            <pre id="npub-out" class="hidden"></pre>
-            <pre id="pubkey-out" class="hidden"></pre>
-        </section>
-
-        <section id="ping" class="card">
-            <h2>IPC sanity</h2>
-            <input id="ping-input" type="text" placeholder="message">
-            <button id="btn-ping">ping</button>
-            <pre id="ping-out"></pre>
-        </section>
-
-        <section id="relay" class="card">
-            <h2>Relay (polling)</h2>
-            <p class="hint">
-                <span id="relay-http">https://collapse-authentic-soma-victorian.trycloudflare.com</span>
-            </p>
-            <p class="hint">My alias: <code id="my-alias">—</code></p>
-            <label class="hint">Listen alias (default = your npub)
-                <input id="alias-input" type="text" placeholder="ozerov">
-            </label>
+        <section id="me" class="card">
+            <h2>Ты</h2>
             <div class="row">
-                <button id="btn-uplink">Connect (polling)</button>
-                <button id="btn-downlink" disabled>Disconnect</button>
+                <code id="my-name">…</code>
+                <button id="btn-new-name">новое имя</button>
             </div>
-            <pre id="uplink-status">disconnected</pre>
+            <p class="hint" id="my-npub">…</p>
+        </section>
+
+        <section id="online" class="card">
+            <h2>Онлайн (<span id="online-count">0</span>)</h2>
+            <ul id="online-list"></ul>
+        </section>
+
+        <section id="inbox" class="card">
+            <h2>Входящие (<span id="inbox-count">0</span>)</h2>
+            <ul id="inbox-list"></ul>
         </section>
 
         <section id="send" class="card">
-            <h2>Send</h2>
-            <input id="send-to" type="text" placeholder="recipient alias (ozerov or full npub)">
-            <textarea id="send-text" placeholder="message body"></textarea>
-            <button id="btn-send" disabled>Sign &amp; send</button>
-            <pre id="send-out"></pre>
-        </section>
-
-        <section id="receive" class="card">
-            <h2>Inbox</h2>
-            <pre id="inbox-out">no messages yet</pre>
+            <h2>Отправить</h2>
+            <input id="send-to" type="text" placeholder="кому (напр. ozerov или npub1...)">
+            <textarea id="send-text" placeholder="сообщение"></textarea>
+            <button id="btn-send">→</button>
+            <p id="send-out" class="hint"></p>
         </section>
     </main>
-
-    <footer>
-        <span>murmur-mobile Step 9c (polling)</span>
-        <span id="wasm-status"></span>
-    </footer>
 
     <script type="module" src="app.js"></script>
 </body>
