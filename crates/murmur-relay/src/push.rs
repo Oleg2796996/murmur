@@ -412,8 +412,8 @@ impl PushServer {
                                 let push: &PushServer = &push_self;
                                 handle_post_envelope(req, pending, hub, push).await
                             }
-                            (Method::GET, _) => {
-                                if let Some(resp) = serve_static(&path, &static_dir) {
+                            (Method::GET | Method::HEAD, _) => {
+                                if let Some(resp) = serve_static(&path, &static_dir, method == Method::HEAD) {
                                     Ok(resp)
                                 } else {
                                     Ok(
@@ -443,7 +443,7 @@ impl PushServer {
 
 /// Try to serve a static file from `static_dir`. Returns `None` if no static
 /// dir is configured or the file does not exist (or the path is unsafe).
-fn serve_static(path: &str, static_dir: &Option<PathBuf>) -> Option<Response<Full<Bytes>>> {
+fn serve_static(path: &str, static_dir: &Option<PathBuf>, head_only: bool) -> Option<Response<Full<Bytes>>> {
     let dir = static_dir.as_ref()?;
     if !dir.is_dir() {
         return None;
@@ -454,7 +454,7 @@ fn serve_static(path: &str, static_dir: &Option<PathBuf>) -> Option<Response<Ful
     let rel = clean.trim_start_matches('/');
     if rel.is_empty() {
         // "/" -> index.html
-        return try_file(dir, "index.html");
+        return try_file(dir, "index.html", head_only);
     }
     // Reject path traversal attempts.
     if rel.contains("..") {
@@ -462,30 +462,34 @@ fn serve_static(path: &str, static_dir: &Option<PathBuf>) -> Option<Response<Ful
     }
     let candidate = dir.join(rel);
     if candidate.is_file() {
-        return serve_file(&candidate);
+        return serve_file(&candidate, head_only);
     }
     // SPA fallback: if path doesn't end in a file extension and the dir
     // has an index.html, serve that. (Keeps PWA UX simple.)
     if !rel.contains('.') {
-        return try_file(dir, "index.html");
+        return try_file(dir, "index.html", head_only);
     }
     None
 }
 
-fn try_file(dir: &Path, name: &str) -> Option<Response<Full<Bytes>>> {
+fn try_file(dir: &Path, name: &str, head_only: bool) -> Option<Response<Full<Bytes>>> {
     let p = dir.join(name);
-    if p.is_file() { serve_file(&p) } else { None }
+    if p.is_file() { serve_file(&p, head_only) } else { None }
 }
 
-fn serve_file(path: &Path) -> Option<Response<Full<Bytes>>> {
+fn serve_file(path: &Path, head_only: bool) -> Option<Response<Full<Bytes>>> {
     let bytes = std::fs::read(path).ok()?;
+    let body = if head_only { Full::new(Bytes::new()) } else { Full::new(Bytes::from(bytes)) };
     let mime = mime_from_ext(path.extension().and_then(|s| s.to_str()).unwrap_or(""));
     Some(
         Response::builder()
             .status(StatusCode::OK)
             .header("content-type", mime)
             .header("cache-control", "no-cache")
-            .body(Full::new(Bytes::from(bytes)))
+            .header("access-control-allow-origin", "*")
+            .header("cross-origin-embedder-policy", "require-corp")
+            .header("cross-origin-resource-policy", "cross-origin")
+            .body(body)
             .unwrap(),
     )
 }
@@ -501,6 +505,7 @@ fn mime_from_ext(ext: &str) -> &'static str {
         "jpg" | "jpeg" => "image/jpeg",
         "svg" => "image/svg+xml",
         "ico" => "image/x-icon",
+        "wasm" => "application/wasm",
         "txt" => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     }
