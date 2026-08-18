@@ -59,6 +59,7 @@ use http_body_util::{BodyExt, Full};
 use serde_json::Value as JsonValue;
 use base64::Engine;
 use jwt_simple::prelude::{ES256KeyPair, ECDSAP256PublicKeyLike};
+use base64::engine::general_purpose::STANDARD as BASE64;
 
 /// Server-owned VAPID keypair. Persisted to disk on first generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,13 +242,15 @@ impl PushPayload {
 pub struct PushServer {
     bind: String,
     pub store: PushStore,
-    vapid: VapidKeys,
+    pub vapid: VapidKeys,
     delivered: Arc<Mutex<u64>>,
     static_dir: Option<PathBuf>,
     /// Pending store (shared with iroh + ws server). Set after construction
     /// via `with_pending_hub` once the relay wires everything together.
     pub(crate) pending: crate::PendingStore,
     pub(crate) hub: crate::SubscriberHub,
+    /// SQLite message store (contacts, history, unread).
+    pub(crate) store_db: Option<crate::storage::MessageStore>,
 }
 
 impl Clone for PushServer {
@@ -260,6 +263,7 @@ impl Clone for PushServer {
             static_dir: self.static_dir.clone(),
             pending: self.pending.clone(),
             hub: self.hub.clone(),
+            store_db: self.store_db.clone(),
         }
     }
 }
@@ -268,15 +272,19 @@ impl PushServer {
     pub fn new(home: &Path, bind: String, vapid: VapidKeys) -> anyhow::Result<Self> {
         let store = PushStore::new(home)?;
         let home_dir = home.to_path_buf();
+        let db_path = home_dir.join("messages.db");
+        let db = crate::storage::MessageStore::new(&db_path).map_err(|e| {
+            anyhow::anyhow!("failed to open message store: {}", e)
+        })?;
         Ok(Self {
             bind,
             store,
             vapid,
             delivered: Arc::new(Mutex::new(0)),
             static_dir: None,
-            // Placeholder — replaced immediately by `with_pending_hub` in main.rs.
             pending: crate::PendingStore::new(&home_dir)?,
             hub: crate::SubscriberHub::new(),
+            store_db: Some(db),
         })
     }
 
@@ -353,6 +361,7 @@ impl PushServer {
     pub async fn serve(self) -> anyhow::Result<()> {
         let listener = tokio::net::TcpListener::bind(&self.bind).await?;
         info!(bind = %self.bind, "push HTTP server listening");
+        let store_db = self.store_db.clone();
         let static_dir = self.static_dir.clone();
         let pending = self.pending.clone();
         let hub = self.hub.clone();
@@ -366,6 +375,7 @@ impl PushServer {
             let pending = pending.clone();
             let hub = hub.clone();
             let push_arc = Arc::clone(&push_self);
+            let db_for_handle = store_db.clone();
             tokio::spawn(async move {
                 let svc = service_fn(move |req: Request<Incoming>| {
                     let store = store.clone_handle();
@@ -374,6 +384,7 @@ impl PushServer {
                     let pending = pending.clone();
                     let hub = hub.clone();
                     let push_self = Arc::clone(&push_arc);
+                    let db = db_for_handle.clone();
                     async move {
                         let method = req.method().clone();
                         let path = req.uri().path().to_string();
@@ -402,6 +413,12 @@ impl PushServer {
                                     .body(Full::new(Bytes::from(vapid_pub)))
                                     .unwrap(),
                             ),
+                            (Method::GET, "/api/contacts") => {
+                                handle_api_contacts(req, db.clone()).await
+                            }
+                            (Method::GET, "/api/history") => {
+                                handle_api_history(req, db.clone()).await
+                            }
                             (Method::POST, "/push/register_subscribe") => {
                                 handle_register_subscribe(req, store).await
                             }
@@ -410,7 +427,7 @@ impl PushServer {
                             }
                             (Method::POST, "/envelope") => {
                                 let push: &PushServer = &push_self;
-                                handle_post_envelope(req, pending, hub, push).await
+                                handle_post_envelope(req, pending.clone(), hub.clone(), push, db.clone()).await
                             }
                             (Method::GET | Method::HEAD, _) => {
                                 if let Some(resp) = serve_static(&path, &static_dir, method == Method::HEAD) {
@@ -607,6 +624,7 @@ async fn handle_post_envelope(
     pending: crate::PendingStore,
     hub: crate::SubscriberHub,
     push: &PushServer,
+    store: Option<crate::storage::MessageStore>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     // 1. Extract `?to=<alias>` from query string.
     let to_alias = match req
@@ -679,6 +697,7 @@ async fn handle_post_envelope(
         &pending,
         &hub,
         Some(&push_arc),
+        store.as_ref(),
     ) {
         Ok((hash, n)) => {
             let mut resp = serde_json::json!({
@@ -700,6 +719,148 @@ async fn handle_post_envelope(
         }
         Err(e) => Ok(json_error(StatusCode::BAD_REQUEST, &e)),
     }
+}
+
+// ── API: contacts ─────────────────────────────────────────────────────────
+
+async fn handle_api_contacts(
+    req: Request<Incoming>,
+    store: Option<crate::storage::MessageStore>,
+) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    let db = match &store {
+        Some(db) => db,
+        None => {
+            return Ok(json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "message store not initialised",
+            ));
+        }
+    };
+
+    let npub = match req
+        .uri()
+        .query()
+        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("npub=").map(|s| s.to_string())))
+    {
+        Some(n) if !n.is_empty() => n,
+        _ => {
+            return Ok(json_error(
+                StatusCode::BAD_REQUEST,
+                "missing ?npub=<npub> query param",
+            ));
+        }
+    };
+
+    let contacts = match db.get_contacts(&npub) {
+        Ok(c) => c,
+        Err(e) => {
+            return Ok(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("get_contacts: {e}"),
+            ));
+        }
+    };
+
+    let resp = serde_json::json!({ "contacts": contacts });
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/json")
+        .header("access-control-allow-origin", "*")
+        .body(Full::new(Bytes::from(resp.to_string())))
+        .unwrap())
+}
+
+// ── API: history ───────────────────────────────────────────────────────────
+
+async fn handle_api_history(
+    req: Request<Incoming>,
+    store: Option<crate::storage::MessageStore>,
+) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    let db = match &store {
+        Some(db) => db,
+        None => {
+            return Ok(json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "message store not initialised",
+            ));
+        }
+    };
+
+    let npub = match req
+        .uri()
+        .query()
+        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("npub=").map(|s| s.to_string())))
+    {
+        Some(n) if !n.is_empty() => n,
+        _ => {
+            return Ok(json_error(
+                StatusCode::BAD_REQUEST,
+                "missing ?npub=<npub> query param",
+            ));
+        }
+    };
+
+    let peer = match req
+        .uri()
+        .query()
+        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("peer=").map(|s| s.to_string())))
+    {
+        Some(p) if !p.is_empty() => p,
+        _ => {
+            return Ok(json_error(
+                StatusCode::BAD_REQUEST,
+                "missing ?peer=<npub> query param",
+            ));
+        }
+    };
+
+    let limit: i64 = req
+        .uri()
+        .query()
+        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("limit=").and_then(|v| v.parse().ok())))
+        .unwrap_or(100);
+
+    let before_ts: Option<i64> = req
+        .uri()
+        .query()
+        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("before_ts=").and_then(|v| v.parse().ok())));
+
+    let resp = match db.get_history(&npub, &peer, limit, before_ts) {
+        Ok(h) => {
+            // Convert raw body bytes to base64 and build response rows.
+            let messages: Vec<serde_json::Value> = h.messages.iter().map(|m| {
+                let direction = if m.from_npub == npub { "out" } else { "in" };
+                serde_json::json!({
+                    "from": m.from_npub,
+                    "to": m.to_alias,
+                    "body_base64": BASE64.encode(&m.body),
+                    "sig_base64": "",
+                    "ts": m.ts,
+                    "direction": direction,
+                })
+            }).collect();
+
+            let mut out = serde_json::Map::new();
+            out.insert("messages".into(), serde_json::Value::Array(messages));
+            if let Some(nbt) = h.next_before_ts {
+                out.insert("next_before_ts".into(), serde_json::Value::Number(serde_json::Number::from(nbt)));
+            }
+            serde_json::Value::Object(out)
+        }
+        Err(e) => {
+            return Ok(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("get_history: {e}"),
+            ));
+        }
+    };
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/json")
+        .header("access-control-allow-origin", "*")
+        .body(Full::new(Bytes::from(resp.to_string())))
+        .unwrap())
 }
 
 fn json_error(status: StatusCode, msg: &str) -> Response<Full<Bytes>> {
