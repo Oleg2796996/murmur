@@ -6,7 +6,7 @@
 //   Realtime: WS broadcast + HTTP-polling fallback (5s).
 //   Storage:  identity in localStorage, all chat state in JS memory.
 
-// ── Error reporter (BEFORE any imports, so even module-load errors show) ──
+// ── Error reporter (so JS errors show on screen, not just console) ──
 (function () {
     const showErr = (msg, source, line, col) => {
         let div = document.getElementById("__js_error_overlay");
@@ -14,7 +14,7 @@
             div = document.createElement("div");
             div.id = "__js_error_overlay";
             div.style.cssText = "position:fixed;top:0;left:0;right:0;background:#ff3355;color:#fff;padding:12px;font-family:monospace;font-size:12px;z-index:99999;white-space:pre-wrap;max-height:50vh;overflow:auto;border-bottom:2px solid #fff;";
-            (document.head || document.documentElement || document.body || document).appendChild(div);
+            document.body ? document.body.appendChild(div) : null;
         }
         const text = source ? `[${source}:${line}:${col}] ${msg}` : msg;
         div.textContent += "\n" + text;
@@ -23,29 +23,17 @@
     window.addEventListener("unhandledrejection", (e) => showErr("Promise rejected: " + (e.reason && (e.reason.stack || e.reason.message || e.reason) || "?")));
 })();
 
-// WASM boot via dynamic import() so this file can run as a CLASSIC script
-// (no <script type="module">). iOS PWA standalone has flaky module support,
-// and classic scripts with inline event handlers are 100% reliable.
-let _wasmModulePromise = null;
-let wasmReady = null;
-function loadWasmModule() {
-    if (!_wasmModulePromise) {
-        _wasmModulePromise = import("./pkg/murmur_id_wasm.js").then((mod) => {
-            window.__murmurModuleLoaded = true;
-            console.log('[murmur] WASM module loaded');
-            return mod;
-        });
-    }
-    return _wasmModulePromise;
-}
+import init, { identity_new, identity_restore, sign_message } from "./pkg/murmur_id_wasm.js";
 
-async function ensureWasm() {
-    const mod = await loadWasmModule();
-    if (!wasmReady) wasmReady = mod.default();
+const RELAY = "https://explicit-treo-authorities-hash.trycloudflare.com";
+
+// ── WASM boot (обязательно ДО identity_new / sign_message) ──
+let wasmReady = null;
+function ensureWasm() {
+    if (!wasmReady) wasmReady = init();
     return wasmReady;
 }
 
-const RELAY = "https://murmur.senswifi.ru";
 const LS_NPUB = "murmur.npub";
 const LS_KEY = "murmur.sk";
 const LS_NAME = "murmur.name";
@@ -112,18 +100,8 @@ function extractBodyText(input) {
     if (input === null || input === undefined) return { text: "", isBinary: false };
     if (typeof input === "object") {
         // already parsed envelope object
-        if (input.body_base64) {
-            // body_base64 holds an envelope JSON (the outer body field is the JSON
-            // string), so decode base64 and recurse so we can pull out .body.
-            const inner = decodeBody(input.body_base64);
-            return extractBodyText(inner.text);
-        }
+        if (input.body_base64) return decodeBody(input.body_base64);
         if (typeof input.body === "string") return { text: input.body, isBinary: false };
-        // Some relays wrap message envelope as a separate field; the caller
-        // may pass the full history row.
-        if (input.envelope && typeof input.envelope === "object") {
-            return extractBodyText(input.envelope);
-        }
         return { text: JSON.stringify(input), isBinary: false };
     }
     if (typeof input !== "string") return { text: String(input), isBinary: false };
@@ -134,10 +112,7 @@ function extractBodyText(input) {
         try {
             const parsed = JSON.parse(s);
             if (parsed && typeof parsed === "object") {
-                if (parsed.body_base64) {
-                    const inner = decodeBody(parsed.body_base64);
-                    return extractBodyText(inner.text);
-                }
+                if (parsed.body_base64) return decodeBody(parsed.body_base64);
                 if (typeof parsed.body === "string") return { text: parsed.body, isBinary: false };
                 return { text: JSON.stringify(parsed), isBinary: false };
             }
@@ -161,17 +136,6 @@ function extractBodyText(input) {
     } catch { /* fallthrough */ }
     // Plain text
     return { text: s, isBinary: false };
-}
-
-// extractMessageText — same logic, but accepts a message row that may carry
-// the actual envelope under msg.envelope OR a base64 field under msg.body_base64
-// OR the envelope JSON in msg.body (string).
-function extractMessageText(msg) {
-    if (!msg || typeof msg !== "object") return { text: "", isBinary: false };
-    if (msg.body_base64) return extractBodyText({ body_base64: msg.body_base64 });
-    if (msg.body) return extractBodyText(msg.body);
-    if (msg.envelope) return extractBodyText(msg.envelope);
-    return { text: "", isBinary: false };
 }
 
 function formatTime(ts) {
@@ -203,19 +167,6 @@ function formatChatTime(ts) {
 function truncateNpub(npub) {
     if (!npub || npub.length <= 14) return npub || "";
     return npub.slice(0, 8) + "..." + npub.slice(-6);
-}
-
-// Stable color for an avatar based on the npub (deterministic per peer).
-const AVATAR_PALETTE = [
-    "#5e9aff", "#7c5cff", "#ff7c5c", "#5cff9a",
-    "#ffc15c", "#ff5c9a", "#5cffd6", "#9a5cff",
-    "#ffae5c", "#5cffe1", "#ff5c5c", "#5c8aff",
-];
-function avatarColorFor(s) {
-    if (!s) return AVATAR_PALETTE[0];
-    let h = 0;
-    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffff;
-    return AVATAR_PALETTE[h % AVATAR_PALETTE.length];
 }
 
 function escapeHtml(str) {
@@ -252,11 +203,10 @@ function bytesToBase64(bytes) {
 }
 
 // ── Identity Screen ──
-async function _handleCreate() {
+$("btn-create")?.addEventListener("click", async () => {
     try {
         await ensureWasm();
-        const mod = await loadWasmModule();
-        const res = mod.identity_new();
+        const res = identity_new();
         if (!res.ok) { $("identity-error").textContent = "identity_new error: " + res.error; return; }
         myNpub = res.data.npub;
         signKeyHex = res.data.signing_sk_hex;
@@ -264,76 +214,32 @@ async function _handleCreate() {
         localStorage.setItem(LS_NPUB, myNpub);
         localStorage.setItem(LS_KEY, signKeyHex);
         localStorage.setItem(LS_NAME, myAlias);
-        const name = ($("create-name")?.value || "").trim();
-        if (name) localStorage.setItem(LS_DISPLAY_NAME, name);
-        enterMessenger();
-    } catch (e) {
-        console.error("[murmur] _handleCreate error:", e);
-        const errEl = $("identity-error");
-        errEl.textContent = "Error: " + (e.message || String(e));
-        errEl.hidden = false;
-    }
-}
-window.__murmurCreate = _handleCreate;
-// Expose handlers on window so the inline handlers in index.html can call them
-// after the WASM/module has finished loading.
-window._handleCreate = _handleCreate;
-window._handleRestore = async function() {
-    const hex = $("restore-hex").value.trim();
-    if (!hex || hex.length < 60) { $("identity-error").textContent = "Enter 64-char hex key"; return; }
-    try {
-        await ensureWasm();
-        const mod = await loadWasmModule();
-        const res = mod.identity_restore(hex);
-        if (!res.ok) { $("identity-error").textContent = "restore error: " + res.error; return; }
-        myNpub = res.data.npub;
-        signKeyHex = hex;
-        myAlias = res.data.npub;
-        localStorage.setItem(LS_NPUB, myNpub);
-        localStorage.setItem(LS_KEY, signKeyHex);
-        const rn = ($("restore-name")?.value || "").trim();
-        const name = rn || myAlias;
-        localStorage.setItem(LS_NAME, name);
-        if (rn) localStorage.setItem(LS_DISPLAY_NAME, rn);
         enterMessenger();
     } catch (e) { $("identity-error").textContent = "Error: " + e.message; }
-};
-$("btn-create")?.addEventListener("click", _handleCreate);
+});
 
 $("btn-restore")?.addEventListener("click", async () => {
     const hex = $("restore-hex").value.trim();
     if (!hex || hex.length < 60) { $("identity-error").textContent = "Enter 64-char hex key"; return; }
     try {
         await ensureWasm();
-        const mod = await loadWasmModule();
-        const res = mod.identity_restore(hex);
+        const res = identity_restore(hex);
         if (!res.ok) { $("identity-error").textContent = "restore error: " + res.error; return; }
         myNpub = res.data.npub;
         signKeyHex = hex;
         myAlias = localStorage.getItem(LS_NAME) || myNpub;
         localStorage.setItem(LS_NPUB, myNpub);
         localStorage.setItem(LS_KEY, signKeyHex);
-        const name = ($("restore-name")?.value || "").trim();
-        if (name) localStorage.setItem(LS_DISPLAY_NAME, name);
         enterMessenger();
     } catch (e) { $("identity-error").textContent = "Error: " + e.message; }
 });
 
 function enterMessenger() {
     identityScreen.style.display = "none";
-    identityScreen.hidden = true;
-    messenger.hidden = false;
     messenger.classList.add("active");
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
     if (fullEl) fullEl.textContent = myNpub;
-    // CRITICAL: Register alias immediately so history queries find us on either side.
-    fetch(RELAY + "/api/register_alias", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ alias: myNpub, npub: myNpub })
-    }).then(r => r.json().then(j => console.log("register_alias on enter:", j)))
-      .catch(e => console.warn("register_alias on enter failed:", e));
     const copyBtn = $("btn-copy-npub");
     if (copyBtn && !copyBtn.dataset.bound) {
         copyBtn.dataset.bound = "1";
@@ -367,30 +273,14 @@ function enterMessenger() {
             else localStorage.removeItem(LS_DISPLAY_NAME);
         });
     }
-    // First-time hint: ask for a display name if missing.
-    if (!localStorage.getItem(LS_DISPLAY_NAME) && !localStorage.getItem("murmur.name_hinted")) {
-        localStorage.setItem("murmur.name_hinted", "1");
-        const v = prompt("Set your display name (visible to contacts):", "");
-        if (v !== null) {
-            const trimmed = v.trim().slice(0, 24);
-            if (trimmed) {
-                localStorage.setItem(LS_DISPLAY_NAME, trimmed);
-                if (nameInput) nameInput.value = trimmed;
-            }
-        }
-    }
     if (chatView) chatView.style.display = "none";
-    if (chatView) chatView.hidden = true;
     if (noChat) noChat.style.display = "flex";
-    if (noChat) noChat.hidden = false;
     if (inputArea) inputArea.classList.remove("visible");
-    if (inputArea) inputArea.hidden = true;
-    const m = document.querySelector(".messenger");
-    if (m) m.classList.remove("chat-open");
+    if (sidebar) sidebar.classList.remove("hidden");
+    if (chatPanel) chatPanel.classList.remove("active");
     renderChatList();
     loadContacts();
-    // connectWS();  // DISABLED: WS reconnect storm blocks fetches in browsers without proxying WS.
-                       // Push via WebSocket is replaced by polling (pollHistoryForPeer + pollInbox).
+    connectWS();
     startPolling();
 }
 
@@ -405,9 +295,7 @@ $("btn-logout")?.addEventListener("click", () => {
     localStorage.removeItem(LS_DISPLAY_NAME);
     localStorage.removeItem("murmur.contact_names");
     messenger.classList.remove("active");
-    messenger.hidden = true;
     identityScreen.style.display = "flex";
-    identityScreen.hidden = false;
     $("identity-error").textContent = "";
     $("restore-hex").value = "";
 });
@@ -416,7 +304,7 @@ $("btn-logout")?.addEventListener("click", () => {
 async function loadContacts() {
     if (!myNpub) return;
     try {
-        const r = await fetch(RELAY + "/api/contacts?npub=" + encodeURIComponent(myNpub) + "&_t=" + Date.now(), { cache: "no-store", credentials: "omit" });
+        const r = await fetch(RELAY + "/api/contacts?npub=" + encodeURIComponent(myNpub));
         if (!r.ok) return;
         const j = await r.json();
         if (j.contacts) {
@@ -472,23 +360,16 @@ function renderChatList() {
         const div = document.createElement("div");
         div.className = "chat-item" + (activePeer === c.peer ? " active" : "");
         const preview = c.lastMessagePreview
-            ? (c.lastMessagePreview.length > 60 ? c.lastMessagePreview.slice(0, 60) + "…" : c.lastMessagePreview)
+            ? (c.lastMessagePreview.length > 60 ? c.lastMessagePreview.slice(0, 60) + "..." : c.lastMessagePreview)
             : "No messages yet";
         const name = nameMap[c.peer];
-        const displayName = name || truncateNpub(c.peer);
-        const avatarInitial = (name || c.peer).slice(0, 1).toUpperCase();
-        const avatarColor = avatarColorFor(c.peer);
-        const peerDisplay = name
-            ? escapeHtml(name) + "<span class='chat-item-peer-sub'>" + escapeHtml(truncateNpub(c.peer)) + "</span>"
-            : escapeHtml(truncateNpub(c.peer));
+        const peerDisplay = name ? escapeHtml(name) + "<span class='chat-item-peer-sub'>" + truncateNpub(c.peer) + "</span>" : truncateNpub(c.peer);
         const timeDisplay = formatChatTime(c.lastTs);
         const badge = c.unreadCount > 0 ? "<span class='chat-item-badge'>" + c.unreadCount + "</span>" : "";
-        const previewEsc = escapeHtml(preview);
         div.innerHTML =
-            "<div class='chat-item-avatar' style='background:" + avatarColor + "'>" + avatarInitial + "</div>" +
-            "<div class='chat-item-body'>" +
-                "<div class='chat-item-name'>" + peerDisplay + "</div>" +
-                "<div class='chat-item-preview'>" + previewEsc + "</div>" +
+            "<div class='chat-item-info'>" +
+                "<div class='chat-item-peer'>" + peerDisplay + "</div>" +
+                "<div class='chat-item-preview'>" + preview + "</div>" +
             "</div>" +
             "<div class='chat-item-meta'>" +
                 "<span class='chat-item-time'>" + timeDisplay + "</span>" +
@@ -502,18 +383,17 @@ function renderChatList() {
 // ── Open Chat ──
 function openChat(peer) {
     activePeer = peer;
-    const m = document.querySelector(".messenger");
-    if (m) m.classList.add("chat-open");
+    if (window.innerWidth <= 768) {
+        sidebar.classList.add("hidden");
+        chatPanel.classList.add("active");
+    }
     chatList.querySelectorAll(".chat-item").forEach(el => {
         const peerEl = el.querySelector(".chat-item-peer");
         el.classList.toggle("active", peerEl && peerEl.textContent === truncateNpub(peer));
     });
     if (contacts[peer]) contacts[peer].unreadCount = 0;
     chatView.style.display = "flex";
-    chatView.hidden = false;
     noChat.style.display = "none";
-    noChat.hidden = true;
-    inputArea.hidden = false;
     inputArea.classList.add("visible");
     const nameMap = loadContactNames();
     const savedName = nameMap[peer];
@@ -527,71 +407,50 @@ function openChat(peer) {
         saveContactName(peer, trimmed);
         openChat(peer);
     };
-    // Always load history when opening a chat — /api/history is the source
-    // of truth, even if we've already received 0 messages via WS. The previous
-    // `!messages[peer]` check missed the case where an empty `[]` had been
-    // created by an earlier incoming-message handler.
-    messages[peer] = [];
-    loadHistory(peer).then(() => {
-        if (contacts[peer]) contacts[peer].unreadCount = 0;
+    if (!messages[peer]) {
+        messages[peer] = [];
+        loadHistory(peer);
+    } else {
         renderMessages();
         scrollToBottom();
-    }).catch((e) => {
-        console.warn("[murmur] openChat loadHistory failed:", e);
-    });
+    }
 }
 
 // ── Load History ──
 async function loadHistory(peer, beforeTs) {
     if (!myNpub) return;
-    // Cache-bust every /api/* request: bypass HTTP cache, Service Worker cache,
-    // and Cloudflare edge cache. Without this, browsers serve stale responses
-    // from earlier deploys (when /api/history returned empty) and the chat
-    // appears empty even though the DB has messages.
     let url = RELAY + "/api/history?npub=" + encodeURIComponent(myNpub) +
-              "&peer=" + encodeURIComponent(peer) + "&limit=" + HISTORY_LIMIT +
-              "&_t=" + Date.now();
+              "&peer=" + encodeURIComponent(peer) + "&limit=" + HISTORY_LIMIT;
     if (beforeTs) url += "&before_ts=" + beforeTs;
     const area = messagesArea;
     const loadingEl = document.createElement("div");
     loadingEl.className = "loading-spinner";
     loadingEl.textContent = "Loading...";
     area.prepend(loadingEl);
-    // 25s timeout: Cloudflare tunnel cold-start can take 10-20s on first request after deploy.
-    const fetchCtrl = new AbortController();
-    const timeoutId = setTimeout(() => {
-        fetchCtrl.abort();
-        console.warn("[murmur] loadHistory: timeout 25s");
-        loadingEl.remove();
-        const errEl = document.createElement("div");
-        errEl.className = "error-msg";
-        errEl.innerHTML = "Не удалось загрузить историю (25s). <button class='link-btn' onclick='openChat(\"" + peer + "\")'>Повторить</button>";
-        area.appendChild(errEl);
-    }, 25000);
     try {
-        const r = await fetch(url, { cache: "no-store", credentials: "omit", signal: fetchCtrl.signal });
-        clearTimeout(timeoutId);
-        if (!r.ok) { console.warn("[murmur] loadHistory: HTTP", r.status, url); loadingEl.remove(); return; }
+        const r = await fetch(url);
+        if (!r.ok) { loadingEl.remove(); return; }
         const j = await r.json();
-        console.log("[murmur] loadHistory:", peer.slice(0, 12), "got", (j.messages || []).length, "messages");
         loadingEl.remove();
         if (j.messages && j.messages.length > 0) {
             if (!messages[peer]) messages[peer] = [];
             const existingSet = new Set(messages[peer].map(m => m._sig));
             const newMsgs = [];
             for (const m of j.messages) {
-                const fromNpub = m.from_npub || m.from;
-                const toField = m.to || m.to_alias || "";
-                const sigKey = (fromNpub + m.ts);
+                const sigKey = m.sig || (m.from + m.ts + (m.body_base64 || ""));
                 if (existingSet.has(sigKey)) continue;
-                const { text: bodyText, isBinary } = extractMessageText(m);
-                const fromName = m.from_name || (m.envelope && m.envelope.from_name);
-                if (fromNpub && fromName && fromNpub !== myNpub) {
-                    setContactName(fromNpub, fromName);
+                let bodyText = "";
+                let isBinary = false;
+                if (m.body_base64) {
+                    const decoded = decodeBody(m.body_base64);
+                    bodyText = decoded.text;
+                    isBinary = decoded.isBinary;
+                } else if (m.body) {
+                    bodyText = m.body;
                 }
                 const msg = {
-                    from: fromNpub, to: toField, body: bodyText, ts: m.ts,
-                    direction: m.direction || (fromNpub === myNpub ? "out" : "in"),
+                    from: m.from, to: m.to, body: bodyText, ts: m.ts,
+                    direction: m.direction || (m.from === myNpub ? "out" : "in"),
                     sig: m.sig || "", _sig: sigKey,
                     isBinary: isBinary,
                     status: m.direction === "out" ? "sent" : null,
@@ -603,60 +462,39 @@ async function loadHistory(peer, beforeTs) {
             if (j.next_before_ts) oldestTsForPeer[peer] = j.next_before_ts;
             renderMessages();
         }
-    } catch (e) { clearTimeout(timeoutId); loadingEl.remove(); console.warn("[murmur] loadHistory FAILED:", e.message); }
+    } catch (e) { loadingEl.remove(); console.warn("loadHistory failed:", e); }
 }
 
 // ── Render Messages ──
 function renderMessages() {
     if (!activePeer) return;
-    const all = messages[activePeer] || [];
-    const msgs = [...all].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    const msgs = messages[activePeer] || [];
     messagesArea.innerHTML = "";
-
-    let lastDay = null;
     for (const m of msgs) {
-        const day = formatDayDivider(m.ts);
-        if (day && day !== lastDay) {
-            const divider = document.createElement("div");
-            divider.className = "day-divider";
-            divider.innerHTML = "<span>" + day + "</span>";
-            messagesArea.appendChild(divider);
-            lastDay = day;
-        }
         const div = document.createElement("div");
         const isOut = m.direction === "out";
-        div.className = "bubble " + m.direction;
-        let statusGlyph = "";
-        if (isOut) {
-            statusGlyph = m.status === "delivered" ? "✓✓" : (m.status === "sent" ? "✓" : "");
+        div.className = "message " + m.direction;
+        let statusHtml = "";
+        if (isOut && m.status) {
+            statusHtml = "<span class='message-status " + m.status + "'>" + m.status + "</span>";
         }
+        // Always run through extractBodyText — handles old messages stored
+        // as JSON envelopes before the parser was added.
         const { text: bodyText, isBinary } = extractBodyText(m.body);
         let bodyHtml;
         if (isBinary || m.isBinary) {
-            bodyHtml = escapeHtml(bodyText);
+            bodyHtml = "<div class='message-binary'>" + escapeHtml(bodyText) + "</div>";
         } else {
-            bodyHtml = escapeHtml(bodyText);
+            bodyHtml = "<pre>" + escapeHtml(bodyText) + "</pre>";
         }
         div.innerHTML =
-            bodyHtml +
-            "<span class='bubble-time'>" + formatTime(m.ts) + (statusGlyph ? " " + statusGlyph : "") + "</span>";
+            "<div class='message-body'>" + bodyHtml + "</div>" +
+            "<div class='message-meta'>" +
+                "<span class='message-time'>" + formatTime(m.ts) + "</span>" +
+                statusHtml +
+            "</div>";
         messagesArea.appendChild(div);
     }
-}
-
-// Day divider label: "Сегодня", "Вчера", or "12 авг".
-function formatDayDivider(ts) {
-    if (!ts) return null;
-    const d = new Date(ts * 1000);
-    const now = new Date();
-    const startOf = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-    const today = startOf(now);
-    const that = startOf(d);
-    const diffDays = Math.round((today - that) / 86400000);
-    if (diffDays === 0) return "Сегодня";
-    if (diffDays === 1) return "Вчера";
-    const months = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
-    return d.getDate() + " " + months[d.getMonth()];
 }
 
 function scrollToBottom() {
@@ -686,10 +524,7 @@ async function sendMessage() {
         body_base64: bytesToBase64(new TextEncoder().encode(text)),
         ts: Math.floor(Date.now() / 1000),
     };
-    const myName = (localStorage.getItem(LS_DISPLAY_NAME) || "").trim();
-    if (myName) msg.from_name = myName;
-    const mod = await loadWasmModule();
-    const sig = mod.sign_message(text);
+    const sig = sign_message(text);
     if (!sig.ok) { btnSend.disabled = false; console.error("sign error:", sig.error); return; }
     msg.sig = sig.data;
 
@@ -697,7 +532,7 @@ async function sendMessage() {
     if (!messages[activePeer]) messages[activePeer] = [];
     const renderedMsg = {
         from: myNpub, to: activePeer, body: text, ts: msg.ts,
-        direction: "out", sig: sig.data, _sig: myNpub + msg.ts,
+        direction: "out", sig: sig.data, _sig: sig.data,
         status: "sent", isBinary: false,
     };
     messages[activePeer].push(renderedMsg);
@@ -782,15 +617,10 @@ btnSend?.addEventListener("click", sendMessage);
 btnBack?.addEventListener("click", () => {
     sidebar.classList.remove("hidden");
     chatPanel.classList.remove("active");
-    const m = document.querySelector(".messenger");
-    if (m) m.classList.remove("chat-open");
     activePeer = null;
     chatView.style.display = "none";
-    chatView.hidden = true;
     noChat.style.display = "flex";
-    noChat.hidden = false;
     inputArea.classList.remove("visible");
-    inputArea.hidden = true;
 });
 
 chatSearch?.addEventListener("input", () => renderChatList());
@@ -855,28 +685,11 @@ function handleIncomingEnvelope(env) {
     const peer = fromNpub === myNpub ? toField : fromNpub;
     if (!messages[peer]) messages[peer] = [];
 
-    // Use canonical fromNpub+ts as dedup key (sig is too long and would never
-    // match the optimistic message key).
-    const sigKey = fromNpub + env.ts;
+    const sigKey = env.sig || (fromNpub + env.ts + (env.body_base64 || ""));
     const exists = messages[peer].some(m => m._sig === sigKey);
-    if (exists) {
-        // Already in memory (likely the optimistic copy). Update its status if it
-        // was the locally-sent copy.
-        const idx = messages[peer].findIndex(m => m._sig === sigKey);
-        if (idx !== -1 && messages[peer][idx].status === "sent" && messages[peer][idx].direction === "out") {
-            messages[peer][idx].status = "delivered";
-            if (activePeer === peer) renderMessages();
-        }
-        return;
-    }
+    if (exists) return;
 
-    const { text: bodyText, isBinary } = extractBodyText(env);
-
-    // Remember peer's display name if it came along with the envelope.
-    const fromName = env.from_name || (env.envelope && env.envelope.from_name);
-    if (fromNpub && fromName && fromNpub !== myNpub) {
-        setContactName(fromNpub, fromName);
-    }
+    const { text: bodyText, isBinary } = extractBodyText(env.body || env);
 
     const msg = {
         from: fromNpub, to: toField, body: bodyText, ts: env.ts,
@@ -907,7 +720,7 @@ async function pollInbox() {
     if (!myNpub) return;
     try {
         // Step 1: get all peers I've ever talked to.
-        const cr = await fetch(RELAY + "/api/contacts?npub=" + encodeURIComponent(myNpub) + "&_t=" + Date.now(), { cache: "no-store", credentials: "omit" });
+        const cr = await fetch(RELAY + "/api/contacts?npub=" + encodeURIComponent(myNpub));
         if (!cr.ok) return;
         const cj = await cr.json();
         const peers = new Set();
@@ -930,7 +743,8 @@ async function pollInbox() {
 async function pollHistoryForPeer(peer) {
     if (!myNpub || !peer) return;
     try {
-        const r = await fetch(RELAY + "/api/history?npub=" + encodeURIComponent(myNpub) + "&peer=" + encodeURIComponent(peer) + "&limit=" + HISTORY_LIMIT + "&_t=" + Date.now(), { cache: "no-store", credentials: "omit" });
+        const r = await fetch(RELAY + "/api/history?npub=" + encodeURIComponent(myNpub)
+            + "&peer=" + encodeURIComponent(peer) + "&limit=" + HISTORY_LIMIT);
         if (!r.ok) return;
         const j = await r.json();
         const msgs = j.messages || [];
@@ -940,12 +754,11 @@ async function pollHistoryForPeer(peer) {
         for (const msg of msgs) {
             const fromNpub = msg.from_npub || msg.from;
             const toField = msg.to || msg.to_alias || "";
-            // Canonical dedup key: fromNpub+ts (matches optimistic and WS paths).
-            const sigKey = fromNpub + msg.ts;
+            const sigKey = msg.envelope_hash_hex || msg.sig || (fromNpub + msg.ts);
             const exists = messages[peer].some(m => m._sig === sigKey);
             if (exists) continue;
 
-            const { text: bodyText, isBinary } = extractMessageText(msg);
+            const { text: bodyText, isBinary } = extractBodyText(msg.body);
 
             const envelope = {
                 from: fromNpub, to: toField, body: bodyText, ts: msg.ts,
@@ -956,12 +769,6 @@ async function pollHistoryForPeer(peer) {
             };
             messages[peer].push(envelope);
             added = true;
-
-            // Remember peer's display name if present (envelope or top-level).
-            const fromName = msg.from_name || (msg.envelope && msg.envelope.from_name);
-            if (fromNpub && fromName && fromNpub !== myNpub) {
-                setContactName(fromNpub, fromName);
-            }
 
             if (!contacts[peer]) {
                 contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
@@ -994,7 +801,7 @@ function startPolling() {
 // ── Visibility handler for WS ──
 document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
-        // if (!wsConnected) connectWS();  // DISABLED: see WS comment above.
+        if (!wsConnected) connectWS();
         pollInbox();
     }
 });
@@ -1009,8 +816,7 @@ async function tryAutoRestore() {
     }
     try {
         await ensureWasm();
-        const mod = await loadWasmModule();
-        const res = mod.identity_restore(savedKey);
+        const res = identity_restore(savedKey);
         if (res && res.ok && res.data && res.data.npub === savedNpub) {
             myNpub = res.data.npub;
             signKeyHex = res.data.signing_sk_hex;

@@ -3,12 +3,47 @@
 // Payload (from relay push.rs PushPayload::to_json):
 // { alias, from_npub, ts, envelope_hash_hex, title, body }
 
+// Cache versioning. Bump CACHE_VERSION on each deploy that changes
+// app.js / index.html / styles.css / manifest.json. The activate handler
+// below deletes every cache whose name doesn't match the current version,
+// so old SW-controlled clients get the fresh files automatically without
+// the user needing to add ?v=N to the URL.
+const CACHE_VERSION = "murmur-v32";
+const PRECACHE = []; // No precache — browser handles HTTP cache naturally.
+
 self.addEventListener("install", (event) => {
   self.skipWaiting();
+  // Pre-cache the shell so first paint works offline.
+  event.waitUntil(
+    caches.open(CACHE_VERSION).then((c) =>
+      // Use addAll with individual fallbacks so a single 404 doesn't
+      // fail the whole install (icons can be missing in early deploys).
+      Promise.all(
+        PRECACHE.map((u) => c.add(u).catch(() => null))
+      )
+    )
+  );
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil((async () => {
+    // Drop any caches that aren't the current version. This is what
+    // makes deployments take effect: when CACHE_VERSION changes, all
+    // old caches (including those from the old SW) are evicted.
+    const names = await caches.keys();
+    await Promise.all(
+      names.map((n) => (n === CACHE_VERSION ? null : caches.delete(n)))
+    );
+    await self.clients.claim();
+  })());
+});
+
+// NOTE: fetch handler removed. It was causing UI breakage on iOS PWA
+// (stale HTML/JS/CSS served from cache, buttons unclickable). We rely on
+// the browser's normal HTTP cache. SW is now only for push notifications.
+self.addEventListener("fetch", (event) => {
+    // pass-through: do not respondWith, browser handles it normally.
+    return;
 });
 
 self.addEventListener("push", (event) => {
