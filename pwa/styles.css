@@ -16,6 +16,7 @@
     --danger: #f06c6c;
     --safe-top: env(safe-area-inset-top, 0px);
     --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -38,6 +39,7 @@ body {
     background: var(--bg);
     -webkit-font-smoothing: antialiased;
     -webkit-tap-highlight-color: transparent;
+    padding-right: var(--safe-right);
 }
 
 /* ================= SCREEN: IDENTITY (create / restore) ================= */
@@ -396,7 +398,7 @@ button.small { padding: 8px 12px; font-size: 13px; }
 }
 
 .bubble {
-    max-width: 75%;
+    max-width: min(75%, 280px);
     padding: 7px 11px 6px 11px;
     border-radius: 14px;
     word-wrap: break-word;
