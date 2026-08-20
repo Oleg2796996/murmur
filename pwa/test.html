@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>murmur TEST</title>
+</head>
+<body style="margin:0;padding:20px;font-family:sans-serif;background:#fff;color:#000;">
+    <h1 style="color:#000;">murmur TEST PAGE</h1>
+    <p style="color:#000;">Если ты это видишь — HTML грузится. Если кликается — JS работает.</p>
+    <input id="t" type="text" placeholder="type here" style="display:block;padding:10px;font-size:16px;border:1px solid #000;width:200px;margin:10px 0;">
+    <button id="b" style="display:block;padding:10px 20px;background:#007AFF;color:#fff;border:none;border-radius:8px;font-size:16px;margin:10px 0;">CLICK ME</button>
+    <p id="out" style="color:#000;border:1px solid #000;padding:10px;min-height:20px;">output here</p>
+    <script>
+        document.getElementById("b").addEventListener("click", function() {
+            document.getElementById("out").textContent = "clicked at " + new Date().toISOString();
+        });
+        // Also try inline onclick as a backup
+        function myClick() {
+            document.getElementById("out").textContent = "inline clicked at " + new Date().toISOString();
+        }
+        document.getElementById("b").onclick = myClick;
+    </script>
+</body>
+</html>
