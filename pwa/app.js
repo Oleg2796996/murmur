@@ -435,6 +435,12 @@ const LS_MAXTS = "murmur_maxts_v1";
 // Lesson #129: chat delete — скрытие чата на клиенте. Peer орёт-в localStorage,
 // в sidebar не показывается. На сервере ничего не удаляется (TTL 24ч удалит само).
 const LS_HIDDEN_PEERS = "murmur_hidden_peers_v1";
+// Lesson #132.5: tombstone при удалении чата. Карта peer -> ts удаления.
+// При polling новый unhidePeer сработает ТОЛЬКО если msg.ts > tombstone[peer].
+// Без этого fix'а: polling приходит с msg.ts <= tombstone и снимает скрытие,
+// потому что lesson #132.1 (любое новое сообщение для peer'а) сталкивается
+// с re-fetch старых envelopes в /api/history. tombstone отсекает старые.
+const LS_DELETED_TS = "murmur_deleted_ts_v1";
 
 function loadUnreadMap() {
     try {
@@ -529,6 +535,15 @@ function hidePeer(peer) {
         arr.push(peer);
         saveHiddenPeers(arr);
     }
+    // Lesson #132.5: tombstone — записываем ts удаления, чтобы polling
+    // восстановил чат только при РЕАЛЬНО новом сообщении (ts > tombstone),
+    // а не на любой re-fetch старого envelope из /api/history.
+    try {
+        const raw = localStorage.getItem(LS_DELETED_TS) || "{}";
+        const map = JSON.parse(raw);
+        map[peer] = Math.floor(Date.now() / 1000);
+        localStorage.setItem(LS_DELETED_TS, JSON.stringify(map));
+    } catch (e) { /* best effort */ }
     clearUnread(peer);
 }
 function unhidePeer(peer) {
@@ -536,6 +551,21 @@ function unhidePeer(peer) {
     if (!peer) return;
     const arr = loadHiddenPeers().filter(p => p !== peer);
     saveHiddenPeers(arr);
+    // Lesson #132.5: tombstone снимается вместе со скрытием — чат снова живой.
+    try {
+        const raw = localStorage.getItem(LS_DELETED_TS) || "{}";
+        const map = JSON.parse(raw);
+        if (peer in map) { delete map[peer]; localStorage.setItem(LS_DELETED_TS, JSON.stringify(map)); }
+    } catch (e) { /* best effort */ }
+}
+
+function getDeletedTs(peer) {
+    peer = normalizePeer(peer);
+    try {
+        const raw = localStorage.getItem(LS_DELETED_TS) || "{}";
+        const map = JSON.parse(raw);
+        return map[peer] || 0;
+    } catch (e) { return 0; }
 }
 
 async function loadContacts() {
@@ -1161,11 +1191,11 @@ async function pollHistoryForPeer(peer) {
             const toField = msg.to || msg.to_alias || "";
             // Lesson #128: дедуп по envelope_hash если есть, иначе по ts.
             const hash = msg.envelope_hash || msg.envelope_hash_hex || null;
+            const sigKey = fromNpub + msg.ts;
             let exists = false;
             if (hash) {
                 exists = messages[peer].some(m => m._hash === hash);
             } else {
-                const sigKey = fromNpub + msg.ts;
                 exists = messages[peer].some(m => m._sig === sigKey);
             }
             if (exists) continue;
@@ -1205,8 +1235,13 @@ async function pollHistoryForPeer(peer) {
                 if (!contacts[peer]) contacts[peer] = { peer: peer, lastMessagePreview: "Не доставлено", lastTs: msg.ts, unreadCount: 0 };
                 contacts[peer].lastMessagePreview = "Не доставлено";
                 contacts[peer].lastTs = msg.ts;
-                // Lesson #131: undelivered — тоже событие, чат восстанавливаем.
-                if (isHiddenPeer(peer)) unhidePeer(peer);
+                if (isHiddenPeer(peer)) {
+                    // Lesson #132.5: tombstone — не восстанавливаем чат ради
+                    // старого envelope, который polling пере-fetch'ит из
+                    // /api/history. Восстанавливаем только при реально новом
+                    // сообщении (ts > ts момента удаления).
+                    if (msg.ts > getDeletedTs(peer)) unhidePeer(peer);
+                }
                 if (activePeer !== peer && msg.ts > getMaxTs(peer)) {
                     bumpUnread(peer);
                     contacts[peer].unreadCount = getUnread(peer);
@@ -1245,7 +1280,12 @@ async function pollHistoryForPeer(peer) {
             // если Олег использует один ключ на MacBook и iPhone,
             // self-сообщение (from=myNpub) не снимает isHiddenPeer,
             // и удалённый чат навсегда остаётся скрытым.
-            if (isHiddenPeer(peer)) unhidePeer(peer);
+            // Lesson #132.5: tombstone — повторное снятие скрытия работает
+            // только при ts > tombstone[peer], чтобы polling re-fetch старых
+            // envelope'ов из /api/history не восстанавливал удалённый чат.
+            if (isHiddenPeer(peer)) {
+                if (msg.ts > getDeletedTs(peer)) unhidePeer(peer);
+            }
             // isIncoming используется ТОЛЬКО для unread bump — self-сообщения
             // с другого устройства не должны увеличивать badge (юзер их сам отправил).
             const isIncoming = fromNpub !== myNpub;
@@ -1262,25 +1302,60 @@ async function pollHistoryForPeer(peer) {
                 scrollToBottom();
             }
         }
-    } catch (e) { console.warn("pollHistoryForPeer failed:", e); }
-}
-
-function startPolling() {
-    pollInbox();
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(pollInbox, POLL_INTERVAL);
-    document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") pollInbox();
-    });
-}
-
-// ── Visibility handler for WS ──
-document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-        // if (!wsConnected) connectWS();  // DISABLED: see WS comment above.
-        pollInbox();
+    } catch (e) {
+        console.warn("pollHistoryForPeer failed:", e && e.message, e && e.stack);
+        if (typeof window.__pollErrors !== 'undefined') window.__pollErrors.push({t: Date.now(), fn: 'pollHistoryForPeer', msg: String(e && e.message), stack: String(e && e.stack)});
     }
-});
+}
+
+// Lesson #132.4: рекурсивный setTimeout вместо setInterval.
+// iOS PWA печально известен тем, что замораживает setInterval в фоне (или при
+// длительном отсутствии input). setTimeout после await poll гарантирует, что
+// каждый цикл реально отрабатывает — следующий tick ставится ТОЛЬКО после
+// завершения предыдущего (включая всю async работу pollHistoryForPeer).
+// visibilitychange делает poll сразу при возврате на экран — но не полагаемся
+// только на это: таймаут 5s — это max, реальный интервал = время poll + 5s.
+function startPolling() {
+    if (window.__pollingStarted) return;
+    window.__pollingStarted = true;
+    window.__pollErrors = [];
+    const POLL_GAP_MS = 5000;
+    let lastForcedTick = 0;
+    const forceTick = (reason) => {
+        // Debounce: чаще одного раза в секунду не дёргаем.
+        const now = Date.now();
+        if (now - lastForcedTick < 1000) return;
+        lastForcedTick = now;
+        if (window.__pollTimer) clearTimeout(window.__pollTimer);
+        tick(reason);
+    };
+    const tick = async (reason) => {
+        if (reason) console.log("[poll] tick:", reason);
+        try {
+            await pollInbox();
+        } catch (e) {
+            console.warn("pollInbox failed in loop:", e && e.message);
+        }
+        window.__pollTimer = setTimeout(() => tick(), POLL_GAP_MS);
+    };
+    tick("initial");
+    // Lesson #132.4: iOS PWA печально известен тем, что замораживает JS в фоне.
+    // Поэтому форсируем tick на ЛЮБОЕ пользовательское действие: тап, скролл,
+    // клавиатура, focus. Это гарантирует, что если setTimeout задержался,
+    // любой пользовательский input даст мгновенный refresh.
+    for (const evt of ["touchstart", "mousedown", "keydown", "scroll", "click", "focus"]) {
+        document.addEventListener(evt, () => forceTick(evt), { passive: true, capture: true });
+    }
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") forceTick("visibility");
+    });
+    window.addEventListener("pageshow", () => forceTick("pageshow"));
+    window.addEventListener("focus", () => forceTick("focus"));
+}
+
+// ── Visibility handler (Lesson #132.4: основной visibility listener уже в startPolling выше) ──
+// Старый visibility handler для WS удалён — visibilitychange теперь в startPolling
+// вызывает tick() с полным рекурсивным циклом.
 
 // ── Auto-restore last identity on load ──
 async function tryAutoRestore() {
