@@ -201,6 +201,19 @@ button.small { padding: 8px 12px; font-size: 13px; }
     transition: background 0.15s ease;
 }
 .logout-btn:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
+.notif-btn {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 6px 10px;
+    border-radius: 8px;
+    margin-left: 6px;
+    transition: background 0.15s ease;
+}
+.notif-btn:hover { background: var(--accent); border-color: var(--accent); }
+.notif-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .back-btn { display: none; }
 .delete-btn {
     margin-left: auto;
