@@ -91,17 +91,19 @@ pub fn identity_new() -> JsValue {
     to_js(&JsCmdResult::ok(info))
 }
 
-/// Restore a previously-generated identity from a 32-byte seed (hex).
-/// Returns the same IdentityInfo as identity_new(), and primes the
-/// in-memory key for subsequent sign_message calls.
+/// Restore a previously-generated identity from its full postcard-serialized bytes (hex-encoded).
+/// Use the `signing_sk_hex` field returned by `identity_new()` — it contains the entire
+/// private state (signing + agreement keys) needed to reconstruct the Identity.
+/// Returns the same IdentityInfo as identity_new(), and primes the in-memory key
+/// for subsequent sign_message calls.
 #[wasm_bindgen]
 pub fn identity_restore(sk_hex: String) -> JsValue {
     let bytes_vec: Vec<u8> = (0..sk_hex.len()).step_by(2)
         .filter_map(|i| u8::from_str_radix(&sk_hex[i..i + 2], 16).ok())
         .collect();
-    if bytes_vec.len() != 32 {
+    if bytes_vec.is_empty() || sk_hex.len() % 2 != 0 {
         return to_js(&JsCmdResult::<IdentityInfo>::err(format!(
-            "sk_hex must decode to exactly 32 bytes, got {}", bytes_vec.len()
+            "sk_hex must be valid hex, got {} chars", sk_hex.len()
         )));
     }
     let id = match Identity::from_bytes(&bytes_vec) {

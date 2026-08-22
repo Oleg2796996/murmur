@@ -32,6 +32,7 @@ pub mod subscriber;
 pub mod ws_server;
 pub mod iroh_server;
 pub mod push;
+pub mod storage;
 
 pub use config::RelayConfig;
 pub use pending::{PendingStore, PendingEntry};
@@ -39,3 +40,4 @@ pub use subscriber::{SubscriberHub, WsMessage};
 pub use ws_server::WsServer;
 pub use push::{VapidKeys, PushSubscription, PushStore, PushServer, PushPayload};
 pub use envelope::accept_envelope;
+pub use storage::MessageStore;

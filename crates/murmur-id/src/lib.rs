@@ -93,7 +93,14 @@ impl IdentityPublic {
 
     /// Recover the public identity from a bech32 `npub1...` string.
     pub fn from_npub(s: &str) -> Result<Self, IdentityError> {
-        let (hrp, data, _variant) = bech32::decode(s)?;
+        let (hrp, data, variant) = match bech32::decode(s) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("from_npub: bech32::decode failed: s.len={}, s[..30]={:?}, err={:?}", s.len(), &s.chars().take(30).collect::<String>(), e);
+                return Err(IdentityError::InvalidKey(format!("bech32 decode error: {e}")));
+            }
+        };
+        eprintln!("from_npub: hrp={}, data.len={}, variant={:?}, s.len={}", hrp, data.len(), variant, s.len());
         if hrp != NOSTR_HRP {
             return Err(IdentityError::InvalidKey(format!(
                 "expected hrp {NOSTR_HRP}, got {hrp}"

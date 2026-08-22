@@ -22,6 +22,7 @@
 
 use crate::pending::PendingStore;
 use crate::push::PushServer;
+use crate::storage::MessageStore;
 use crate::subscriber::SubscriberHub;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -34,14 +35,17 @@ pub async fn spawn(
     pending: PendingStore,
     hub: SubscriberHub,
     push: Arc<PushServer>,
+    store: MessageStore,
 ) -> anyhow::Result<(iroh::net::NodeId, SocketAddr)> {
     let pending = Arc::new(pending);
     let hub = Arc::new(hub);
+    let store = Arc::new(store);
 
     let on_envelope_raw = move |bytes: Vec<u8>| {
         let pending = pending.clone();
         let hub = hub.clone();
         let push = push.clone();
+        let store = store.clone();
 
         // Parse frame: alias_len(4 BE) || alias || envelope
         if bytes.len() < 4 {
@@ -62,7 +66,7 @@ pub async fn spawn(
         };
         let env_bytes = bytes[4 + alias_len..].to_vec();
 
-        if let Err(e) = crate::envelope::accept_envelope(alias.clone(), env_bytes, &pending, &hub, Some(&push)) {
+        if let Err(e) = crate::envelope::accept_envelope(alias.clone(), env_bytes, &pending, &hub, Some(&push), Some(&store)) {
             warn!(alias=%alias, err=%e, "dropping envelope");
         }
     };

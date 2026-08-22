@@ -416,6 +416,9 @@ impl PushServer {
                             (Method::GET, "/api/contacts") => {
                                 handle_api_contacts(req, db.clone()).await
                             }
+                            (Method::POST, "/api/register_alias") => {
+                                handle_register_alias_http(req, db.clone()).await
+                            }
                             (Method::GET, "/api/history") => {
                                 handle_api_history(req, db.clone()).await
                             }
@@ -498,11 +501,19 @@ fn serve_file(path: &Path, head_only: bool) -> Option<Response<Full<Bytes>>> {
     let bytes = std::fs::read(path).ok()?;
     let body = if head_only { Full::new(Bytes::new()) } else { Full::new(Bytes::from(bytes)) };
     let mime = mime_from_ext(path.extension().and_then(|s| s.to_str()).unwrap_or(""));
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+    // HTML/JS/CSS: must-revalidate to bypass Cloudflare edge cache.
+    // WASM/icons: immutable, can cache.
+    let cc = if matches!(ext, "html" | "htm" | "js" | "mjs" | "css" | "json" | "webmanifest") {
+        "no-cache, no-store, must-revalidate"
+    } else {
+        "public, max-age=86400"
+    };
     Some(
         Response::builder()
             .status(StatusCode::OK)
             .header("content-type", mime)
-            .header("cache-control", "no-cache")
+            .header("cache-control", cc)
             .header("access-control-allow-origin", "*")
             .header("cross-origin-embedder-policy", "require-corp")
             .header("cross-origin-resource-policy", "cross-origin")
@@ -642,6 +653,8 @@ async fn handle_post_envelope(
             ));
         }
     };
+    // URL-decode to_alias (hyper doesn't decode query params).
+    let to_alias = percent_decode(&to_alias);
 
     let ct = req
         .headers()
@@ -721,6 +734,52 @@ async fn handle_post_envelope(
     }
 }
 
+// ── API: register alias (HTTP, no WS needed) ───────────────────────────
+
+async fn handle_register_alias_http(
+    req: Request<Incoming>,
+    store: Option<crate::storage::MessageStore>,
+) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    let db = match &store {
+        Some(db) => db,
+        None => {
+            return Ok(json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "message store not initialised",
+            ));
+        }
+    };
+    let body = req.collect().await.unwrap().to_bytes();
+    let json: JsonValue = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            return Ok(json_error(StatusCode::BAD_REQUEST, &format!("bad json: {e}")));
+        }
+    };
+    let alias = match json.get("alias").and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => return Ok(json_error(StatusCode::BAD_REQUEST, "missing alias")),
+    };
+    let npub = match json.get("npub").and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => return Ok(json_error(StatusCode::BAD_REQUEST, "missing npub")),
+    };
+    if let Err(e) = db.register_alias(&alias, &npub) {
+        return Ok(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("register: {e}"),
+        ));
+    }
+    info!("register_alias_http: {alias} → {npub}");
+    let resp = serde_json::json!({ "ok": true, "alias": alias, "npub": npub }).to_string();
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/json")
+        .header("access-control-allow-origin", "*")
+        .body(Full::new(Bytes::from(resp)))
+        .unwrap())
+}
+
 // ── API: contacts ─────────────────────────────────────────────────────────
 
 async fn handle_api_contacts(
@@ -737,11 +796,12 @@ async fn handle_api_contacts(
         }
     };
 
-    let npub = match req
-        .uri()
-        .query()
-        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("npub=").map(|s| s.to_string())))
-    {
+    let query = req.uri().query().unwrap_or("");
+    let mut npub: Option<String> = None;
+    for kv in query.split('&') {
+        if let Some(v) = kv.strip_prefix("npub=") { npub = Some(v.to_string()); }
+    }
+    let npub = match npub {
         Some(n) if !n.is_empty() => n,
         _ => {
             return Ok(json_error(
@@ -751,6 +811,11 @@ async fn handle_api_contacts(
         }
     };
 
+    // Опциональный side-effect: пометить входящие от peer'а как прочитанные.
+    // Нужен чтобы badge после reload отражал реальное состояние, а
+    // не счётчик всех входящих за всё время.
+    // Cloudflare Worker проксирует /api/contacts, поэтому вкладываемся
+    // сюда, а не выделяем отдельный endpoint.
     let contacts = match db.get_contacts(&npub) {
         Ok(c) => c,
         Err(e) => {
@@ -770,7 +835,7 @@ async fn handle_api_contacts(
         .unwrap())
 }
 
-// ── API: history ───────────────────────────────────────────────────────────
+// ── API: history ────────────────────────────────────────────────────────────
 
 async fn handle_api_history(
     req: Request<Incoming>,
@@ -837,8 +902,24 @@ async fn handle_api_history(
                     "sig_base64": "",
                     "ts": m.ts,
                     "direction": direction,
+                    // Lesson #128: добавляем hash для надёжного дедупа на клиенте
+                    // (сервер может переписать ts, тогда дедуп по myNpub+ts ломается).
+                    "envelope_hash": m.envelope_hash,
                 })
             }).collect();
+
+            // Lesson #131: honest relay — помечаем все отданные envelope'ы к удалению
+            // через 5 мин. Peer offline зашёл за ними — мы больше не помним.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let short_ttl = now + 300; // 5 minutes
+            for m in &h.messages {
+                if let Err(e) = db.shorten_expires_at(&m.envelope_hash, short_ttl) {
+                    warn!(err=%e, "shorten_expires_at failed on /api/history");
+                }
+            }
 
             let mut out = serde_json::Map::new();
             out.insert("messages".into(), serde_json::Value::Array(messages));
@@ -885,6 +966,28 @@ fn base64_url_decode(s: &str) -> anyhow::Result<Vec<u8>> {
     URL_SAFE_NO_PAD
         .decode(s)
         .map_err(|e| anyhow::anyhow!("base64url decode: {e}"))
+}
+
+fn percent_decode(s: &str) -> String {
+    // hyper doesn't decode percent-encoded query params, so we do it here.
+    // Replace %XX with the actual byte (keeping UTF-8).
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i+1] as char).to_digit(16);
+            let lo = (bytes[i+2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
 }
 
 #[cfg(test)]
