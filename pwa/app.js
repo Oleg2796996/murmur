@@ -1246,6 +1246,9 @@ async function pollHistoryForPeer(peer) {
             // self-сообщение (from=myNpub) не снимает isHiddenPeer,
             // и удалённый чат навсегда остаётся скрытым.
             if (isHiddenPeer(peer)) unhidePeer(peer);
+            // isIncoming используется ТОЛЬКО для unread bump — self-сообщения
+            // с другого устройства не должны увеличивать badge (юзер их сам отправил).
+            const isIncoming = fromNpub !== myNpub;
             if (isIncoming && activePeer !== peer && msg.ts > getMaxTs(peer)) {
                 bumpUnread(peer);
                 contacts[peer].unreadCount = getUnread(peer);
