@@ -377,6 +377,8 @@ function enterMessenger() {
     // connectWS();  // DISABLED: WS reconnect storm blocks fetches in browsers without proxying WS.
                        // Push via WebSocket is replaced by polling (pollHistoryForPeer + pollInbox).
     startPolling();
+    setupPushSubscription();
+    updateBadge();
 }
 
 $("btn-logout")?.addEventListener("click", () => {
@@ -395,6 +397,21 @@ $("btn-logout")?.addEventListener("click", () => {
     $("identity-error").textContent = "";
     $("restore-hex").value = "";
 });
+
+const notifBtn = $("btn-notifications");
+if (notifBtn && !notifBtn.dataset.bound) {
+    notifBtn.dataset.bound = "1";
+    const refresh = () => {
+        const perm = (typeof Notification !== "undefined") ? Notification.permission : "default";
+        if (perm === "granted") notifBtn.classList.add("on");
+        else notifBtn.classList.remove("on");
+    };
+    refresh();
+    notifBtn.addEventListener("click", async () => {
+        notifBtn.disabled = true;
+        try { await requestPushPermission(); } finally { refresh(); notifBtn.disabled = false; }
+    });
+}
 
 // ── Contacts ──
 //
@@ -476,12 +493,14 @@ function setUnread(peer, n) {
     const m = loadUnreadMap();
     if (n <= 0) delete m[peer]; else m[peer] = n;
     saveUnreadMap(m);
+    updateBadge();
 }
 function bumpUnread(peer) {
     peer = normalizePeer(peer);
     const m = loadUnreadMap();
     m[peer] = (m[peer] || 0) + 1;
     saveUnreadMap(m);
+    updateBadge();
 }
 function clearUnread(peer) {
     peer = normalizePeer(peer);
@@ -566,6 +585,94 @@ function getDeletedTs(peer) {
         const map = JSON.parse(raw);
         return map[peer] || 0;
     } catch (e) { return 0; }
+}
+
+
+// ─── Push notifications + badge ───
+function urlBase64ToUint8Array(base64String) {
+    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const rawData = atob(base64);
+    const out = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) out[i] = rawData.charCodeAt(i);
+    return out;
+}
+
+async function setupPushSubscription() {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+        console.log("[push] PushManager not supported");
+        return;
+    }
+    try {
+        const reg = await navigator.serviceWorker.ready;
+        const existing = await reg.pushManager.getSubscription();
+        if (existing) {
+            console.log("[push] already subscribed, endpoint=", existing.endpoint.slice(0, 60));
+            return;
+        }
+        const vapidKey = await fetch(RELAY + "/vapid_public_key").then(r => r.text());
+        if (!vapidKey || vapidKey.length < 20) {
+            console.warn("[push] vapid key invalid:", vapidKey);
+            return;
+        }
+        const perm = Notification.permission;
+        if (perm === "denied") {
+            console.warn("[push] notifications denied by user");
+            return;
+        }
+        const sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(vapidKey),
+        });
+        const subJson = sub.toJSON();
+        await fetch(RELAY + "/push/register_subscribe", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ alias: myNpub, subscription: subJson }),
+        });
+        console.log("[push] subscribed and registered on server");
+    } catch (e) {
+        console.warn("[push] setup failed:", e && e.message);
+    }
+}
+
+async function requestPushPermission() {
+    if (!("Notification" in window)) {
+        alert("Браузер не поддерживает уведомления");
+        return;
+    }
+    if (Notification.permission === "granted") {
+        await setupPushSubscription();
+        return;
+    }
+    if (Notification.permission === "denied") {
+        alert("Уведомления заблокированы. Включите в Safari → Настройки сайтов → Уведомления.");
+        return;
+    }
+    const result = await Notification.requestPermission();
+    console.log("[push] permission:", result);
+    if (result === "granted") {
+        await setupPushSubscription();
+    }
+}
+
+function getTotalUnread() {
+    const m = loadUnreadMap();
+    let total = 0;
+    for (const v of Object.values(m)) total += (v || 0);
+    return total;
+}
+
+async function updateBadge() {
+    const total = getTotalUnread();
+    try {
+        if ("setAppBadge" in navigator) {
+            if (total > 0) await navigator.setAppBadge(total);
+            else if ("clearAppBadge" in navigator) await navigator.clearAppBadge();
+        }
+    } catch (e) {
+        console.debug("[badge] failed:", e && e.message);
+    }
 }
 
 async function loadContacts() {
@@ -1147,6 +1254,10 @@ function handleIncomingEnvelope(env) {
 async function pollInbox() {
     if (!myNpub) return;
     try {
+        // Step 0: always refresh contacts list first, so newly-discovered peers
+        // (someone who wrote us for the first time) become visible in sidebar
+        // even if pollHistoryForPeer doesn't fire on them.
+        await loadContacts();
         // Step 1: get all peers I've ever talked to.
         const cr = await fetch(RELAY + "/api/contacts?npub=" + encodeURIComponent(myNpub) + "&_t=" + Date.now(), { cache: "no-store", credentials: "omit" });
         if (!cr.ok) return;
