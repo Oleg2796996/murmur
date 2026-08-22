@@ -16,7 +16,6 @@
     --danger: #f06c6c;
     --safe-top: env(safe-area-inset-top, 0px);
     --safe-bottom: env(safe-area-inset-bottom, 0px);
-    --safe-right: env(safe-area-inset-right, 0px);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -29,8 +28,6 @@
 html, body {
     height: 100%;
     overflow: hidden;
-    width: 100%;
-    position: fixed;
 }
 
 body {
@@ -41,7 +38,6 @@ body {
     background: var(--bg);
     -webkit-font-smoothing: antialiased;
     -webkit-tap-highlight-color: transparent;
-    padding-right: var(--safe-right);
 }
 
 /* ================= SCREEN: IDENTITY (create / restore) ================= */
@@ -187,35 +183,7 @@ button.small { padding: 8px 12px; font-size: 13px; }
     font-family: inherit;
 }
 .icon-btn:hover { color: var(--text); background: var(--border); }
-
-.logout-btn {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-size: 13px;
-    cursor: pointer;
-    padding: 8px 14px;
-    border-radius: 8px;
-    font-family: inherit;
-    white-space: nowrap;
-    transition: background 0.15s ease;
-}
-.logout-btn:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
 .back-btn { display: none; }
-.delete-btn {
-    margin-left: auto;
-    background: transparent;
-    border: none;
-    font-size: 20px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 6px 8px;
-    border-radius: 6px;
-    color: var(--muted);
-    transition: background 0.15s, color 0.15s;
-}
-.delete-btn:hover { color: #d33; background: var(--border); }
-.delete-btn:active { background: rgba(221,51,51,0.15); }
 
 .me {
     flex: 1;
@@ -396,35 +364,6 @@ button.small { padding: 8px 12px; font-size: 13px; }
     font-weight: 600;
     font-size: 15px;
     color: var(--text);
-    display: flex;
-    flex-direction: column;
-    line-height: 1.15;
-    min-width: 0;
-    overflow: hidden;
-}
-.chat-peer-name .peer-name-main {
-    font-weight: 600;
-    font-size: 15px;
-    color: var(--text);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.chat-peer-name .peer-name-sub {
-    font-weight: 400;
-    font-size: 11px;
-    color: var(--text-muted);
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-top: 2px;
-}
-
-.chat-peer {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
 }
 
 .chat-panel {
@@ -457,7 +396,7 @@ button.small { padding: 8px 12px; font-size: 13px; }
 }
 
 .bubble {
-    max-width: min(70%, 260px);
+    max-width: 75%;
     padding: 7px 11px 6px 11px;
     border-radius: 14px;
     word-wrap: break-word;
@@ -479,18 +418,6 @@ button.small { padding: 8px 12px; font-size: 13px; }
     color: var(--text);
     border-bottom-left-radius: 4px;
 }
-
-.bubble.bubble-system {
-    align-self: center;
-    background: rgba(240, 108, 108, 0.18);
-    color: var(--danger);
-    border: 1px solid rgba(240, 108, 108, 0.5);
-    border-radius: 10px;
-    max-width: min(85%, 320px);
-    text-align: center;
-    font-size: 13px;
-}
-.bubble.bubble-system .bubble-time { color: rgba(240, 108, 108, 0.7); }
 
 .error-msg {
     padding: 12px;

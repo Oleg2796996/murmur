@@ -2,6 +2,7 @@
 
 use crate::config::RelayConfig;
 use crate::pending::PendingStore;
+use crate::storage::MessageStore;
 use crate::subscriber::SubscriberHub;
 use futures::{SinkExt, StreamExt};
 use std::net::SocketAddr;
@@ -16,15 +17,17 @@ pub struct WsServer {
     cfg: RelayConfig,
     hub: SubscriberHub,
     pending: PendingStore,
+    store_db: MessageStore,
     pub conn_id: Arc<AtomicUsize>,
 }
 
 impl WsServer {
-    pub fn new(cfg: RelayConfig, hub: SubscriberHub, pending: PendingStore) -> Self {
+    pub fn new(cfg: RelayConfig, hub: SubscriberHub, pending: PendingStore, store_db: MessageStore) -> Self {
         Self {
             cfg,
             hub,
             pending,
+            store_db,
             conn_id: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -81,6 +84,13 @@ impl WsServer {
                                             continue;
                                         }
                                     };
+                                    // Register the alias in the message store.
+                                    let npub = parsed.get("npub").and_then(|v| v.as_str()).map(|s| s.to_string());
+                                    if let Some(ref n) = npub {
+                                        if let Err(e) = self.store_db.register_alias(&alias, n) {
+                                            warn!(err=%e, alias=%alias, "failed to register alias in store");
+                                        }
+                                    }
                                     let backlog = self.pending.read_all(&alias).map(|v| v.len()).unwrap_or(0);
                                     let rx = self.hub.subscribe_payload(&alias, &label, 16);
                                     rx_list.push((alias.clone(), rx));
@@ -180,7 +190,6 @@ async fn poll_receivers_payload(
 mod tests {
     use super::*;
     use crate::pending::PendingEntry;
-    use crate::push::PushPayload;
     use tokio_tungstenite::tungstenite::Message;
 
     #[tokio::test]
@@ -197,11 +206,12 @@ mod tests {
         };
         let hub = SubscriberHub::new();
         let pending = PendingStore::new(&dir).unwrap();
+        let store_db = MessageStore::new(&dir.join("db")).unwrap();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let s = WsServer::new(cfg, hub.clone(), pending.clone());
+        let s = WsServer::new(cfg, hub.clone(), pending.clone(), store_db);
         let conn_id_a = s.conn_id.clone();
         tokio::spawn(async move {
             loop {

@@ -113,7 +113,8 @@ pub fn accept_envelope(
     // 5. Persist to SQLite (idempotent via envelope_hash PK).
     if let Some(store) = store {
         let ts_ms = ts as i64;
-        let inserted = match store.upsert_envelope(&hash_hex, &parsed.sender_npub, &alias, &parsed.payload, &parsed.signature, ts_ms) {
+        let expires_at_ms = ts_ms + 86400; // 24 hours TTL
+        let inserted = match store.upsert_envelope(&hash_hex, &parsed.sender_npub, &alias, &parsed.payload, &parsed.signature, ts_ms, expires_at_ms) {
             Ok(v) => v,
             Err(e) => {
                 warn!(err=%e, "sqlite upsert failed");
@@ -135,6 +136,24 @@ pub fn accept_envelope(
     // 6. Broadcast to WS subscribers.
     let n = hub.broadcast(&entry);
     info!(alias=%alias, hash=%hash_hex, subs=n, "envelope accepted + fanout");
+
+    // Lesson #131: honest relay — после broadcast/envelope сокращаем TTL до 5 минут.
+    // Peer через WS уже получил. Cron снесёт через 5 мин. Если peer был
+    // offline — он зайдёт через /api/history в течение 5 мин (iPhone
+    // обычно просыпается раньше), в котором тоже пометим на удаление.
+    // 5 мин — компромисс между приватностью (cron не держит plaintext)
+    // и доставкой (peer успеет зайти).
+    if let Some(store) = store {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let short_ttl = now + 300; // 5 minutes
+
+        if let Err(e) = store.shorten_expires_at(&hash_hex, short_ttl) {
+            warn!(err=%e, "shorten_expires_at failed");
+        }
+    }
 
     // 7. Push delivery.
     if let Some(push) = push {

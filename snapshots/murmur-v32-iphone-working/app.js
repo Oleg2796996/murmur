@@ -49,6 +49,7 @@ const RELAY = "https://murmur.senswifi.ru";
 const LS_NPUB = "murmur.npub";
 const LS_KEY = "murmur.sk";
 const LS_NAME = "murmur.name";
+const LS_DISPLAY_NAME = "murmur.display_name";
 const LS_CONTACT_NAMES = "murmur.contact_names";
 const WS_URL = RELAY.replace("https://", "wss://").replace("http://", "ws://");
 const POLL_INTERVAL = 5000;
@@ -74,7 +75,6 @@ const newChatInput = $("new-chat-input");
 const btnNewChat = $("btn-new-chat");
 const btnSend = $("btn-send");
 const btnBack = $("btn-back");
-const btnDeleteChat = $("btn-delete-chat"); // Lesson #129
 
 let myNpub = null;
 let myAlias = "anon";
@@ -233,17 +233,6 @@ function loadContactNames() {
     catch (e) { return {}; }
 }
 
-function setContactName(peer, name) {
-    if (!peer || !name) return;
-    const map = loadContactNames();
-    const trimmed = name.trim().slice(0, 24);
-    if (!trimmed) return;
-    // Don't overwrite an existing manual name with a generic one.
-    if (map[peer] && map[peer] === trimmed) return;
-    map[peer] = trimmed;
-    localStorage.setItem(LS_CONTACT_NAMES, JSON.stringify(map));
-}
-
 function saveContactName(peer, name) {
     const map = loadContactNames();
     if (name) map[peer] = name;
@@ -275,6 +264,8 @@ async function _handleCreate() {
         localStorage.setItem(LS_NPUB, myNpub);
         localStorage.setItem(LS_KEY, signKeyHex);
         localStorage.setItem(LS_NAME, myAlias);
+        const name = ($("create-name")?.value || "").trim();
+        if (name) localStorage.setItem(LS_DISPLAY_NAME, name);
         enterMessenger();
     } catch (e) {
         console.error("[murmur] _handleCreate error:", e);
@@ -300,7 +291,10 @@ window._handleRestore = async function() {
         myAlias = res.data.npub;
         localStorage.setItem(LS_NPUB, myNpub);
         localStorage.setItem(LS_KEY, signKeyHex);
-        localStorage.setItem(LS_NAME, myAlias);
+        const rn = ($("restore-name")?.value || "").trim();
+        const name = rn || myAlias;
+        localStorage.setItem(LS_NAME, name);
+        if (rn) localStorage.setItem(LS_DISPLAY_NAME, rn);
         enterMessenger();
     } catch (e) { $("identity-error").textContent = "Error: " + e.message; }
 };
@@ -319,6 +313,8 @@ $("btn-restore")?.addEventListener("click", async () => {
         myAlias = localStorage.getItem(LS_NAME) || myNpub;
         localStorage.setItem(LS_NPUB, myNpub);
         localStorage.setItem(LS_KEY, signKeyHex);
+        const name = ($("restore-name")?.value || "").trim();
+        if (name) localStorage.setItem(LS_DISPLAY_NAME, name);
         enterMessenger();
     } catch (e) { $("identity-error").textContent = "Error: " + e.message; }
 });
@@ -362,8 +358,27 @@ function enterMessenger() {
             }
         });
     }
-    // First-time hint removed: имя назначается только через «Нажмите, чтобы задать имя»
-    // в заголовке чата. Никаких prompt() и LS_DISPLAY_NAME.
+    const nameInput = $("my-name");
+    if (nameInput) {
+        nameInput.value = localStorage.getItem(LS_DISPLAY_NAME) || "";
+        nameInput.addEventListener("change", () => {
+            const v = nameInput.value.trim().slice(0, 24);
+            if (v) localStorage.setItem(LS_DISPLAY_NAME, v);
+            else localStorage.removeItem(LS_DISPLAY_NAME);
+        });
+    }
+    // First-time hint: ask for a display name if missing.
+    if (!localStorage.getItem(LS_DISPLAY_NAME) && !localStorage.getItem("murmur.name_hinted")) {
+        localStorage.setItem("murmur.name_hinted", "1");
+        const v = prompt("Set your display name (visible to contacts):", "");
+        if (v !== null) {
+            const trimmed = v.trim().slice(0, 24);
+            if (trimmed) {
+                localStorage.setItem(LS_DISPLAY_NAME, trimmed);
+                if (nameInput) nameInput.value = trimmed;
+            }
+        }
+    }
     if (chatView) chatView.style.display = "none";
     if (chatView) chatView.hidden = true;
     if (noChat) noChat.style.display = "flex";
@@ -387,6 +402,7 @@ $("btn-logout")?.addEventListener("click", () => {
     if (ws) { ws.close(); ws = null; }
     contacts = {}; messages = {}; activePeer = null;
     oldestTsForPeer = {};
+    localStorage.removeItem(LS_DISPLAY_NAME);
     localStorage.removeItem("murmur.contact_names");
     messenger.classList.remove("active");
     messenger.hidden = true;
@@ -397,147 +413,6 @@ $("btn-logout")?.addEventListener("click", () => {
 });
 
 // ── Contacts ──
-//
-// Lesson #125: unreadCount хранится локально (localStorage).
-// Сервер — только address book (alias ↔ npub) и relay. Никакой
-// server-side логики для badge — это нам неподконтрольно через CF Tunnel.
-//
-// Lesson #126: нормализация npub в одном каноническом виде.
-// Отправитель иногда присылает peer с pipe-артефактом вроде
-// "npub1u|fm6w6k3...|jn|8468es5gr..." (видно в localStorage в одном
-// из контактов Олега). bech32 не должен содержать '|', значит это
-// legacy-мусор, и при bumpUnread/contacts мы должны использовать
-// чистый npub. Правило: если в peer есть '|' — берём самый длинный
-// кусок, начинающийся с "npub1" (или "nsec1"), иначе саму строку.
-function normalizePeer(peer) {
-    if (!peer) return peer;
-    if (peer.indexOf("|") < 0) return peer;
-    // Разбиваем по '|' и ищем кусок, начинающийся с npub1 / nsec1
-    const parts = peer.split("|");
-    let best = null;
-    for (const p of parts) {
-        if (p.startsWith("npub1") || p.startsWith("nsec1")) {
-            if (!best || p.length > best.length) best = p;
-        }
-    }
-    if (best) return best;
-    // Не нашли npub1/nsec1 — возвращаем как есть (для alias-имён).
-    return peer;
-}
-
-const LS_UNREAD = "murmur_unread_v1";
-// Lesson #127: при reload WS переотправляет «свежие» envelopes — они
-// могут быть уже прочитанными (мы открыли чат и сбросили unread), но
-// bumpUnread увеличивает обратно. Решение: хранить maxTs по каждому
-// peer'у (самый поздний уже показанный envelope). На reload любой
-// envelope с ts <= maxTs игнорируется для bumpUnread.
-const LS_MAXTS = "murmur_maxts_v1";
-// Lesson #129: chat delete — скрытие чата на клиенте. Peer орёт-в localStorage,
-// в sidebar не показывается. На сервере ничего не удаляется (TTL 24ч удалит само).
-const LS_HIDDEN_PEERS = "murmur_hidden_peers_v1";
-
-function loadUnreadMap() {
-    try {
-        const raw = localStorage.getItem(LS_UNREAD) || "{}";
-        const obj = JSON.parse(raw);
-        // Lesson #126 cleanup: удаляем записи с пустым/мусорным значением или
-        // с ключом, который после normalizePeer даёт другое имя.
-        const cleaned = {};
-        for (const [k, v] of Object.entries(obj)) {
-            if (!v || v <= 0) continue;
-            const nk = normalizePeer(k);
-            if (nk !== k) {
-                // Объединяем со старым значением, если оно уже есть.
-                cleaned[nk] = (cleaned[nk] || 0) + (v || 0);
-            } else {
-                cleaned[nk] = (cleaned[nk] || 0) + (v || 0);
-            }
-        }
-        if (Object.keys(cleaned).length !== Object.keys(obj).length) {
-            saveUnreadMap(cleaned);
-        }
-        return cleaned;
-    } catch { return {}; }
-}
-function saveUnreadMap(m) {
-    try { localStorage.setItem(LS_UNREAD, JSON.stringify(m)); } catch {}
-}
-function getUnread(peer) {
-    const m = loadUnreadMap();
-    return m[peer] || 0;
-}
-function setUnread(peer, n) {
-    const m = loadUnreadMap();
-    if (n <= 0) delete m[peer]; else m[peer] = n;
-    saveUnreadMap(m);
-}
-function bumpUnread(peer) {
-    peer = normalizePeer(peer);
-    const m = loadUnreadMap();
-    m[peer] = (m[peer] || 0) + 1;
-    saveUnreadMap(m);
-}
-function clearUnread(peer) {
-    peer = normalizePeer(peer);
-    setUnread(peer, 0);
-}
-
-function loadMaxTsMap() {
-    try { return JSON.parse(localStorage.getItem(LS_MAXTS) || "{}"); } catch { return {}; }
-}
-function saveMaxTsMap(m) {
-    try { localStorage.setItem(LS_MAXTS, JSON.stringify(m)); } catch {}
-}
-function getMaxTs(peer) {
-    peer = normalizePeer(peer);
-    const m = loadMaxTsMap();
-    return m[peer] || 0;
-}
-function updateMaxTs(peer, ts) {
-    peer = normalizePeer(peer);
-    if (!ts) return;
-    const m = loadMaxTsMap();
-    if (ts > (m[peer] || 0)) {
-        m[peer] = ts;
-        saveMaxTsMap(m);
-    }
-}
-
-// Lesson #129: hidden peer management.
-// Массив в localStorage — потому что Set не сериализуется JSON'ом.
-function loadHiddenPeers() {
-    try {
-        const raw = localStorage.getItem(LS_HIDDEN_PEERS) || "[]";
-        const arr = JSON.parse(raw);
-        if (!Array.isArray(arr)) return [];
-        return arr.map(normalizePeer).filter(Boolean);
-    } catch { return []; }
-}
-function saveHiddenPeers(arr) {
-    try { localStorage.setItem(LS_HIDDEN_PEERS, JSON.stringify(arr)); } catch {}
-}
-function isHiddenPeer(peer) {
-    peer = normalizePeer(peer);
-    if (!peer) return false;
-    return loadHiddenPeers().includes(peer);
-}
-function hidePeer(peer) {
-    peer = normalizePeer(peer);
-    if (!peer) return;
-    const arr = loadHiddenPeers();
-    if (!arr.includes(peer)) {
-        arr.push(peer);
-        saveHiddenPeers(arr);
-    }
-    clearUnread(peer);
-}
-function unhidePeer(peer) {
-    peer = normalizePeer(peer);
-    if (!peer) return;
-    const arr = loadHiddenPeers().filter(p => p !== peer);
-    saveHiddenPeers(arr);
-}
-
 async function loadContacts() {
     if (!myNpub) return;
     try {
@@ -545,23 +420,20 @@ async function loadContacts() {
         if (!r.ok) return;
         const j = await r.json();
         if (j.contacts) {
-            const unreadMap = loadUnreadMap();
             for (const c of j.contacts) {
-                const key = normalizePeer(c.peer);
+                const key = c.peer;
                 if (!contacts[key]) {
-                    // Новый контакт — восстанавливаем unread из localStorage.
                     contacts[key] = {
                         peer: c.peer,
                         lastMessagePreview: c.last_message_preview || "",
                         lastTs: c.last_ts || 0,
-                        unreadCount: unreadMap[key] || 0,
+                        unreadCount: c.unread_count || 0,
                     };
                 } else {
                     if (c.last_ts > contacts[key].lastTs) {
                         contacts[key].lastMessagePreview = c.last_message_preview || "";
                         contacts[key].lastTs = c.last_ts;
                     }
-                    // Не перезаписываем локальный unread с сервера — мы их считаем сами.
                 }
             }
             renderChatList();
@@ -575,8 +447,6 @@ function renderChatList() {
     const nameMap = loadContactNames();
     const sorted = Object.values(contacts)
         .filter(c => {
-            // Lesson #129: hidden peers не отображаются в sidebar.
-            if (isHiddenPeer(c.peer)) return false;
             if (!filter) return true;
             const display = (nameMap[c.peer] || "").toLowerCase();
             return c.peer.toLowerCase().includes(filter) || display.includes(filter);
@@ -631,7 +501,6 @@ function renderChatList() {
 
 // ── Open Chat ──
 function openChat(peer) {
-    peer = normalizePeer(peer);
     activePeer = peer;
     const m = document.querySelector(".messenger");
     if (m) m.classList.add("chat-open");
@@ -640,10 +509,6 @@ function openChat(peer) {
         el.classList.toggle("active", peerEl && peerEl.textContent === truncateNpub(peer));
     });
     if (contacts[peer]) contacts[peer].unreadCount = 0;
-    clearUnread(peer);
-    // Lesson #129: показываем кнопку «удалить чат».
-    if (btnDeleteChat) btnDeleteChat.hidden = false;
-    renderChatList();  // обновить бейдж в списке чатов
     chatView.style.display = "flex";
     chatView.hidden = false;
     noChat.style.display = "none";
@@ -652,13 +517,7 @@ function openChat(peer) {
     inputArea.classList.add("visible");
     const nameMap = loadContactNames();
     const savedName = nameMap[peer];
-    if (savedName) {
-        chatPeerName.innerHTML =
-            "<span class='peer-name-main'>" + escapeHtml(savedName) + "</span>" +
-            "<span class='peer-name-sub'>" + truncateNpub(peer) + "</span>";
-    } else {
-        chatPeerName.innerHTML = "<span class='peer-name-main'>" + truncateNpub(peer) + "</span>";
-    }
+    chatPeerName.innerHTML = (savedName ? escapeHtml(savedName) + "<span class='peer-name-sub'>" + truncateNpub(peer) + "</span>" : truncateNpub(peer));
     chatPeerName.title = peer + "\nНажмите, чтобы задать имя";
     chatPeerName.onclick = () => {
         const current = loadContactNames()[peer] || "";
@@ -673,11 +532,8 @@ function openChat(peer) {
     // `!messages[peer]` check missed the case where an empty `[]` had been
     // created by an earlier incoming-message handler.
     messages[peer] = [];
-    // Локальный badge: сбрасываем счётчик сразу и подтягиваем историю.
-    clearUnread(peer);
     loadHistory(peer).then(() => {
         if (contacts[peer]) contacts[peer].unreadCount = 0;
-        renderChatList();
         renderMessages();
         scrollToBottom();
     }).catch((e) => {
@@ -721,17 +577,13 @@ async function loadHistory(peer, beforeTs) {
         loadingEl.remove();
         if (j.messages && j.messages.length > 0) {
             if (!messages[peer]) messages[peer] = [];
-            // Lesson #128: дедуп по envelope_hash (если есть) или по ts.
-            const existingSigSet = new Set(messages[peer].map(m => m._sig).filter(Boolean));
-            const existingHashSet = new Set(messages[peer].map(m => m._hash).filter(Boolean));
+            const existingSet = new Set(messages[peer].map(m => m._sig));
             const newMsgs = [];
             for (const m of j.messages) {
                 const fromNpub = m.from_npub || m.from;
                 const toField = m.to || m.to_alias || "";
                 const sigKey = (fromNpub + m.ts);
-                const hash = m.envelope_hash || m.envelope_hash_hex || null;
-                if (hash && existingHashSet.has(hash)) continue;
-                if (!hash && existingSigSet.has(sigKey)) continue;
+                if (existingSet.has(sigKey)) continue;
                 const { text: bodyText, isBinary } = extractMessageText(m);
                 const fromName = m.from_name || (m.envelope && m.envelope.from_name);
                 if (fromNpub && fromName && fromNpub !== myNpub) {
@@ -740,13 +592,12 @@ async function loadHistory(peer, beforeTs) {
                 const msg = {
                     from: fromNpub, to: toField, body: bodyText, ts: m.ts,
                     direction: m.direction || (fromNpub === myNpub ? "out" : "in"),
-                    sig: m.sig || "", _sig: sigKey, _hash: hash,
+                    sig: m.sig || "", _sig: sigKey,
                     isBinary: isBinary,
                     status: m.direction === "out" ? "sent" : null,
                 };
                 newMsgs.push(msg);
-                if (hash) existingHashSet.add(hash);
-                existingSigSet.add(sigKey);
+                existingSet.add(sigKey);
             }
             if (newMsgs.length > 0) messages[peer] = newMsgs.concat(messages[peer]);
             if (j.next_before_ts) oldestTsForPeer[peer] = j.next_before_ts;
@@ -774,18 +625,10 @@ function renderMessages() {
         }
         const div = document.createElement("div");
         const isOut = m.direction === "out";
-        const isSystem = m.direction === "system";
-        if (isSystem) {
-            div.className = "bubble bubble-system";
-        } else {
-            div.className = "bubble " + m.direction;
-        }
+        div.className = "bubble " + m.direction;
         let statusGlyph = "";
         if (isOut) {
             statusGlyph = m.status === "delivered" ? "✓✓" : (m.status === "sent" ? "✓" : "");
-        }
-        if (isSystem) {
-            statusGlyph = "⏳";
         }
         const { text: bodyText, isBinary } = extractBodyText(m.body);
         let bodyHtml;
@@ -843,8 +686,8 @@ async function sendMessage() {
         body_base64: bytesToBase64(new TextEncoder().encode(text)),
         ts: Math.floor(Date.now() / 1000),
     };
-    const myName = (localStorage.getItem(LS_NAME) || "").trim();
-    if (myName && myName !== myNpub) msg.from_name = myName;
+    const myName = (localStorage.getItem(LS_DISPLAY_NAME) || "").trim();
+    if (myName) msg.from_name = myName;
     const mod = await loadWasmModule();
     const sig = mod.sign_message(text);
     if (!sig.ok) { btnSend.disabled = false; console.error("sign error:", sig.error); return; }
@@ -855,7 +698,7 @@ async function sendMessage() {
     const renderedMsg = {
         from: myNpub, to: activePeer, body: text, ts: msg.ts,
         direction: "out", sig: sig.data, _sig: myNpub + msg.ts,
-        status: "sent", isBinary: false, _hash: null,
+        status: "sent", isBinary: false,
     };
     messages[activePeer].push(renderedMsg);
     renderMessages();
@@ -869,16 +712,8 @@ async function sendMessage() {
         });
         if (r.ok) {
             btnSend.disabled = false;
-            // Lesson #128: сохраняем envelope_hash из ответа для надёжного дедупа
-            // (сервер может переписать ts, тогда дедуп по myNpub+ts сломается).
-            try {
-                const respJson = await r.json();
-                if (respJson && respJson.hash) {
-                    renderedMsg._hash = respJson.hash;
-                }
-            } catch (e) { /* /envelope может не вернуть JSON — fallback на ts */ }
             const last = messages[activePeer][messages[activePeer].length - 1];
-            if (last && last._sig === renderedMsg._sig) last.status = "delivered";
+            if (last) last.status = "delivered";
             renderMessages();
             if (contacts[activePeer]) {
                 contacts[activePeer].lastMessagePreview = text.slice(0, 80);
@@ -953,33 +788,9 @@ btnBack?.addEventListener("click", () => {
     chatView.style.display = "none";
     chatView.hidden = true;
     noChat.style.display = "flex";
-    if (btnDeleteChat) btnDeleteChat.hidden = true; // Lesson #129
     noChat.hidden = false;
     inputArea.classList.remove("visible");
     inputArea.hidden = true;
-});
-
-// Lesson #129: «удалить чат» — срываем chat из sidebar, чистим badge,
-// очищаем память. На сервере ничего не трогаем (TTL 24ч).
-btnDeleteChat?.addEventListener("click", () => {
-    if (!activePeer) return;
-    const peer = normalizePeer(activePeer);
-    const nameMap = JSON.parse(localStorage.getItem(LS_CONTACT_NAMES) || "{}");
-    const displayName = nameMap[peer] || truncateNpub(peer);
-    const ok = confirm(
-        "Удалить чат с «" + displayName + "»?\n\n" +
-        "Чат исчезнет из списка. История хранится только в памяти этого " +
-        "приложения; после удаления сервер не сможет её восстановить.\n\n" +
-        "Если «" + displayName + "» пришлёт новое сообщение — чат " +
-        "вернётся в список автоматически."
-    );
-    if (!ok) return;
-    hidePeer(peer);
-    if (messages[peer]) delete messages[peer];
-    const conn = ws; // ничего не делаем, просто оставим коммент
-    renderChatList();
-    // Выходим в sidebar
-    if (typeof btnBack !== "undefined" && btnBack) btnBack.click();
 });
 
 chatSearch?.addEventListener("input", () => renderChatList());
@@ -1041,27 +852,17 @@ function handleIncomingEnvelope(env) {
     const toField = env.to || "";
     if (fromNpub !== myNpub && toField !== myNpub) return;
 
-    const peer = normalizePeer(fromNpub === myNpub ? toField : fromNpub);
+    const peer = fromNpub === myNpub ? toField : fromNpub;
     if (!messages[peer]) messages[peer] = [];
 
     // Use canonical fromNpub+ts as dedup key (sig is too long and would never
     // match the optimistic message key).
     const sigKey = fromNpub + env.ts;
-    // Lesson #128: более надёжный дедуп — по envelope_hash, если WS push его
-    // прислал. Сервер может перезаписать ts, тогда дедуп по ts ломается.
-    const hash = env.envelope_hash_hex || (env.envelope && env.envelope.envelope_hash_hex) || null;
-    let exists = false;
-    if (hash) {
-        exists = messages[peer].some(m => m._hash === hash);
-    } else {
-        exists = messages[peer].some(m => m._sig === sigKey);
-    }
+    const exists = messages[peer].some(m => m._sig === sigKey);
     if (exists) {
         // Already in memory (likely the optimistic copy). Update its status if it
         // was the locally-sent copy.
-        const idx = hash
-            ? messages[peer].findIndex(m => m._hash === hash)
-            : messages[peer].findIndex(m => m._sig === sigKey);
+        const idx = messages[peer].findIndex(m => m._sig === sigKey);
         if (idx !== -1 && messages[peer][idx].status === "sent" && messages[peer][idx].direction === "out") {
             messages[peer][idx].status = "delivered";
             if (activePeer === peer) renderMessages();
@@ -1080,7 +881,7 @@ function handleIncomingEnvelope(env) {
     const msg = {
         from: fromNpub, to: toField, body: bodyText, ts: env.ts,
         direction: "in",
-        sig: env.sig || "", _sig: sigKey, _hash: hash,
+        sig: env.sig || "", _sig: sigKey,
         isBinary: isBinary, status: null,
     };
     messages[peer].push(msg);
@@ -1090,21 +891,9 @@ function handleIncomingEnvelope(env) {
     }
     contacts[peer].lastMessagePreview = bodyText.slice(0, 80);
     contacts[peer].lastTs = env.ts;
-    // Lesson #127: при reload WS присылает старые envelopes. Если ts <= maxTs,
-    // сообщение уже было показано/прочитано — не bumpUnread.
-    // Lesson #131 + #132.1: при ЛЮБОМ входящем envelope (в т.ч. self-sender
-    // с другого устройства) — снимаем скрытие. Без этого чат навсегда
-    // останется скрытым, если юзер использует один ключ на нескольких
-    // устройствах и удалит чат.
-    if (isHiddenPeer(peer)) {
-        unhidePeer(peer);
+    if (activePeer !== peer) {
+        contacts[peer].unreadCount = (contacts[peer].unreadCount || 0) + 1;
     }
-    const prevMax = getMaxTs(peer);
-    if (activePeer !== peer && env.ts > prevMax) {
-        bumpUnread(peer);
-        contacts[peer].unreadCount = getUnread(peer);
-    }
-    updateMaxTs(peer, env.ts);
 
     renderChatList();
     if (activePeer === peer) {
@@ -1129,14 +918,6 @@ async function pollInbox() {
         for (const k of Object.keys(messages || {})) peers.add(k);
         for (const k of Object.keys(contacts || {})) peers.add(k);
         peers.delete(myNpub);
-        // Lesson #132: также опрашиваем hidden peer'ов — иначе после
-        // Lesson #129 (delete chat) связь с ними теряется полностью,
-        // даже если peer прислал сообщение в первые 5 мин TTL.
-        // Без этого fix'а: iPhone удалил чат → polling ничего не знает
-        // про этого peer'а (его нет в /api/contacts, в messages нет,
-        // а contacts хранит, но pollInbox его подхватывает — ОК если
-        // первый контакт не был удалён, баг если contacts пуст).
-        for (const k of loadHiddenPeers()) peers.add(k);
         if (peers.size === 0) return;
 
         // Step 2: for each peer, fetch full history.
@@ -1159,69 +940,17 @@ async function pollHistoryForPeer(peer) {
         for (const msg of msgs) {
             const fromNpub = msg.from_npub || msg.from;
             const toField = msg.to || msg.to_alias || "";
-            // Lesson #128: дедуп по envelope_hash если есть, иначе по ts.
-            const hash = msg.envelope_hash || msg.envelope_hash_hex || null;
-            let exists = false;
-            if (hash) {
-                exists = messages[peer].some(m => m._hash === hash);
-            } else {
-                const sigKey = fromNpub + msg.ts;
-                exists = messages[peer].some(m => m._sig === sigKey);
-            }
+            // Canonical dedup key: fromNpub+ts (matches optimistic and WS paths).
+            const sigKey = fromNpub + msg.ts;
+            const exists = messages[peer].some(m => m._sig === sigKey);
             if (exists) continue;
-
-            // Парсим body как JSON, чтобы обнаружить _kind.
-            let parsedBody = null;
-            try {
-                if (typeof msg.body === "string") {
-                    if (msg.body.startsWith("{") || msg.body.startsWith("[")) {
-                        parsedBody = JSON.parse(msg.body);
-                    }
-                }
-                if (typeof msg.body_base64 === "string" && msg.body_base64.length > 0) {
-                    const inner = decodeBody(msg.body_base64);
-                    if (inner && inner.text && (inner.text.startsWith("{") || inner.text.startsWith("["))) {
-                        parsedBody = JSON.parse(inner.text);
-                    }
-                }
-            } catch (_e) { parsedBody = null; }
-
-            // Системное «undelivered» — отдаём отправителю, не считаем incoming,
-            // рендерим особым bubble.
-            if (parsedBody && parsedBody._kind === "undelivered") {
-                messages[peer].push({
-                    _sig: sigKey,
-                    _hash: hash,
-                    ts: msg.ts,
-                    from: fromNpub,
-                    to: toField,
-                    body: parsedBody.message || "Адресат не получил сообщение.",
-                    direction: "system",
-                    isUndelivered: true,
-                    originalHash: parsedBody.original_envelope_hash || "",
-                    originalRecipient: parsedBody.original_recipient || "",
-                    sig: "",
-                });
-                if (!contacts[peer]) contacts[peer] = { peer: peer, lastMessagePreview: "Не доставлено", lastTs: msg.ts, unreadCount: 0 };
-                contacts[peer].lastMessagePreview = "Не доставлено";
-                contacts[peer].lastTs = msg.ts;
-                // Lesson #131: undelivered — тоже событие, чат восстанавливаем.
-                if (isHiddenPeer(peer)) unhidePeer(peer);
-                if (activePeer !== peer && msg.ts > getMaxTs(peer)) {
-                    bumpUnread(peer);
-                    contacts[peer].unreadCount = getUnread(peer);
-                }
-                updateMaxTs(peer, msg.ts);
-                added = true;
-                continue;
-            }
 
             const { text: bodyText, isBinary } = extractMessageText(msg);
 
             const envelope = {
                 from: fromNpub, to: toField, body: bodyText, ts: msg.ts,
                 direction: fromNpub === myNpub ? "out" : "in",
-                sig: msg.sig || "", _sig: sigKey, _hash: hash,
+                sig: msg.sig || "", _sig: sigKey,
                 isBinary: isBinary,
                 status: fromNpub === myNpub ? "sent" : null,
             };
@@ -1239,18 +968,9 @@ async function pollHistoryForPeer(peer) {
             }
             contacts[peer].lastMessagePreview = bodyText.slice(0, 80);
             contacts[peer].lastTs = msg.ts;
-            // Lesson #131 + #132.1: при ЛЮБОМ новом сообщении для этого
-            // peer (входящем ИЛИ self-sender с другого устройства)
-            // проверяем hidden и снимаем скрытие. Без этого fix'а:
-            // если Олег использует один ключ на MacBook и iPhone,
-            // self-сообщение (from=myNpub) не снимает isHiddenPeer,
-            // и удалённый чат навсегда остаётся скрытым.
-            if (isHiddenPeer(peer)) unhidePeer(peer);
-            if (isIncoming && activePeer !== peer && msg.ts > getMaxTs(peer)) {
-                bumpUnread(peer);
-                contacts[peer].unreadCount = getUnread(peer);
+            if (activePeer !== peer) {
+                contacts[peer].unreadCount = (contacts[peer].unreadCount || 0) + 1;
             }
-            updateMaxTs(peer, msg.ts);
         }
         if (added) {
             renderChatList();

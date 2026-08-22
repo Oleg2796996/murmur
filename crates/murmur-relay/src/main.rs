@@ -1,10 +1,11 @@
 //! `murmur-relay` — WebSocket + iroh-direct relay daemon.
 
 use clap::Parser;
-use murmur_relay::{iroh_server, push, PushServer, PendingStore, RelayConfig, SubscriberHub, WsServer};
+use murmur_relay::{iroh_server, push, PushServer, PendingStore, RelayConfig, SubscriberHub, WsServer, MessageStore};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::info;
+use std::time::Duration;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -28,6 +29,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     std::fs::create_dir_all(&cfg.home_dir)?;
     let pending = PendingStore::new(&cfg.home_dir)?;
+    let db_path = cfg.home_dir.join("messages.db");
+    let store_db = MessageStore::new(&db_path)
+        .map_err(|e| anyhow::anyhow!("failed to init message store: {}", e))?;
     let hub = SubscriberHub::new();
 
     // VAPID keys + push server (HTTP for push subscriptions + delivery).
@@ -59,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Spawn iroh-direct listener
-    let (node_id, direct_addr) = iroh_server::spawn(pending.clone(), hub.clone(), push_server.clone()).await?;
+    let (node_id, direct_addr) = iroh_server::spawn(pending.clone(), hub.clone(), push_server.clone(), store_db.clone()).await?;
     let share_link = murmur_transport::iroh_transport::build_share_string(&node_id, direct_addr);
     println!("iroh listening on {}", direct_addr);
     println!("iroh share-link: {}", share_link);
@@ -71,6 +75,85 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         loop {
             t.tick().await;
             info!(subscribers = hub_for_log.count(), "hub stats");
+        }
+    });
+
+    // TTL cleanup: каждые 5 минут удалять просроченные envelope'ы
+    // (TTL 24 часа), при удалении отправлять отправителю «undelivered» нотификацию.
+    let store_for_ttl = store_db.clone();
+    let pending_for_ttl = pending.clone();
+    let hub_for_ttl = hub.clone();
+    tokio::spawn(async move {
+        let mut t = tokio::time::interval(Duration::from_secs(300));
+        t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            t.tick().await;
+            match store_for_ttl.list_expired_envelopes() {
+                Ok(expired) if !expired.is_empty() => {
+                    info!(count = expired.len(), "TTL cleanup: processing expired envelopes");
+                    for e in &expired {
+                        // Получатель так и не зашел в сеть за 24h.
+                        // Отправляем уведомление обратно отправителю.
+                        // Сначала находим алиас отправителя по его npub.
+                        let sender_alias = match store_for_ttl.aliases_for_npub(&e.from_npub) {
+                            Ok(mut aliases) if !aliases.is_empty() => aliases.remove(0),
+                            _ => {
+                                warn!(envelope_hash=%e.envelope_hash, from=%e.from_npub, "no alias for sender, skipping notification");
+                                // Все равно удаляем
+                                let _ = store_for_ttl.delete_envelope_by_hash(&e.envelope_hash);
+                                continue;
+                            }
+                        };
+                        // Создаём системный envelope «undelivered» в сторону отправителя.
+                        match store_for_ttl.create_undelivered_notification(
+                            e,
+                            "system:relay",          // отправитель уведомления — relay
+                            &sender_alias,
+                        ) {
+                            Ok(true) => {
+                                info!(
+                                    envelope_hash = %e.envelope_hash,
+                                    recipient = %sender_alias,
+                                    "undelivered notification created"
+                                );
+                            }
+                            Ok(false) => {
+                                // дубль (на случай повторного запуска крона)
+                            }
+                            Err(err) => {
+                                warn!(err=%err, "failed to create undelivered notification");
+                            }
+                        }
+                        // Удаляем просроченный envelope.
+                        if let Err(err) = store_for_ttl.delete_envelope_by_hash(&e.envelope_hash) {
+                            warn!(err=%err, "failed to delete expired envelope");
+                        }
+                        // Тоже удалить из pending-лога (если там было)
+                        if let Ok(entries) = pending_for_ttl.read_all(&e.to_alias) {
+                            // (не фильтруем — просто оставляем файл как есть; cleanup по retention не в этом PR)
+                            let _ = entries;
+                        }
+                        // Broadcast в WS для получателя, если онлайн (вдруг вернулся).
+                        let fake_entry = murmur_relay::pending::PendingEntry {
+                            to_alias: sender_alias.clone(),
+                            from_npub: "system:relay".into(),
+                            ts: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0),
+                            envelope_bytes: vec![],
+                            envelope_hash_hex: e.envelope_hash.clone(),
+                        };
+                        let _ = hub_for_ttl.broadcast(&fake_entry);
+                    }
+                }
+                Ok(_) => {
+                    // ничего не просрочило
+                }
+                Err(err) => {
+                    warn!(err=%err, "TTL cleanup: list_expired_envelopes failed");
+                }
+            }
         }
     });
 
@@ -92,7 +175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Spawn WS server (this runs forever)
-    let ws_server = WsServer::new(cfg.clone(), hub.clone(), pending.clone());
+    let ws_server = WsServer::new(cfg.clone(), hub.clone(), pending.clone(), store_db.clone());
     ws_server.serve().await?;
     Ok(())
 }

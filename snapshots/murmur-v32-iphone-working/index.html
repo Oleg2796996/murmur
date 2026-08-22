@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#17212b">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -30,6 +30,7 @@
 
             <div class="identity-section">
                 <h2>Новый аккаунт</h2>
+                <input id="create-name" type="text" placeholder="имя (напр. ozerov)" maxlength="32" autocomplete="off">
                 <button id="btn-create" class="primary">Создать</button>
             </div>
 
@@ -38,6 +39,7 @@
             <div class="identity-section">
                 <h2>Восстановить</h2>
                 <input id="restore-hex" type="text" placeholder="secret key (hex, 64 символа)" autocomplete="off" spellcheck="false">
+                <input id="restore-name" type="text" placeholder="новое имя (необязательно)" maxlength="32" autocomplete="off">
                 <button id="btn-restore" class="secondary">Восстановить</button>
             </div>
         </div>
@@ -48,8 +50,9 @@
         <!-- SIDEBAR: chat list -->
         <aside id="sidebar" class="sidebar">
             <header class="sidebar-header">
-                <button id="btn-logout" class="logout-btn" title="Выйти">Выйти</button>
+                <button id="btn-logout" class="icon-btn" title="Выйти">�</button>
                 <div class="me">
+                    <div class="me-name" id="my-name">…</div>
                     <div class="me-npub">
                         <code id="my-npub" title="клик — копировать полный npub">…</code>
                         <button id="btn-copy-npub" class="copy-btn" title="копировать npub">copy</button>
@@ -87,7 +90,6 @@
                 <div class="chat-peer">
                     <div class="chat-peer-name" id="chat-peer-name">Выберите чат</div>
                 </div>
-                <button id="btn-delete-chat" class="icon-btn delete-btn" title="Удалить чат" aria-label="удалить чат" hidden>🗑</button>
             </header>
 
             <section id="chat-panel" class="chat-panel">
