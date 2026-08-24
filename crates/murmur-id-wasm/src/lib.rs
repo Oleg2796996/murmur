@@ -11,12 +11,11 @@
 //!
 //! Outputs `pkg/murmur_id_wasm.js` + `pkg/murmur_id_wasm_bg.wasm`.
 
-use rand_core::OsRng;
 use serde::Serialize;
 use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
 
-use murmur_id::{Identity, IdentityPublic};
+use murmur_id::{Identity, IdentityPublic, SealedEnvelope};
 
 /// JS-friendly result envelope, mirrors `murmur_mobile_lib::CmdResult<T>`.
 #[derive(Debug, Serialize)]
@@ -35,11 +34,35 @@ impl<T: Serialize> JsCmdResult<T> {
     }
 }
 
-/// Convert a `JsCmdResult<T>` into a `JsValue` (plain JS object).
+/// Convert a `JsCmdResult<T>` into a `JsValue` (raw string via linear memory).
+/// We return a plain string (which wasm-bindgen marshals via the i32+length
+/// path, NOT via externref) so the result works on browsers / runtimes where
+/// the externref shim is broken (notably some iOS Safari builds). The JS
+/// side does `JSON.parse(raw)`.
 fn to_js<T: Serialize>(r: &JsCmdResult<T>) -> JsValue {
-    serde_wasm_bindgen::to_value(r).unwrap_or_else(|e| {
-        JsValue::from_str(&format!("serialization error: {e}"))
-    })
+    #[derive(Serialize)]
+    struct Out<'a, T: Serialize> {
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data: Option<&'a T>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<&'a String>,
+    }
+    let out = Out { ok: r.ok, data: r.data.as_ref(), error: r.error.as_ref() };
+    let s = serde_json::to_string(&out)
+        .unwrap_or_else(|e| format!("{{\"ok\":false,\"error\":\"serialize: {e}\"}}"));
+    // Allocate the string on the WASM linear heap and return an i32
+    // pointer + length instead of using the externref path. The JS glue
+    // produced by wasm-bindgen for String params uses i32 (pointer to
+    // utf-8 bytes), which is universally supported.
+    let bytes = s.into_bytes();
+    let len = bytes.len() as u32;
+    let ptr = bytes.as_ptr() as u32;
+    std::mem::forget(bytes);
+    let arr = js_sys::Array::new_with_length(2);
+    arr.set(0, JsValue::from_f64(ptr as f64));
+    arr.set(1, JsValue::from_f64(len as f64));
+    arr.into()
 }
 
 /// Bundle of public-key material returned by `identity_new()`.
@@ -152,6 +175,28 @@ pub fn sign_message(msg: String) -> JsValue {
     to_js(&JsCmdResult::ok(hex_lower(&sig)))
 }
 
+/// Sign a canonical envelope payload the way the relay's `Envelope::verify`
+/// expects: SHA3-256(domain || npub_len || npub || payload_len || payload)
+/// then ed25519 over that digest. PWA passes the JSON bytes it actually sent
+/// (e.g. the `from|to|ts|ct` string), relay re-derives the same digest and
+/// verifies — so the server can never tamper with `ct` without breaking the
+/// signature.
+#[wasm_bindgen]
+pub fn sign_envelope(sender_npub: String, payload: Vec<u8>) -> JsValue {
+    let seed_opt = PRIVATE_KEY_BYTES.with(|cell| cell.borrow().clone());
+    let seed = match seed_opt {
+        Some(s) => s,
+        None => return to_js(&JsCmdResult::<String>::err("no identity — call identity_new() first")),
+    };
+    let id = match Identity::from_bytes(&seed) {
+        Ok(i) => i,
+        Err(e) => return to_js(&JsCmdResult::<String>::err(format!("from_bytes: {e}"))),
+    };
+    let input = murmur_transport::signature_input(&sender_npub, &payload);
+    let sig = id.sign(&input);
+    to_js(&JsCmdResult::ok(hex_lower(&sig)))
+}
+
 /// Resolve an npub to its 64-byte public-key bundle (signing + agreement),
 /// hex-encoded. Useful for the JS side to display fingerprints.
 #[wasm_bindgen]
@@ -176,6 +221,177 @@ pub fn npub_to_pubkey_hex(npub: String) -> JsValue {
 #[wasm_bindgen]
 pub fn clear_identity() {
     PRIVATE_KEY_BYTES.with(|cell| *cell.borrow_mut() = None);
+}
+
+// ============================================================================
+// ECIES bindings (Олег 2026-08-24 11:00 MSK, E2E шифрование)
+// ============================================================================
+//
+// JS-интерфейс:
+//   encrypt_for_recipient(recipientNpub: string, plaintextBase64: string)
+//     -> JsCmdResult<String>  // base64 sealed envelope (32+12+ct)
+//
+//   decrypt_envelope(sealedBase64: string)
+//     -> JsCmdResult<String>  // base64 plaintext
+//
+// Plaintext может быть любым байтами (text, JSON, бинарь файла). Вход/выход — base64,
+// потому что WASM<->JS граница лучше всего работает с ASCII-friendly форматами.
+//
+// Поток вызова:
+//   let pt = JSON.stringify({body: "...", attachments: [...]})
+//   let ptB64 = btoa(pt)
+//   let sealed = encrypt_for_recipient(recipientNpub, ptB64)
+//   // sealed.base64 шифрован — relay его не прочитает
+//   sendToRelay(sealed.data)
+//
+
+/// ECIES-encrypt arbitrary bytes (base64 in/out) for a recipient identified by their npub.
+///
+/// Returns a base64-encoded `SealedEnvelope`:
+///
+///   [ephemeral_pubkey: 32 bytes][nonce: 12 bytes][ciphertext + 16-byte GCM tag]
+///
+/// Plaintext is opaque to the relay. Use for text bodies, JSON envelopes, file
+/// blobs — up to ~50 MB on modern browsers before JS-side memory pressure.
+#[wasm_bindgen]
+pub fn encrypt_for_recipient(recipient_npub: String, plaintext_b64: String) -> JsValue {
+    // 1. Get our identity from in-memory slot
+    let seed_opt = PRIVATE_KEY_BYTES.with(|cell| cell.borrow().clone());
+    let seed = match seed_opt {
+        Some(s) => s,
+        None => return to_js(&JsCmdResult::<String>::err("no identity — call identity_new() first")),
+    };
+    let me = match Identity::from_bytes(&seed) {
+        Ok(i) => i,
+        Err(e) => return to_js(&JsCmdResult::<String>::err(format!("from_bytes: {e}"))),
+    };
+
+    // 2. Parse recipient npub
+    let recipient = match IdentityPublic::from_npub(&recipient_npub) {
+        Ok(p) => p,
+        Err(e) => return to_js(&JsCmdResult::<String>::err(format!("recipient npub: {e}"))),
+    };
+
+    // 3. Decode plaintext base64
+    let plaintext = match base64_decode(&plaintext_b64) {
+        Ok(v) => v,
+        Err(e) => return to_js(&JsCmdResult::<String>::err(format!("plaintext base64: {e}"))),
+    };
+
+    // 4. ECIES encrypt
+    let sealed = match me.ecies_encrypt(&mut rand_core::OsRng, &recipient, &plaintext) {
+        Ok(s) => s,
+        Err(e) => return to_js(&JsCmdResult::<String>::err(format!("ecies_encrypt: {e}"))),
+    };
+
+    // 5. Serialize sealed envelope and base64-encode for JS
+    let bytes = sealed.to_bytes();
+    let out_b64 = base64_encode(&bytes);
+    to_js(&JsCmdResult::ok(out_b64))
+}
+
+/// ECIES-decrypt a sealed envelope (base64) produced by `encrypt_for_recipient`.
+///
+/// Returns the original plaintext as base64. The sender is anonymous in ECIES
+/// (only ephemeral pubkey is known); sender authentication must come from the
+/// outer envelope's ed25519 signature, not from ECIES.
+#[wasm_bindgen]
+pub fn decrypt_envelope(sealed_b64: String) -> JsValue {
+    let seed_opt = PRIVATE_KEY_BYTES.with(|cell| cell.borrow().clone());
+    let seed = match seed_opt {
+        Some(s) => s,
+        None => return to_js(&JsCmdResult::<String>::err("no identity — call identity_new() first")),
+    };
+    let me = match Identity::from_bytes(&seed) {
+        Ok(i) => i,
+        Err(e) => return to_js(&JsCmdResult::<String>::err(format!("from_bytes: {e}"))),
+    };
+
+    let sealed_bytes = match base64_decode(&sealed_b64) {
+        Ok(v) => v,
+        Err(e) => return to_js(&JsCmdResult::<String>::err(format!("sealed base64: {e}"))),
+    };
+    let sealed = match SealedEnvelope::from_bytes(&sealed_bytes) {
+        Ok(s) => s,
+        Err(e) => return to_js(&JsCmdResult::<String>::err(format!("sealed parse: {e}"))),
+    };
+
+    let plaintext = match me.ecies_decrypt(&sealed.ephemeral_pubkey, &sealed.nonce, &sealed.ciphertext) {
+        Ok(p) => p,
+        Err(e) => return to_js(&JsCmdResult::<String>::err(format!("ecies_decrypt: {e}"))),
+    };
+
+    let out_b64 = base64_encode(&plaintext);
+    to_js(&JsCmdResult::ok(out_b64))
+}
+
+// ----- base64 helpers (Олег 2026-08-24 11:00 MSK) -----------------------------
+// We avoid adding a `base64` crate dependency; for WASM payload we use a simple
+// implementation that's good enough for binary blobs. browser.atob / btoa is
+// available in JS — these helpers let the PWA call encrypt_for_recipient with
+// either base64 or hex if it wants. We use base64 throughout for compactness.
+
+fn base64_encode(bytes: &[u8]) -> String {
+    // RFC 4648 base64 (standard alphabet, with padding).
+    const ALPHA: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(((bytes.len() + 2) / 3) * 4);
+    let mut i = 0;
+    while i + 3 <= bytes.len() {
+        let n = ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8) | (bytes[i + 2] as u32);
+        out.push(ALPHA[((n >> 18) & 0x3f) as usize] as char);
+        out.push(ALPHA[((n >> 12) & 0x3f) as usize] as char);
+        out.push(ALPHA[((n >> 6) & 0x3f) as usize] as char);
+        out.push(ALPHA[(n & 0x3f) as usize] as char);
+        i += 3;
+    }
+    let rem = bytes.len() - i;
+    if rem == 1 {
+        let n = (bytes[i] as u32) << 16;
+        out.push(ALPHA[((n >> 18) & 0x3f) as usize] as char);
+        out.push(ALPHA[((n >> 12) & 0x3f) as usize] as char);
+        out.push('=');
+        out.push('=');
+    } else if rem == 2 {
+        let n = ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8);
+        out.push(ALPHA[((n >> 18) & 0x3f) as usize] as char);
+        out.push(ALPHA[((n >> 12) & 0x3f) as usize] as char);
+        out.push(ALPHA[((n >> 6) & 0x3f) as usize] as char);
+        out.push('=');
+    }
+    out
+}
+
+fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
+    fn val(c: u8) -> Result<u32, String> {
+        match c {
+            b'A'..=b'Z' => Ok((c - b'A') as u32),
+            b'a'..=b'z' => Ok(26 + (c - b'a') as u32),
+            b'0'..=b'9' => Ok(52 + (c - b'0') as u32),
+            b'+' => Ok(62),
+            b'/' => Ok(63),
+            b'=' => Ok(0), // padding (ignored)
+            _ => Err(format!("invalid base64 char: {:?}", c as char)),
+        }
+    }
+    let bytes = s.as_bytes();
+    if bytes.len() % 4 != 0 {
+        return Err(format!("base64 length not multiple of 4: {}", bytes.len()));
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+    let mut i = 0;
+    while i < bytes.len() {
+        let a = val(bytes[i])?;
+        let b = val(bytes[i + 1])?;
+        let c = val(bytes[i + 2])?;
+        let d = val(bytes[i + 3])?;
+        let n = (a << 18) | (b << 12) | (c << 6) | d;
+        out.push(((n >> 16) & 0xff) as u8);
+        if bytes[i + 2] != b'=' { out.push(((n >> 8) & 0xff) as u8); }
+        if bytes[i + 3] != b'=' { out.push((n & 0xff) as u8); }
+        i += 4;
+    }
+    Ok(out)
 }
 
 #[wasm_bindgen(start)]
