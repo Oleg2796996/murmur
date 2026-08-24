@@ -251,7 +251,7 @@ mod tests {
             envelope_hash_hex: "h".into(),
         };
         pending.append(&entry).unwrap();
-        let n = hub.broadcast(&entry);
+        let n = hub.broadcast(&entry, None);
         assert_eq!(n, 1);
 
         let pushed = tokio::time::timeout(

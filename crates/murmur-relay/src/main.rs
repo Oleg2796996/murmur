@@ -144,7 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             envelope_bytes: vec![],
                             envelope_hash_hex: e.envelope_hash.clone(),
                         };
-                        let _ = hub_for_ttl.broadcast(&fake_entry);
+                        let _ = hub_for_ttl.broadcast(&fake_entry, None);
                     }
                 }
                 Ok(_) => {

@@ -171,6 +171,17 @@ impl PushStore {
         self.persist_locked(&g)
     }
 
+    /// Insert (or replace) a subscription by its endpoint URL. If a record
+    /// already exists with the same endpoint, it is removed first and the
+    /// new one takes its place — otherwise repeated "tap to subscribe"
+    /// retries pile up duplicate records (Lesson #131.12).
+    pub fn upsert_by_endpoint(&self, sub: PushSubscription) -> anyhow::Result<()> {
+        let mut g = self.inner.lock();
+        g.retain(|_, existing| existing.endpoint != sub.endpoint);
+        g.insert(sub.id.clone(), sub);
+        self.persist_locked(&g)
+    }
+
     pub fn delete(&self, id: &str) -> anyhow::Result<()> {
         let mut g = self.inner.lock();
         g.remove(id);
@@ -208,23 +219,73 @@ pub struct PushPayload {
     pub from_npub: String,
     pub ts: u64,
     pub envelope_hash_hex: String,
+    /// Short app-style title (e.g. "Murmur"). On iOS this becomes the bold top
+    /// line of the notification. We intentionally keep it short and app-y, not
+    /// the sender name — sender goes into `subtitle`.
     pub title: String,
+    /// Subtitle slot on iOS (= sender alias, e.g. "Ирина"). Setting this stops
+    /// iOS from auto-injecting "from murmur" between title and body. Other
+    /// platforms ignore the field.
+    pub subtitle: String,
     pub body: String,
 }
 
 impl PushPayload {
-    pub fn from_entry(entry: &crate::pending::PendingEntry) -> Self {
-        let body = format!(
-            "new encrypted message ({} bytes)",
-            entry.envelope_bytes.len()
-        );
+    /// Build payload from a pending envelope entry.
+    ///
+    /// `store` (optional MessageStore) is used to resolve `from_npub → alias`
+    /// so the push title shows "Ирина" instead of "npub1s3ux...". If the
+    /// sender has never registered an alias on this relay, we fall back to
+    /// a short form of the npub (e.g. `npub1abc…xyz`) so the user can still
+    /// tell who wrote.
+    ///
+    /// The body is intentionally generic — relay never sees plaintext (end-to-end
+    /// encryption), so we cannot show the message text here. Client decrypts
+    /// when user opens the chat.
+    pub fn from_entry(entry: &crate::pending::PendingEntry, store: Option<&crate::storage::MessageStore>) -> Self {
+        // Try to resolve sender alias from local DB. We skip any alias that is
+        // exactly the npub (or a bech32 string starting with `npub1`) — those
+        // are useless for display, they just bloat the title. If no real
+        // alias is registered, fall back to a short form of the npub.
+        let sender_label = match store.and_then(|s| s.aliases_for_npub(&entry.from_npub).ok()) {
+            Some(v) if !v.is_empty() => v
+                .into_iter()
+                .find(|a| !a.starts_with("npub1") && a != &entry.from_npub)
+                .unwrap_or_else(|| short_npub(&entry.from_npub)),
+            _ => short_npub(&entry.from_npub),
+        };
+
         Self {
             alias: entry.to_alias.clone(),
             from_npub: entry.from_npub.clone(),
             ts: entry.ts,
             envelope_hash_hex: entry.envelope_hash_hex.clone(),
-            title: format!("murmur: {}", entry.to_alias),
-            body,
+            // Use the sender alias as title. iOS Web Push injects
+            // "from <manifest.name>" between title and body ONLY when the
+            // title is missing/empty. By putting the alias here (e.g.
+            // "Ирина") iOS keeps the title visible and skips the auto-line.
+            // The `subtitle` field is kept for browsers (macOS Safari) that
+            // do honour it.
+            //
+            // Олег 2026-08-24 11:55 MSK: если sender_label == short_npub (то есть
+            // алиас не зарегистрирован), iOS всё равно вставляет "from murmur".
+            // На iOS Web Push НЕ уважает subtitle, а если title = npub, это выглядит
+            // как мусор + "from murmur". Делаем fallback на "Murmur" — тогда iOS
+            // не вставляет auto-line (он же == manifest.name), а пользователь видит
+            // "Murmur / Откройте, чтобы прочитать" вместо "npub1...gw6m from murmur...".
+            title: if sender_label.starts_with("npub1") {
+                "Murmur".to_string()
+            } else {
+                sender_label.clone()
+            },
+            subtitle: sender_label,
+            // Body is intentionally generic — relay never sees plaintext
+            // (end-to-end encryption), so we cannot show the message text.
+            // We phrase it as an action ("Откройте, чтобы прочитать") so iOS
+            // Web Push does NOT prepend "from murmur" (which it does for
+            // very short bodies that look like notifications from the app
+            // itself).
+            body: "Откройте murmur, чтобы прочитать сообщение".to_string(),
         }
     }
 
@@ -310,11 +371,53 @@ impl PushServer {
     }
 
     /// Deliver a push payload to all registered subscriptions for the alias.
+    ///
+    /// Deduplication: one user can register the same push endpoint under
+    /// multiple aliases (e.g. once under their npub and once under "Oleg"
+    /// after they set a display name). The fallback `aliases_for_npub` lookup
+    /// can surface the same subscription twice. We dedupe by `endpoint` (the
+    /// canonical Web Push identifier) before sending, so one message produces
+    /// at most one push per device.
     pub async fn deliver(&self, payload: &PushPayload) -> anyhow::Result<usize> {
-        let subs = self.store.for_alias(&payload.alias);
+        // Direct match first: subscription registered with the same alias.
+        let mut subs = self.store.for_alias(&payload.alias);
+        // Fallback: maybe the subscription was registered under a different
+        // alias for the same npub (e.g. user registered push with their npub
+        // because no display name was set, but envelope routing uses display
+        // name "Oleg" — both resolve to the same person).
+        if subs.is_empty() {
+            if let Some(db) = &self.store_db {
+                let mut candidates: Vec<String> = Vec::new();
+                if let Ok(Some(npub)) = db.npub_for_alias(&payload.alias) {
+                    candidates.push(npub.clone());
+                    if let Ok(sibs) = db.aliases_for_npub(&npub) {
+                        for s in sibs { candidates.push(s); }
+                    }
+                }
+                if let Ok(aliases) = db.aliases_for_npub(&payload.alias) {
+                    for a in aliases { candidates.push(a); }
+                }
+                for alt in candidates {
+                    if alt == payload.alias { continue; }
+                    let more = self.store.for_alias(&alt);
+                    for m in more {
+                        if !subs.iter().any(|s| s.endpoint == m.endpoint) {
+                            subs.push(m);
+                        }
+                    }
+                }
+            }
+        }
         if subs.is_empty() {
             return Ok(0);
         }
+        // Final safety net: even after the alias-based dedup above, an
+        // endpoint can still appear twice if the user happens to have
+        // multiple registrations against the same browser instance (we have
+        // seen 3-4 duplicate push records after several "tap to subscribe"
+        // retries — Lesson #131.12). Dedup by endpoint here, before sending.
+        let mut seen_endpoints: std::collections::HashSet<String> = std::collections::HashSet::new();
+        subs.retain(|s| seen_endpoints.insert(s.endpoint.clone()));
         let client = IsahcWebPushClient::new()?;
         let body = payload.to_json();
         let mut delivered = 0usize;
@@ -423,7 +526,10 @@ impl PushServer {
                                 handle_api_history(req, db.clone()).await
                             }
                             (Method::POST, "/push/register_subscribe") => {
-                                handle_register_subscribe(req, store).await
+                                handle_register_subscribe(req, store.clone_handle()).await
+                            }
+                            (Method::GET, "/push/status") => {
+                                handle_push_status(req, store.clone_handle(), db.clone()).await
                             }
                             (Method::POST, "/push/unsubscribe") => {
                                 handle_unsubscribe(req, store).await
@@ -522,6 +628,17 @@ fn serve_file(path: &Path, head_only: bool) -> Option<Response<Full<Bytes>>> {
     )
 }
 
+/// Shorten an npub for display in push notifications: `npub1abc…xyz`.
+/// If the string is already short (<16 chars), return it as-is.
+fn short_npub(npub: &str) -> String {
+    if npub.len() <= 16 {
+        return npub.to_string();
+    }
+    let head = &npub[..12];
+    let tail = &npub[npub.len() - 4..];
+    format!("{head}…{tail}")
+}
+
 fn mime_from_ext(ext: &str) -> &'static str {
     match ext.to_ascii_lowercase().as_str() {
         "html" | "htm" => "text/html; charset=utf-8",
@@ -584,7 +701,7 @@ async fn handle_register_subscribe(
         registered_at: chrono::Utc::now().to_rfc3339(),
     };
     let id = entry.id.clone();
-    if let Err(e) = store.insert(entry) {
+    if let Err(e) = store.upsert_by_endpoint(entry) {
         return Ok(json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("store: {e}")));
     }
     let body = serde_json::json!({ "ok": true, "id": id }).to_string();
@@ -594,6 +711,100 @@ async fn handle_register_subscribe(
         .header("access-control-allow-origin", "*")
         .body(Full::new(Bytes::from(body)))
         .unwrap())
+}
+
+async fn handle_push_status(
+    req: Request<Incoming>,
+    store: PushStore,
+    db: Option<crate::storage::MessageStore>,
+) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    let uri = req.uri().to_string();
+    // Parse `?alias=...` from the URL.
+    let alias = uri
+        .split('?')
+        .nth(1)
+        .and_then(|q| q.split('&').find(|kv| kv.starts_with("alias=")))
+        .map(|kv| kv.trim_start_matches("alias=").to_string())
+        .unwrap_or_default();
+    let alias = match urlencoding_decode(&alias) {
+        Some(s) if !s.is_empty() => s,
+        _ => return Ok(json_error(StatusCode::BAD_REQUEST, "missing alias")),
+    };
+    // Direct match: subscriptions registered with the exact alias.
+    let mut subs = store.for_alias(&alias);
+    // Fallback: alias might be an npub, or an alias that resolves to an
+    // npub via user_aliases. Either way, find sibling aliases for the same
+    // person and check subscriptions under those display names.
+    if subs.is_empty() {
+        if let Some(db) = db.as_ref() {
+            let mut candidates: Vec<String> = Vec::new();
+            // Case 1: alias is itself an alias like "Oleg". Look up its npub,
+            // then find every alias for that npub (handles the case where
+            // the subscription was registered under the npub itself).
+            if let Ok(Some(npub)) = db.npub_for_alias(&alias) {
+                candidates.push(npub.clone());
+                if let Ok(sibs) = db.aliases_for_npub(&npub) {
+                    for s in sibs { candidates.push(s); }
+                }
+            }
+            // Case 2: alias is already an npub. Find every alias for it.
+            if let Ok(aliases) = db.aliases_for_npub(&alias) {
+                for a in aliases { candidates.push(a); }
+            }
+            for alt in candidates {
+                if alt == alias { continue; }
+                let more = store.for_alias(&alt);
+                for m in more {
+                    if !subs.iter().any(|s| s.endpoint == m.endpoint) {
+                        subs.push(m);
+                    }
+                }
+            }
+        }
+    }
+    let body = serde_json::json!({
+        "alias": alias,
+        "subscribed": !subs.is_empty(),
+        "count": subs.len(),
+    });
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/json")
+        .header("access-control-allow-origin", "*")
+        .body(Full::new(Bytes::from(body.to_string())))
+        .unwrap())
+}
+
+// Tiny URL-decoder (we don't pull in a dep just for one percent-encoded
+// query param).
+fn urlencoding_decode(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'+' {
+            out.push(b' ');
+            i += 1;
+        } else if b == b'%' && i + 2 < bytes.len() {
+            let h = (hex_val(bytes[i + 1])? << 4) | hex_val(bytes[i + 2])?;
+            out.push(h);
+            i += 3;
+        } else {
+            out.push(b);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 async fn handle_unsubscribe(
@@ -607,18 +818,27 @@ async fn handle_unsubscribe(
             return Ok(json_error(StatusCode::BAD_REQUEST, &format!("bad json: {e}")));
         }
     };
-    let id = match json.get("id").and_then(|v| v.as_str()) {
-        Some(s) => s.to_string(),
-        None => return Ok(json_error(StatusCode::BAD_REQUEST, "missing id")),
-    };
-    if let Err(e) = store.delete(&id) {
-        return Ok(json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("store: {e}")));
+    // Accept either {id: "..."} (precise removal) or {alias: "..."}
+    // (remove all subscriptions under that alias — useful from the bell
+    // button when the user toggles off).
+    let mut removed = 0usize;
+    if let Some(id) = json.get("id").and_then(|v| v.as_str()) {
+        store.delete(id);
+        removed = 1;
+    } else if let Some(alias) = json.get("alias").and_then(|v| v.as_str()) {
+        for s in store.for_alias(alias) {
+            store.delete(&s.id);
+            removed += 1;
+        }
+    } else {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "missing id or alias"));
     }
+    let body = serde_json::json!({ "ok": true, "removed": removed }).to_string();
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "application/json")
         .header("access-control-allow-origin", "*")
-        .body(Full::new(Bytes::from(r#"{"ok":true}"#)))
+        .body(Full::new(Bytes::from(body)))
         .unwrap())
 }
 
@@ -1038,12 +1258,85 @@ mod tests {
             from_npub: "npub1abc".into(),
             ts: 1700000000,
             envelope_hash_hex: "deadbeef".into(),
-            title: "murmur: oleg-hp".into(),
+            title: "Murmur".into(),
+            subtitle: "Ирина".into(),
             body: "new encrypted message (210 bytes)".into(),
         };
         let s = p.to_json();
         let back: PushPayload = serde_json::from_str(&s).unwrap();
         assert_eq!(back.alias, "oleg-hp");
+        assert_eq!(back.subtitle, "Ирина");
+    }
+
+    #[test]
+    fn from_entry_resolves_alias_when_known() {
+        use crate::storage::MessageStore;
+        use crate::pending::PendingEntry;
+
+        // Build a temporary store and register an alias for the sender.
+        let dir = std::env::temp_dir().join(format!("murmur-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("msgs.db");
+        std::fs::remove_file(&db_path).ok();
+        let store = MessageStore::new(&db_path).unwrap();
+
+        let sender_npub = "npub1s3ux2m28x30d7sr5qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq";
+        store.register_alias("ирина", sender_npub).unwrap();
+
+        let entry = PendingEntry {
+            to_alias: "oleg-hp".into(),
+            from_npub: sender_npub.into(),
+            ts: 1700000000,
+            envelope_bytes: vec![1, 2, 3, 4],
+            envelope_hash_hex: "abc".into(),
+        };
+        let payload = PushPayload::from_entry(&entry, Some(&store));
+        assert_eq!(payload.title, "ирина", "title should be alias to suppress iOS 'from murmur'");
+        assert_eq!(payload.subtitle, "ирина", "subtitle should be alias (for macOS/Chrome)");
+        assert_eq!(payload.body, "Откройте murmur, чтобы прочитать сообщение");
+
+        // Unknown alias → fallback to short npub.
+        let unknown_entry = PendingEntry {
+            to_alias: "oleg-hp".into(),
+            from_npub: "npub1unknownsenderxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".into(),
+            ts: 0,
+            envelope_bytes: vec![],
+            envelope_hash_hex: "x".into(),
+        };
+        let payload2 = PushPayload::from_entry(&unknown_entry, Some(&store));
+        assert!(payload2.title.starts_with("npub"), "title should fall back to short npub when no alias: {}", payload2.title);
+
+        // Pathological case #1: alias == npub (useless), real alias also exists.
+        // Should pick the real alias.
+        let pathological_npub = "npub1pathologicalsenderxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+        let pathological_entry = PendingEntry {
+            to_alias: "oleg-hp".into(),
+            from_npub: pathological_npub.into(),
+            ts: 0,
+            envelope_bytes: vec![],
+            envelope_hash_hex: "y".into(),
+        };
+        store.register_alias(pathological_npub, pathological_npub).unwrap();
+        store.register_alias("Ира", pathological_npub).unwrap();
+        let payload3 = PushPayload::from_entry(&pathological_entry, Some(&store));
+        assert_eq!(payload3.title, "Ира", "real alias should win over npub-as-alias in title: {}", payload3.title);
+        assert_eq!(payload3.subtitle, "Ира");
+
+        // Pathological case #2: ONLY npub-as-alias registered. Should fall back to short npub.
+        let npub_only_npub = "npub1onlynpubxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+        let npub_only_entry = PendingEntry {
+            to_alias: "oleg-hp".into(),
+            from_npub: npub_only_npub.into(),
+            ts: 0,
+            envelope_bytes: vec![],
+            envelope_hash_hex: "z".into(),
+        };
+        store.register_alias(npub_only_npub, npub_only_npub).unwrap();
+        let payload4 = PushPayload::from_entry(&npub_only_entry, Some(&store));
+        assert!(payload4.title.contains("…"), "npub-only alias should fall back to short npub in title: {}", payload4.title);
+        assert!(!payload4.title.contains(&npub_only_npub), "should not show full npub in title: {}", payload4.title);
+
+        std::fs::remove_file(&db_path).ok();
     }
 
     #[test]

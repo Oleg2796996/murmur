@@ -49,6 +49,10 @@
         <aside id="sidebar" class="sidebar">
             <header class="sidebar-header">
                 <button id="btn-logout" class="logout-btn" title="Выйти">Выйти</button>
+                <!-- Lesson #154: колокольчик возвращён. На iOS Notification.requestPermission()
+                     ТРЕБУЕТ user gesture (был причиной, почему мы его убрали).
+                     Один клик = gesture → permission → subscribe → UI on.
+                     Если браузер уже granted + есть подписка, клик отписывает. -->
                 <button id="btn-notifications" class="notif-btn" title="Включить уведомления">🔔</button>
                 <div class="me">
                     <div class="me-npub">
@@ -96,6 +100,9 @@
             </section>
 
             <footer id="input-area" class="input-area" hidden>
+                <button id="btn-attach" class="attach-btn" title="Прикрепить файл (до 50 МБ)">📎</button>
+                <input type="file" id="file-input" multiple accept="image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/ogg,audio/wav,video/mp4,application/pdf,text/plain" style="display:none" />
+                <div id="attachments-preview" class="attachments-preview"></div>
                 <textarea id="message-input" placeholder="сообщение…" rows="1" autocomplete="off"></textarea>
                 <button id="btn-send" class="send-btn" title="отправить">&#8594;</button>
             </footer>
@@ -116,7 +123,7 @@
         el.addEventListener("click", async function(ev) {
           ev.preventDefault();
           ev.stopPropagation();
-          console.log("[murmur] click on " + label + " — module loaded?", typeof window[fnName]);
+          // If app.js handler is ready — call it immediately.
           if (typeof window[fnName] === "function") {
             try { await window[fnName](); }
             catch (e) {
@@ -126,12 +133,28 @@
             }
             return;
           }
-          // app.js not loaded yet — likely WASM still booting
+          // app.js not loaded yet — wait up to 10s for it (PWA cold-start on iPhone
+          // can take 3-5s when app.js + WASM module load over Cloudflare tunnel).
+          // Retries every 200ms. Once handler appears, invokes it.
           const err = document.getElementById("identity-error");
           if (err) {
             err.hidden = false;
-            err.textContent = "PWA ещё не загрузилась. Подожди 3 сек и попробуй ещё раз.";
+            err.textContent = "PWA загружается… подожди";
           }
+          const deadline = Date.now() + 10000;
+          while (Date.now() < deadline && typeof window[fnName] !== "function") {
+            await new Promise(r => setTimeout(r, 200));
+          }
+          if (typeof window[fnName] === "function") {
+            if (err) { err.hidden = true; err.textContent = ""; }
+            try { await window[fnName](); }
+            catch (e) {
+              console.error("[murmur] handler error:", e);
+              if (err) { err.hidden = false; err.textContent = "Ошибка: " + (e.message || e); }
+            }
+            return;
+          }
+          if (err) { err.hidden = false; err.textContent = "PWA не загрузилась. Проверь интернет и обнови страницу."; }
         }, { passive: false });
         return true;
       }

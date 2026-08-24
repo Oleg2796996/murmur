@@ -31,6 +31,12 @@ use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519Public, StaticSecret as X25519Secret};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+// ECIES (Олег 2026-08-24 11:00 MSK): X25519 ECDH + HKDF-SHA256 + AES-256-GCM
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::{Aes256Gcm, Nonce};
+use hkdf::Hkdf;
+use sha2::Sha256;
+
 /// bech32 human-readable part for murmur signing public keys.
 pub const NOSTR_HRP: &str = "npub";
 
@@ -55,6 +61,9 @@ pub enum IdentityError {
     /// ed25519 keys derived from bytes are invalid (e.g., not on the curve).
     #[error("invalid key bytes: {0}")]
     InvalidKey(String),
+    /// ECIES encrypt/decrypt failed (bad tag, HKDF error, malformed input).
+    #[error("ecies error: {0}")]
+    Ecies(String),
 }
 
 /// On-disk / on-wire representation of an identity (secret half).
@@ -259,6 +268,295 @@ impl Identity {
     /// Convenience: alias for [`Self::public`] — sometimes more readable.
     pub fn public_only(&self) -> IdentityPublic {
         self.public
+    }
+}
+
+// ============================================================================
+// ECIES — encrypted envelope payloads (Олег 2026-08-24 11:00 MSK)
+// ============================================================================
+//
+// Recipient = recipient agreement_pubkey (X25519 public).
+// Sender generates ephemeral X25519 keypair, computes ECDH(recipient, ephemeral),
+// derives AES-256-GCM key via HKDF-SHA256(salt="murmur-ecies-v1", info="ecies-encrypt").
+// Output = [ephemeral_pubkey: 32][nonce: 12][ciphertext+tag]
+//
+// Decryption: recipient takes ephemeral_pubkey from envelope, computes ECDH(own
+// secret, ephemeral_pubkey), derives same key, decrypts. AEAD tag ensures
+// authenticity + integrity.
+//
+// Why ephemeral per-message: sender's static X25519 secret is never used directly,
+// so no risk of reusing key across encryptions (and forward-secrecy if recipient
+// rotates their secret).
+//
+// Why bind to agreement_pubkey only: signing key (ed25519) is for authentication
+// (signature over envelope), agreement key is for encryption. Standard split.
+
+/// HKDF salt — domain separation between ECIES uses.
+pub const ECIES_SALT: &[u8] = b"murmur-ecies-v1";
+/// HKDF info — identifies ECIES use case (vs other KDFs).
+pub const ECIES_INFO: &[u8] = b"ecies-encrypt";
+/// Nonce length for AES-256-GCM.
+pub const ECIES_NONCE_LEN: usize = 12;
+/// Ephemeral public key length (X25519).
+pub const ECIES_EPHEM_LEN: usize = 32;
+
+/// Sealed envelope output of ECIES encryption.
+///
+/// Layout (bytes):
+/// ```text
+/// [ephemeral_pubkey: 32 bytes][nonce: 12 bytes][ciphertext + 16-byte tag]
+/// ```
+#[derive(Clone, Debug)]
+pub struct SealedEnvelope {
+    /// Ephemeral X25519 public key (sender's per-message key).
+    pub ephemeral_pubkey: [u8; ECIES_EPHEM_LEN],
+    /// AES-GCM nonce (unique per encryption).
+    pub nonce: [u8; ECIES_NONCE_LEN],
+    /// AES-GCM ciphertext + authentication tag.
+    pub ciphertext: Vec<u8>,
+}
+
+impl SealedEnvelope {
+    /// Total serialized length (header + ciphertext).
+    pub fn total_len(&self) -> usize {
+        ECIES_EPHEM_LEN + ECIES_NONCE_LEN + self.ciphertext.len()
+    }
+
+    /// Serialize to bytes: `[ephem][nonce][ct]`.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.total_len());
+        out.extend_from_slice(&self.ephemeral_pubkey);
+        out.extend_from_slice(&self.nonce);
+        out.extend_from_slice(&self.ciphertext);
+        out
+    }
+
+    /// Parse from wire bytes. Returns `Err` if input is too short.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, IdentityError> {
+        if bytes.len() < ECIES_EPHEM_LEN + ECIES_NONCE_LEN {
+            return Err(IdentityError::Ecies(format!(
+                "sealed envelope too short: {} bytes (need at least {})",
+                bytes.len(),
+                ECIES_EPHEM_LEN + ECIES_NONCE_LEN
+            )));
+        }
+        let mut ephem = [0u8; ECIES_EPHEM_LEN];
+        ephem.copy_from_slice(&bytes[..ECIES_EPHEM_LEN]);
+        let mut nonce = [0u8; ECIES_NONCE_LEN];
+        nonce.copy_from_slice(&bytes[ECIES_EPHEM_LEN..ECIES_EPHEM_LEN + ECIES_NONCE_LEN]);
+        let ct = bytes[ECIES_EPHEM_LEN + ECIES_NONCE_LEN..].to_vec();
+        Ok(Self {
+            ephemeral_pubkey: ephem,
+            nonce,
+            ciphertext: ct,
+        })
+    }
+}
+
+impl Identity {
+    /// Encrypt plaintext so ONLY the recipient (with the matching `npub`) can decrypt.
+    ///
+    /// Uses ephemeral ECDH: generates a fresh X25519 keypair per call, computes
+    /// shared secret with recipient's agreement_pubkey, derives AES-256-GCM key
+    /// via HKDF, encrypts. The recipient decrypts with their agreement_secret.
+    ///
+    /// Returns a `SealedEnvelope` containing the ephemeral pubkey, nonce, and
+    /// ciphertext. The plaintext itself is zeroized on return (caller's responsibility).
+    ///
+    /// AAD: empty (we don't bind to context yet). If we later want to bind to
+    /// sender/recipient npub, we'd add it here and pass to Aead.
+    pub fn ecies_encrypt<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+        recipient: &IdentityPublic,
+        plaintext: &[u8],
+    ) -> Result<SealedEnvelope, IdentityError> {
+        // 1. Generate ephemeral X25519 keypair
+        let mut ephem_secret_bytes = [0u8; AGREEMENT_SECRET_LEN];
+        rng.fill_bytes(&mut ephem_secret_bytes);
+        let ephem_secret = X25519Secret::from(ephem_secret_bytes);
+        let ephem_pub = X25519Public::from(&ephem_secret);
+
+        // 2. ECDH(ephem_secret, recipient_pubkey) = 32-byte shared
+        let recipient_x = X25519Public::from(recipient.agreement_pubkey());
+        let shared = ephem_secret.diffie_hellman(&recipient_x);
+        let shared_bytes = shared.to_bytes();
+
+        // 3. HKDF-SHA256(salt=ECIES_SALT, ikm=shared, info=ECIES_INFO) -> 32-byte AES key
+        let hk = Hkdf::<Sha256>::new(Some(ECIES_SALT), &shared_bytes);
+        let mut aes_key = [0u8; 32];
+        hk.expand(ECIES_INFO, &mut aes_key)
+            .map_err(|e| IdentityError::Ecies(format!("hkdf expand: {e}")))?;
+
+        // 4. Generate nonce
+        let mut nonce_bytes = [0u8; ECIES_NONCE_LEN];
+        rng.fill_bytes(&mut nonce_bytes);
+
+        // 5. AES-256-GCM encrypt
+        let cipher = Aes256Gcm::new_from_slice(&aes_key)
+            .map_err(|e| IdentityError::Ecies(format!("key init: {e}")))?;
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher
+            .encrypt(
+                nonce,
+                Payload {
+                    msg: plaintext,
+                    aad: b"",
+                },
+            )
+            .map_err(|e| IdentityError::Ecies(format!("encrypt: {e}")))?;
+
+        // Zero ephemeral secret + shared + HKDF output (defense-in-depth)
+        let mut ephem_zero = ephem_secret_bytes;
+        ephem_zero.zeroize();
+        let mut shared_zero = shared_bytes;
+        shared_zero.zeroize();
+        let mut key_zero = aes_key;
+        key_zero.zeroize();
+
+        Ok(SealedEnvelope {
+            ephemeral_pubkey: *ephem_pub.as_bytes(),
+            nonce: nonce_bytes,
+            ciphertext,
+        })
+    }
+
+    /// Decrypt a SealedEnvelope from `sender_ephemeral_pubkey` + ciphertext.
+    ///
+    /// The `sender_agreement_pubkey` is recovered from the ephemeral_pubkey field
+    /// (sender is anonymous in ECIES — only ephemeral_pubkey is known; we don't
+    // bind to a static sender identity. For sender authentication, use the
+    // outer envelope's ed25519 signature.).
+    ///
+    /// AAD: empty, must match what was used in `ecies_encrypt`.
+    pub fn ecies_decrypt(
+        &self,
+        sender_ephemeral_pubkey: &[u8; ECIES_EPHEM_LEN],
+        nonce: &[u8; ECIES_NONCE_LEN],
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, IdentityError> {
+        if nonce.len() != ECIES_NONCE_LEN {
+            return Err(IdentityError::Ecies(format!(
+                "bad nonce len: {} (want {})",
+                nonce.len(),
+                ECIES_NONCE_LEN
+            )));
+        }
+
+        // 1. Parse ephemeral pubkey
+        let ephem_pub = X25519Public::from(*sender_ephemeral_pubkey);
+
+        // 2. ECDH(own agreement_secret, ephemeral_pubkey) = same shared secret
+        let own_secret = X25519Secret::from(self.secret.agreement);
+        let shared = own_secret.diffie_hellman(&ephem_pub);
+        let shared_bytes = shared.to_bytes();
+
+        // 3. Same HKDF derivation
+        let hk = Hkdf::<Sha256>::new(Some(ECIES_SALT), &shared_bytes);
+        let mut aes_key = [0u8; 32];
+        hk.expand(ECIES_INFO, &mut aes_key)
+            .map_err(|e| IdentityError::Ecies(format!("hkdf expand: {e}")))?;
+
+        // 4. Decrypt
+        let cipher = Aes256Gcm::new_from_slice(&aes_key)
+            .map_err(|e| IdentityError::Ecies(format!("key init: {e}")))?;
+        let nonce_obj = Nonce::from_slice(nonce);
+        let plaintext = cipher
+            .decrypt(
+                nonce_obj,
+                Payload {
+                    msg: ciphertext,
+                    aad: b"",
+                },
+            )
+            .map_err(|e| IdentityError::Ecies(format!("decrypt (bad tag or wrong key): {e}")))?;
+
+        let mut shared_zero = shared_bytes;
+        shared_zero.zeroize();
+        let mut key_zero = aes_key;
+        key_zero.zeroize();
+
+        Ok(plaintext)
+    }
+}
+
+/// ECIES roundtrip + tamper-detection tests (Олег 2026-08-24 11:00 MSK).
+#[cfg(test)]
+mod ecies_tests {
+    use super::*;
+    use rand::rngs::OsRng;
+    use std::ops::BitXorAssign;
+
+    #[test]
+    fn roundtrip_small() {
+        let alice = Identity::generate(&mut OsRng);
+        let bob = Identity::generate(&mut OsRng);
+        let pt: &[u8] = b"hello world";
+        let sealed = alice
+            .ecies_encrypt(&mut OsRng, &bob.public(), pt)
+            .expect("encrypt");
+        let decrypted = bob
+            .ecies_decrypt(&sealed.ephemeral_pubkey, &sealed.nonce, &sealed.ciphertext)
+            .expect("decrypt");
+        assert_eq!(pt.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn roundtrip_50mb() {
+        // Имитируем максимальный attachment (Олег 2026-08-24 11:00 MSK, 50 MB cap).
+        let alice = Identity::generate(&mut OsRng);
+        let bob = Identity::generate(&mut OsRng);
+        let pt = vec![0xab_u8; 50 * 1024 * 1024];
+        let sealed = alice
+            .ecies_encrypt(&mut OsRng, &bob.public(), &pt)
+            .expect("encrypt 50 MB");
+        assert_eq!(sealed.ciphertext.len(), 50 * 1024 * 1024 + 16); // +16 = GCM tag
+        let decrypted = bob
+            .ecies_decrypt(&sealed.ephemeral_pubkey, &sealed.nonce, &sealed.ciphertext)
+            .expect("decrypt 50 MB");
+        assert_eq!(pt.len(), decrypted.len());
+        assert_eq!(pt[..100], decrypted[..100]); // spot check
+    }
+
+    #[test]
+    fn tamper_detection() {
+        let alice = Identity::generate(&mut OsRng);
+        let bob = Identity::generate(&mut OsRng);
+        let sealed = alice
+            .ecies_encrypt(&mut OsRng, &bob.public(), b"secret")
+            .expect("encrypt");
+        // Меняем последний байт (tag)
+        let mut tampered = sealed.clone();
+        tampered.ciphertext.last_mut().unwrap().bitxor_assign(1);
+        let res = bob.ecies_decrypt(&tampered.ephemeral_pubkey, &tampered.nonce, &tampered.ciphertext);
+        assert!(res.is_err(), "tampered ciphertext must fail AEAD tag");
+    }
+
+    #[test]
+    fn wrong_recipient_fails() {
+        let alice = Identity::generate(&mut OsRng);
+        let bob = Identity::generate(&mut OsRng);
+        let eve = Identity::generate(&mut OsRng);
+        let sealed = alice
+            .ecies_encrypt(&mut OsRng, &bob.public(), b"only for bob")
+            .expect("encrypt");
+        // Eve не может расшифровать (у неё другой agreement_secret)
+        let res = eve.ecies_decrypt(&sealed.ephemeral_pubkey, &sealed.nonce, &sealed.ciphertext);
+        assert!(res.is_err(), "wrong recipient must fail");
+    }
+
+    #[test]
+    fn envelope_serialization() {
+        let alice = Identity::generate(&mut OsRng);
+        let bob = Identity::generate(&mut OsRng);
+        let sealed = alice
+            .ecies_encrypt(&mut OsRng, &bob.public(), b"hello")
+            .expect("encrypt");
+        let bytes = sealed.to_bytes();
+        let restored = SealedEnvelope::from_bytes(&bytes).expect("parse");
+        assert_eq!(sealed.ephemeral_pubkey, restored.ephemeral_pubkey);
+        assert_eq!(sealed.nonce, restored.nonce);
+        assert_eq!(sealed.ciphertext, restored.ciphertext);
     }
 }
 

@@ -8,7 +8,7 @@
 // below deletes every cache whose name doesn't match the current version,
 // so old SW-controlled clients get the fresh files automatically without
 // the user needing to add ?v=N to the URL.
-const CACHE_VERSION = "murmur-v44";
+const CACHE_VERSION = "murmur-v52";
 const PRECACHE = []; // No precache — browser handles HTTP cache naturally.
 
 self.addEventListener("install", (event) => {
@@ -47,7 +47,7 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("push", (event) => {
-  let payload = { alias: "unknown", title: "murmur", body: "new encrypted message" };
+  let payload = { alias: "unknown", title: "Murmur", subtitle: "Кто-то", body: "Новое сообщение" };
   try {
     if (event.data) {
       payload = event.data.json();
@@ -55,9 +55,13 @@ self.addEventListener("push", (event) => {
   } catch (e) {
     console.warn("[murmur-sw] push payload not JSON", e);
   }
-  const title = payload.title || "murmur";
+  const title = payload.title || "Murmur";
   const options = {
-    body: payload.body || "new encrypted message",
+    // iOS Web Push uses `subtitle` slot for the sender alias; supplying it
+    // suppresses iOS's auto-injected "from <app name>" line. Other platforms
+    // ignore the field.
+    subtitle: payload.subtitle || "",
+    body: payload.body || "Откройте murmur, чтобы прочитать сообщение",
     icon: "/icon-192.png",
     badge: "/icon-192.png",
     tag: "murmur-" + (payload.envelope_hash_hex || "").slice(0, 8),

@@ -84,6 +84,9 @@ let messages = {};
 let activePeer = null;
 let oldestTsForPeer = {};
 let pollTimer = null;
+// Attachments (Олег 2026-08-24 11:00 MSK) — файлы прикрепленные к текущему сообщению.
+let pendingAttachments = [];        // [{name, mime, size, data_b64}] — уйдут в зашифрованный body
+let pendingAttachmentsMeta = [];   // [{name, mime, size}] — public metadata для relay
 let ws = null;
 let wsConnected = false;
 let wsReconnectDelay = WS_RECONNECT_BASE;
@@ -93,6 +96,20 @@ function base64ToUint8Array(b64) {
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     return bytes;
+}
+
+// ── WASM return wrapper ─────────────────────────────────────────────
+// Rust functions now return JSON-encoded strings instead of JsValue
+// objects to bypass the wasm-bindgen externref shim (which surfaces as
+// bare i32 table indices on iOS Safari / some WASM runtimes). We unwrap
+// the JSON string on the JS side; anything else is treated as an error.
+function unwrap(raw) {
+    if (typeof raw === 'string') {
+        try { return JSON.parse(raw); }
+        catch (e) { return { ok: false, error: 'bad json: ' + raw }; }
+    }
+    if (raw && typeof raw === 'object') return raw; // dev mode fallback
+    return { ok: false, error: 'unexpected return: ' + String(raw) };
 }
 
 function decodeBody(bodyBase64) {
@@ -119,14 +136,17 @@ function extractBodyText(input) {
             return extractBodyText(inner.text);
         }
         if (typeof input.body === "string") return { text: input.body, isBinary: false };
+        // E2E envelope: ct есть → плейсхолдер, async decrypt потом обновит.
+        if (typeof input.ct === "string") return { text: "🔒 шифрованное сообщение", isBinary: false, _ct: input.ct, _att: input.attachments_meta || [] };
         // Some relays wrap message envelope as a separate field; the caller
         // may pass the full history row.
         if (input.envelope && typeof input.envelope === "object") {
             return extractBodyText(input.envelope);
         }
-        return { text: JSON.stringify(input), isBinary: false };
+        // 🔒 Любой иной объект → плейсхолдер (не dump raw JSON на экран).
+        return { text: "🔒 шифрованное сообщение", isBinary: false };
     }
-    if (typeof input !== "string") return { text: String(input), isBinary: false };
+    if (typeof input !== "string") return { text: "", isBinary: false };
 
     const s = input;
     // Try direct JSON parse (envelope stored as JSON string)
@@ -139,11 +159,13 @@ function extractBodyText(input) {
                     return extractBodyText(inner.text);
                 }
                 if (typeof parsed.body === "string") return { text: parsed.body, isBinary: false };
-                return { text: JSON.stringify(parsed), isBinary: false };
+                if (typeof parsed.ct === "string") return { text: "🔒 шифрованное сообщение", isBinary: false, _ct: parsed.ct, _att: parsed.attachments_meta || [] };
+                // 🔒 JSON без body/body_base64/ct → плейсхолдер.
+                return { text: "🔒 шифрованное сообщение", isBinary: false };
             }
         } catch { /* fallthrough */ }
-        // If it starts with { but failed to parse, return as plain text
-        if (s.startsWith("{")) return { text: s, isBinary: false };
+        // 🔒 Не-JSON-как-JSON (например, бинарный blob) → плейсхолдер.
+        if (s.startsWith("{")) return { text: "🔒 шифрованное сообщение", isBinary: false };
     }
     // base64-decode then JSON.parse (some relays)
     try {
@@ -155,6 +177,9 @@ function extractBodyText(input) {
             if (parsed && typeof parsed === "object") {
                 if (parsed.body_base64) return decodeBody(parsed.body_base64);
                 if (typeof parsed.body === "string") return { text: parsed.body, isBinary: false };
+                if (typeof parsed.ct === "string") return { text: "🔒 шифрованное сообщение", isBinary: false, _ct: parsed.ct, _att: parsed.attachments_meta || [] };
+                // 🔒 base64→JSON envelope без ct → плейсхолдер.
+                return { text: "🔒 шифрованное сообщение", isBinary: false };
             }
         }
         return { text: txt, isBinary: false };
@@ -172,6 +197,133 @@ function extractMessageText(msg) {
     if (msg.body) return extractBodyText(msg.body);
     if (msg.envelope) return extractBodyText(msg.envelope);
     return { text: "", isBinary: false };
+}
+
+// ============================================================================
+// E2E decrypt helpers (sync wrapper over WASM decrypt_envelope)
+// ============================================================================
+//
+// extractBodyText — sync, но E2E decrypt — async (WASM вызов).
+// Чтобы renderMessages остался sync, делаем decrypt-then-render через
+// async промисификацию. Если `ct нет, возвращаем plaintext как раньше.
+//
+// Новый flow при приходе envelope:
+//   envelope.ct (base64) → decryptEnvelope → {body, attachments} → render
+//   envelope.ct отсутствует → fallback на старый plaintext path
+// ============================================================================
+
+function extractBodyTextSync(input) {
+    // Синк fallback — НЕ показывать raw envelope/JSON.
+    // (Privacy bug lesson #152: dump envelope JSON на экран = утечка.)
+    // Если не удалось — возвращаем плейсхолдер; async decrypt потом обновит.
+    if (input === null || input === undefined) return { text: "", isBinary: false };
+    if (typeof input === "object") {
+        if (input.body_base64) {
+            const inner = decodeBody(input.body_base64);
+            return extractBodyTextSync(inner.text);
+        }
+        if (typeof input.body === "string") return { text: input.body, isBinary: false };
+        if (input.envelope && typeof input.envelope === "object") {
+            return extractBodyTextSync(input.envelope);
+        }
+        // 🔒 Любой иной объект (включая raw envelope) → плейсхолдер, async перерисует.
+        return { text: "🔒 шифрованное сообщение", isBinary: false };
+    }
+    if (typeof input !== "string") return { text: "", isBinary: false };
+    const s = input;
+    if (s.startsWith("{") || s.startsWith("[")) {
+        try {
+            const parsed = JSON.parse(s);
+            if (parsed && typeof parsed === "object") {
+                if (parsed.body_base64) {
+                    const inner = decodeBody(parsed.body_base64);
+                    return extractBodyTextSync(inner.text);
+                }
+                if (typeof parsed.body === "string") return { text: parsed.body, isBinary: false };
+                // E2E: sealed envelope в поле `ct`. Не пытаемся парсить sync.
+                if (typeof parsed.ct === "string") return { text: "🔒 шифрованное сообщение", isBinary: false, _ct: parsed.ct, _att: parsed.attachments_meta || [] };
+                // 🔒 Любой JSON без body/body_base64/ct → плейсхолдер, async перерисует.
+                return { text: "🔒 шифрованное сообщение", isBinary: false };
+            }
+        } catch {}
+        // Не-JSON-как-JSON (например, бинарный blob) → плейсхолдер.
+        if (s.startsWith("{")) return { text: "🔒 шифрованное сообщение", isBinary: false };
+    }
+    try {
+        const bytes = base64ToUint8Array(s);
+        const decoder = new TextDecoder("utf-8", { fatal: true });
+        const txt = decoder.decode(bytes);
+        if (txt.startsWith("{")) {
+            const parsed = JSON.parse(txt);
+            if (parsed && typeof parsed === "object") {
+                if (parsed.body_base64) return decodeBody(parsed.body_base64);
+                if (typeof parsed.body === "string") return { text: parsed.body, isBinary: false };
+                if (typeof parsed.ct === "string") return { text: "🔒 шифрованное сообщение", isBinary: false, _ct: parsed.ct, _att: parsed.attachments_meta || [] };
+                // 🔒 base64→JSON envelope без ct → плейсхолдер.
+                return { text: "🔒 шифрованное сообщение", isBinary: false };
+            }
+        }
+        return { text: txt, isBinary: false };
+    } catch {}
+    // 🔒 Fallback: не показывать raw данные.
+    return { text: "🔒 шифрованное сообщение", isBinary: false };
+}
+
+/// Async decrypt: если envelope содержит `ct`, расшифровываем через WASM ECIES.
+/// Plaintext fallback если нет `ct`.
+///
+/// Input can be either:
+///   - a message row from `/api/history` (with `body_base64` field)
+///   - a parsed envelope object (with `ct` and `attachments_meta` fields)
+async function decryptEnvelopeForRender(env) {
+    let ct = null;
+    let attachmentsMeta = [];
+    if (env && typeof env === "object") {
+        // (1) Already-parsed envelope: ct lives directly on the object.
+        if (typeof env.ct === "string") {
+            ct = env.ct;
+            attachmentsMeta = env.attachments_meta || [];
+        }
+        // (2) Message row from /api/history: envelope bytes are base64-encoded
+        //     under body_base64 (relay stores raw envelope JSON + base64-wrap).
+        else if (typeof env.body_base64 === "string") {
+            try {
+                const innerJson = atob(env.body_base64);
+                const inner = JSON.parse(innerJson);
+                if (inner && typeof inner === "object" && typeof inner.ct === "string") {
+                    ct = inner.ct;
+                    attachmentsMeta = inner.attachments_meta || [];
+                }
+            } catch {}
+        }
+    }
+    if (!ct) {
+        // Plaintext fallback (старый формат без E2E).
+        return extractBodyTextSync(env);
+    }
+    try {
+        const plain = await decryptEnvelope(ct);
+        // plain = {body: string, attachments: [{name, mime, size, data_b64}]}
+        let body = plain.body || "";
+        // Render attachments inline в body.
+        if (plain.attachments && plain.attachments.length) {
+            for (const a of plain.attachments) {
+                body += "\n📎 " + a.name + " (" + formatSize(a.size) + ")";
+            }
+        }
+        return { text: body, isBinary: false, attachments: plain.attachments || [], attachmentsMeta };
+    } catch (e) {
+        console.warn("decrypt failed:", e);
+        return { text: "🔒 не удалось расшифровать", isBinary: false };
+    }
+}
+
+/// Format byte size for UI ("4.5 MB", "123 KB")
+function formatSize(n) {
+    if (n < 1024) return n + " B";
+    if (n < 1024*1024) return (n/1024).toFixed(1) + " KB";
+    if (n < 1024*1024*1024) return (n/(1024*1024)).toFixed(1) + " MB";
+    return (n/(1024*1024*1024)).toFixed(2) + " GB";
 }
 
 function formatTime(ts) {
@@ -267,7 +419,8 @@ async function _handleCreate() {
     try {
         await ensureWasm();
         const mod = await loadWasmModule();
-        const res = mod.identity_new();
+        const res = unwrap(mod.identity_new());
+        // WASM returns JSON-encoded string (avoids externref shim pitfalls).
         if (!res.ok) { $("identity-error").textContent = "identity_new error: " + res.error; return; }
         myNpub = res.data.npub;
         signKeyHex = res.data.signing_sk_hex;
@@ -293,7 +446,7 @@ window._handleRestore = async function() {
     try {
         await ensureWasm();
         const mod = await loadWasmModule();
-        const res = mod.identity_restore(hex);
+        const res = unwrap(mod.identity_restore(hex));
         if (!res.ok) { $("identity-error").textContent = "restore error: " + res.error; return; }
         myNpub = res.data.npub;
         signKeyHex = hex;
@@ -312,7 +465,7 @@ $("btn-restore")?.addEventListener("click", async () => {
     try {
         await ensureWasm();
         const mod = await loadWasmModule();
-        const res = mod.identity_restore(hex);
+        const res = unwrap(mod.identity_restore(hex));
         if (!res.ok) { $("identity-error").textContent = "restore error: " + res.error; return; }
         myNpub = res.data.npub;
         signKeyHex = hex;
@@ -332,10 +485,15 @@ function enterMessenger() {
     const fullEl = $("my-npub-full");
     if (fullEl) fullEl.textContent = myNpub;
     // CRITICAL: Register alias immediately so history queries find us on either side.
+    // Use the user-chosen alias if available (LS_NAME key holds the chosen
+    // display name), otherwise fall back to npub for first-run. We then
+    // upsert the canonical alias under both names so the relay can find us
+    // regardless of whether the sender typed our display name or our npub.
+    const preferredAlias = myAlias || myNpub;
     fetch(RELAY + "/api/register_alias", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ alias: myNpub, npub: myNpub })
+        body: JSON.stringify({ alias: preferredAlias, npub: myNpub })
     }).then(r => r.json().then(j => console.log("register_alias on enter:", j)))
       .catch(e => console.warn("register_alias on enter failed:", e));
     const copyBtn = $("btn-copy-npub");
@@ -398,22 +556,128 @@ $("btn-logout")?.addEventListener("click", () => {
     $("restore-hex").value = "";
 });
 
+// Click handler: visible state shows whether browser+server agree there's
+// an active push subscription. If browser says yes but server has nothing
+// (e.g. after subscriptions.json reset), the button stays visually off so
+// user knows to re-tap.
+//
+// `subscribed` is true if EITHER permission="granted" in browser AND server
+// has at least one subscription record for our alias. We also surface a
+// short status text so it's obvious if there are duplicate records (Lesson
+// #131.12 — old registrations piling up before upsert_by_endpoint).
+async function updateNotifBtnState() {
+    if (!notifBtn) return;
+    const perm = (typeof Notification !== "undefined") ? Notification.permission : "default";
+    let serverHasSub = false;
+    let serverCount = 0;
+    let serverEndNote = "";
+
+    // Олег 2026-08-24 11:55 MSK: добавлена локальная проверка pushManager.getSubscription().
+    // Без неё кнопка показывает выкл (без класса .on), если браузер дал granted,
+    // но сервер не видит подписку. Тогда на :hover кнопка 'загорается' (accent),
+    // а push всё равно приходят — путаница. Источник истины — браузерная подписка.
+    let browserHasSub = false;
+    if (perm === "granted" && "serviceWorker" in navigator && "PushManager" in window) {
+        try {
+            // Олег 2026-08-24 10:14 MSK: добавляем таймаут на SW.ready.
+            // Без таймаута при первом запуске (SW ещё не зарегистрирован,
+            // register() в index.html не успел) функция зависает, и кнопка
+            // остаётся выкл пока пользователь не кликнет повторно.
+            const reg = await Promise.race([
+                navigator.serviceWorker.ready,
+                new Promise((_, rej) => setTimeout(() => rej(new Error("SW.ready timeout 2s")), 2000)),
+            ]);
+            const sub = await reg.pushManager.getSubscription();
+            browserHasSub = !!sub;
+        } catch (e) { /* ignore — SW ещё не готов, считаем как нет подписки */ }
+    }
+
+    if (perm === "granted" && (myAlias || myNpub)) {
+        try {
+            // Try the user-chosen alias first (e.g. "Oleg"); fall back to npub
+            // if the user never set a display name.
+            const tried = [];
+            for (const candidate of [myAlias, myNpub].filter(Boolean)) {
+                const r = await fetch(RELAY + "/push/status?alias=" + encodeURIComponent(candidate), { cache: "no-store" });
+                const j = await r.json();
+                tried.push(candidate);
+                if (j && j.subscribed) {
+                    serverHasSub = true;
+                    serverCount = j.count;
+                    break;
+                }
+            }
+            if (serverCount > 1) {
+                serverEndNote = " · " + serverCount + " дубликатов на сервере";
+            }
+        } catch (e) { /* ignore */ }
+    }
+    // Кнопка .on если браузер видит активную подписку. Серверный статус —
+    // только информативный суффикс в title.
+    if (perm === "granted" && browserHasSub) {
+        notifBtn.classList.add("on");
+        notifBtn.title = "Уведомления включены" + serverEndNote + " — нажми чтобы отключить";
+    } else if (perm === "granted") {
+        notifBtn.classList.remove("on");
+        notifBtn.title = "Браузер разрешил, но подписки нет — нажми чтобы переподключить";
+    } else if (perm === "denied") {
+        notifBtn.classList.remove("on");
+        notifBtn.title = "Уведомления заблокированы в Safari — разрешите в Настройки";
+    } else {
+        notifBtn.classList.remove("on");
+        notifBtn.title = "Включить уведомления";
+    }
+}
 const notifBtn = $("btn-notifications");
 if (notifBtn && !notifBtn.dataset.bound) {
     notifBtn.dataset.bound = "1";
-    const refresh = () => {
-        const perm = (typeof Notification !== "undefined") ? Notification.permission : "default";
-        if (perm === "granted") notifBtn.classList.add("on");
-        else notifBtn.classList.remove("on");
-    };
-    refresh();
+    updateNotifBtnState();
     notifBtn.addEventListener("click", async () => {
         notifBtn.disabled = true;
-        try { await requestPushPermission(); } finally { refresh(); notifBtn.disabled = false; }
+        try {
+            // If currently enabled, click toggles off — unsubscribe on server.
+            if (Notification && Notification.permission === "granted") {
+                try {
+                    const reg = await navigator.serviceWorker.ready;
+                    const sub = await reg.pushManager.getSubscription();
+                    if (sub) {
+                        await sub.unsubscribe();
+                        console.log("[push] browser subscription removed");
+                    }
+                } catch (e) { /* ignore */ }
+                // Also clear server-side records for this alias.
+                if (myAlias) {
+                    fetch(RELAY + "/push/unsubscribe", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ alias: myAlias }),
+                    }).catch(() => {});
+                }
+            } else {
+                await requestPushPermission();
+            }
+        } finally {
+            await updateNotifBtnState();
+            notifBtn.disabled = false;
+        }
     });
 }
 
-// ── Contacts ──
+// Олег 2026-08-24 10:14 MSK: пересчитываем кнопку при изменении подписки
+// (например, после удаления PWA или logout). Без этого кнопка остаётся выкл,
+// а push идут (или наоборот). Также повторяем после регистрации SW, т.к.
+// init-блок выше мог запуститься до navigator.serviceWorker.ready.
+if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.ready.then(() => {
+        updateNotifBtnState();
+    }).catch(() => {});
+    navigator.serviceWorker.addEventListener("message", (e) => {
+        if (e.data && e.data.type === "push-subscription-change") {
+            updateNotifBtnState();
+        }
+    });
+}
+setTimeout(() => updateNotifBtnState(), 3000); // final fallback
 //
 // Lesson #125: unreadCount хранится локально (localStorage).
 // Сервер — только address book (alias ↔ npub) и relay. Никакой
@@ -605,32 +869,47 @@ async function setupPushSubscription() {
     }
     try {
         const reg = await navigator.serviceWorker.ready;
-        const existing = await reg.pushManager.getSubscription();
-        if (existing) {
-            console.log("[push] already subscribed, endpoint=", existing.endpoint.slice(0, 60));
-            return;
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+            const vapidKey = await fetch(RELAY + "/vapid_public_key").then(r => r.text());
+            if (!vapidKey || vapidKey.length < 20) {
+                console.warn("[push] vapid key invalid:", vapidKey);
+                return;
+            }
+            const perm = Notification.permission;
+            if (perm === "denied") {
+                console.warn("[push] notifications denied by user");
+                return;
+            }
+            sub = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(vapidKey),
+            });
+            console.log("[push] created new browser subscription");
+        } else {
+            console.log("[push] re-using existing browser subscription, endpoint=", sub.endpoint.slice(0, 60));
         }
-        const vapidKey = await fetch(RELAY + "/vapid_public_key").then(r => r.text());
-        if (!vapidKey || vapidKey.length < 20) {
-            console.warn("[push] vapid key invalid:", vapidKey);
-            return;
-        }
-        const perm = Notification.permission;
-        if (perm === "denied") {
-            console.warn("[push] notifications denied by user");
-            return;
-        }
-        const sub = await reg.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: urlBase64ToUint8Array(vapidKey),
-        });
         const subJson = sub.toJSON();
-        await fetch(RELAY + "/push/register_subscribe", {
+        // Use the user-chosen alias (e.g. "Oleg", "Ирина") so the relay can
+        // match incoming envelopes whose `to_alias` is the human-readable name.
+        // Fall back to npub only if no alias has been chosen yet — this keeps
+        // pushes working through onboarding but breaks as soon as the user picks
+        // a real alias (the old npub subscription stops matching).
+        //
+        // CRITICAL (Lesson #131.10): always re-register on the server, even
+        // when reusing the existing browser subscription. Otherwise the server
+        // keeps the old `alias = npub1...` and never matches new envelopes.
+        const subAlias = myAlias || myNpub;
+        const r = await fetch(RELAY + "/push/register_subscribe", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ alias: myNpub, subscription: subJson }),
+            body: JSON.stringify({ alias: subAlias, subscription: subJson }),
         });
-        console.log("[push] subscribed and registered on server");
+        if (!r.ok) {
+            console.warn("[push] register_subscribe HTTP", r.status, await r.text());
+        } else {
+            console.log("[push] registered on server as alias=", subAlias);
+        }
     } catch (e) {
         console.warn("[push] setup failed:", e && e.message);
     }
@@ -862,6 +1141,7 @@ async function loadHistory(peer, beforeTs) {
             const existingSigSet = new Set(messages[peer].map(m => m._sig).filter(Boolean));
             const existingHashSet = new Set(messages[peer].map(m => m._hash).filter(Boolean));
             const newMsgs = [];
+            const pDecrypt = []; // async decrypt promises
             for (const m of j.messages) {
                 const fromNpub = m.from_npub || m.from;
                 const toField = m.to || m.to_alias || "";
@@ -869,22 +1149,26 @@ async function loadHistory(peer, beforeTs) {
                 const hash = m.envelope_hash || m.envelope_hash_hex || null;
                 if (hash && existingHashSet.has(hash)) continue;
                 if (!hash && existingSigSet.has(sigKey)) continue;
-                const { text: bodyText, isBinary } = extractMessageText(m);
-                const fromName = m.from_name || (m.envelope && m.envelope.from_name);
-                if (fromNpub && fromName && fromNpub !== myNpub) {
-                    setContactName(fromNpub, fromName);
-                }
-                const msg = {
-                    from: fromNpub, to: toField, body: bodyText, ts: m.ts,
-                    direction: m.direction || (fromNpub === myNpub ? "out" : "in"),
-                    sig: m.sig || "", _sig: sigKey, _hash: hash,
-                    isBinary: isBinary,
-                    status: m.direction === "out" ? "sent" : null,
-                };
-                newMsgs.push(msg);
-                if (hash) existingHashSet.add(hash);
-                existingSigSet.add(sigKey);
+                // E2E async decrypt (Олег 2026-08-24 11:00 MSK)
+                pDecrypt.push(decryptEnvelopeForRender(m).then(({ text: bodyText, attachments: attArr }) => {
+                    const fromName = m.from_name || (m.envelope && m.envelope.from_name);
+                    if (fromNpub && fromName && fromNpub !== myNpub) {
+                        setContactName(fromNpub, fromName);
+                    }
+                    const msg = {
+                        from: fromNpub, to: toField, body: bodyText, ts: m.ts,
+                        direction: m.direction || (fromNpub === myNpub ? "out" : "in"),
+                        sig: m.sig || "", _sig: sigKey, _hash: hash,
+                        isBinary: false,
+                        status: m.direction === "out" ? "sent" : null,
+                        attachments: attArr || [],
+                    };
+                    newMsgs.push(msg);
+                    if (hash) existingHashSet.add(hash);
+                    existingSigSet.add(sigKey);
+                }));
             }
+            await Promise.all(pDecrypt);
             if (newMsgs.length > 0) messages[peer] = newMsgs.concat(messages[peer]);
             if (j.next_before_ts) oldestTsForPeer[peer] = j.next_before_ts;
             renderMessages();
@@ -924,12 +1208,23 @@ function renderMessages() {
         if (isSystem) {
             statusGlyph = "⏳";
         }
-        const { text: bodyText, isBinary } = extractBodyText(m.body);
-        let bodyHtml;
-        if (isBinary || m.isBinary) {
-            bodyHtml = escapeHtml(bodyText);
-        } else {
-            bodyHtml = escapeHtml(bodyText);
+        // E2E: расшифрованное сообщение в m.body (если содержит attachments — они уже в массиве)
+        const bodyText = m.body || "";
+        const attachments = m.attachments || [];
+        let bodyHtml = escapeHtml(bodyText);
+        // Inline attachments preview (Олег 2026-08-24 11:00 MSK)
+        if (attachments.length > 0) {
+            for (const a of attachments) {
+                if (a.mime && a.mime.startsWith("image/")) {
+                    bodyHtml += `<img class="msg-attach-img" src="data:${escapeHtml(a.mime)};base64,${escapeHtml(a.data_b64)}" alt="${escapeHtml(a.name)}" />`;
+                } else if (a.mime && a.mime.startsWith("video/")) {
+                    bodyHtml += `<video class="msg-attach-video" controls src="data:${escapeHtml(a.mime)};base64,${escapeHtml(a.data_b64)}"></video>`;
+                } else if (a.mime && a.mime.startsWith("audio/")) {
+                    bodyHtml += `<audio class="msg-attach-audio" controls src="data:${escapeHtml(a.mime)};base64,${escapeHtml(a.data_b64)}"></audio>`;
+                } else {
+                    bodyHtml += `<a class="msg-attach-file" download="${escapeHtml(a.name)}" href="data:${escapeHtml(a.mime)};base64,${escapeHtml(a.data_b64)}">📎 ${escapeHtml(a.name)} (${formatSize(a.size)})</a>`;
+                }
+            }
         }
         div.innerHTML =
             bodyHtml +
@@ -967,7 +1262,84 @@ if (messagesArea) {
 }
 
 // ── Send Message ──
+// ============================================================================
+// E2E encrypt/decrypt (Олег 2026-08-24 11:00 MSK, E2E вариант B)
+// ============================================================================
+//
+// Все сообщения и файлы шифруются ECIES (X25519 ECDH + HKDF + AES-256-GCM)
+// в WASM. Relay не видит plaintext. Push-провайдеры тоже.
+//
+// API:
+//   encryptForRecipient(recipientNpub, {body, attachments}) -> base64-sealed
+//   decryptEnvelope(base64-sealed) -> {body, attachments}
+// ========================================================================
+
+/// Resolve a peer key (alias or npub) to its full npub + agreement_pubkey_hex.
+/// Returns null if not found.
+async function resolvePeerKey(peer) {
+    if (!peer) return null;
+    if (peer.startsWith("npub1")) {
+        // Это уже npub. Получаем agreement_pubkey через WASM.
+        try {
+            const mod = await loadWasmModule();
+            const r = unwrap(mod.npub_to_pubkey_hex(peer));
+            if (!r.ok) return null;
+            // r.data = "signing_pubkey_hex (32 b) + agreement_pubkey_hex (32 b)" — 128 hex chars
+            const hex = r.data;
+            if (hex.length < 128) return null;
+            return {
+                npub: peer,
+                signing_pubkey_hex: hex.slice(0, 64),
+                agreement_pubkey_hex: hex.slice(64, 128),
+            };
+        } catch (e) { return null; }
+    }
+    // Иначе alias. Ищем в contacts.
+    for (const k of Object.keys(contacts)) {
+        const c = contacts[k];
+        if (c.alias === peer || c.npub === peer || c.peer === peer) {
+            // Если у contact есть npub — используем его.
+            if (c.npub && c.npub.startsWith("npub1")) {
+                return resolvePeerKey(c.npub);
+            }
+        }
+    }
+    // Последний шанс — может это уже npub похожий на alias. Не парсим.
+    return null;
+}
+
+/// ECIES encrypt arbitrary plain object for a recipient.
+/// Returns base64 sealed envelope (32 ephem + 12 nonce + ct + tag).
+async function encryptForRecipient(recipientNpub, plainObj) {
+    const mod = await loadWasmModule();
+    // Кодируем plain в JSON → байты → base64 (для WASM границы).
+    const json = JSON.stringify(plainObj);
+    const bytes = new TextEncoder().encode(json);
+    let binStr = "";
+    for (let i = 0; i < bytes.length; i++) binStr += String.fromCharCode(bytes[i]);
+    const plainB64 = btoa(binStr);
+    const r = unwrap(mod.encrypt_for_recipient(recipientNpub, plainB64));
+    if (!r.ok) throw new Error("encrypt_for_recipient: " + r.error);
+    return r.data;
+}
+
+/// ECIES decrypt a base64 sealed envelope to original plain object.
+async function decryptEnvelope(sealedB64) {
+    const mod = await loadWasmModule();
+    const r = unwrap(mod.decrypt_envelope(sealedB64));
+    if (!r.ok) throw new Error("decrypt_envelope: " + r.error);
+    // r.data = base64 plaintext bytes → decode → JSON.parse.
+    const binStr = atob(r.data);
+    const bytes = new Uint8Array(binStr.length);
+    for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+    const json = new TextDecoder().decode(bytes);
+    return JSON.parse(json);
+}
+
 async function sendMessage() {
+    // Lesson #152: try/finally ВОКРУГ всего тела — если WASM encrypt падает на
+    // большом файле или FileReader не декодировал HEIC, btnSend оставалось
+    // disabled навсегда. finally гарантирует разблокировку.
     if (!activePeer) return;
     const text = messageInput.value.trim();
     if (!text) return;
@@ -975,37 +1347,68 @@ async function sendMessage() {
     messageInput.value = "";
     messageInput.style.height = "auto";
     btnSend.disabled = true;
-    const msg = {
-        from: myNpub, to: activePeer, body: text,
-        body_base64: bytesToBase64(new TextEncoder().encode(text)),
-        ts: Math.floor(Date.now() / 1000),
-    };
-    const myName = (localStorage.getItem(LS_NAME) || "").trim();
-    if (myName && myName !== myNpub) msg.from_name = myName;
-    const mod = await loadWasmModule();
-    const sig = mod.sign_message(text);
-    if (!sig.ok) { btnSend.disabled = false; console.error("sign error:", sig.error); return; }
-    msg.sig = sig.data;
-
-    // Optimistic render
-    if (!messages[activePeer]) messages[activePeer] = [];
-    const renderedMsg = {
-        from: myNpub, to: activePeer, body: text, ts: msg.ts,
-        direction: "out", sig: sig.data, _sig: myNpub + msg.ts,
-        status: "sent", isBinary: false, _hash: null,
-    };
-    messages[activePeer].push(renderedMsg);
-    renderMessages();
-    scrollToBottom();
-
+    // Optimistic render — в safe state до encrypt, чтобы UI не зависал.
+    let optimisticRendered = false;
+    let renderedMsg = null;
     try {
+        // E2E: resolve peer → npub, encrypt body via WASM ECIES.
+        const peerKey = await resolvePeerKey(activePeer);
+        if (!peerKey) {
+            console.error("sendMessage: cannot resolve peer key for", activePeer);
+            return;
+        }
+        const sealedB64 = await encryptForRecipient(peerKey.npub, {
+            body: text,
+            attachments: pendingAttachments, // [{name, mime, size, data_b64}]
+        });
+        pendingAttachments = []; // clear after encrypt
+        renderAttachmentsPreview();
+
+        const msg = {
+            from: myNpub,
+            to: activePeer,
+            ct: sealedB64,         // ← E2E sealed envelope (base64)
+            attachments_meta: pendingAttachmentsMeta, // public meta (no file data)
+            ts: Math.floor(Date.now() / 1000),
+        };
+        pendingAttachmentsMeta = [];
+        const myName = (localStorage.getItem(LS_NAME) || "").trim();
+        if (myName && myName !== myNpub) msg.from_name = myName;
+        const mod = await loadWasmModule();
+        // Signature covers (from|to|ts|ct) via canonical envelope hash, same as
+        // relay's `Envelope::verify`. sig input = SHA3(npub || payload).
+        // (Олег 2026-08-24 11:00 MSK, E2E — гарантия что relay не подменил `ct`.)
+        const signedPayload = msg.from + "|" + msg.to + "|" + msg.ts + "|" + msg.ct;
+        const sigPayloadBytes = new TextEncoder().encode(signedPayload);
+        const sig = unwrap(mod.sign_envelope(msg.from, sigPayloadBytes));
+        if (!sig.ok) { console.error("sign error:", sig.error); return; }
+        msg.sig = sig.data;
+        // btoa может сломаться на 50MB — используем chunked encode.
+        let binStr = "";
+        const CHUNK = 0x8000;
+        for (let i = 0; i < sigPayloadBytes.length; i += CHUNK) {
+            binStr += String.fromCharCode.apply(null, sigPayloadBytes.subarray(i, i + CHUNK));
+        }
+        msg.signed_payload = btoa(binStr);
+
+        // Optimistic render
+        if (!messages[activePeer]) messages[activePeer] = [];
+        renderedMsg = {
+            from: myNpub, to: activePeer, body: text, ts: msg.ts,
+            direction: "out", sig: sig.data, _sig: myNpub + msg.ts,
+            status: "sent", isBinary: false, _hash: null,
+        };
+        messages[activePeer].push(renderedMsg);
+        optimisticRendered = true;
+        renderMessages();
+        scrollToBottom();
+
         const r = await fetch(RELAY + "/envelope?to=" + encodeURIComponent(activePeer), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(msg),
         });
         if (r.ok) {
-            btnSend.disabled = false;
             // Lesson #128: сохраняем envelope_hash из ответа для надёжного дедупа
             // (сервер может переписать ts, тогда дедуп по myNpub+ts сломается).
             try {
@@ -1023,14 +1426,20 @@ async function sendMessage() {
             }
             renderChatList();
         } else {
-            btnSend.disabled = false;
             const last = messages[activePeer][messages[activePeer].length - 1];
             if (last) { last.status = "failed"; renderMessages(); }
         }
     } catch (e) {
+        // Lesson #152: ошибка (HEIC blob падает в WASM encrypt, network drop, итд)
+        // — откатить optimistic render и показать failed.
+        console.error("[murmur] sendMessage caught:", e.message);
+        if (optimisticRendered && renderedMsg) {
+            renderedMsg.status = "failed";
+            renderMessages();
+        }
+    } finally {
+        // 🔒 Lesson #152: всегда разблокируем кнопку, даже если WASM encrypt упал.
         btnSend.disabled = false;
-        const last = messages[activePeer][messages[activePeer].length - 1];
-        if (last) { last.status = "failed"; renderMessages(); }
     }
 }
 
@@ -1080,6 +1489,103 @@ messageInput?.addEventListener("keydown", (e) => {
 });
 
 btnSend?.addEventListener("click", sendMessage);
+
+// Attach button + file input (Олег 2026-08-24 11:00 MSK)
+const btnAttach = $("btn-attach");
+const fileInput = $("file-input");
+const attachmentsPreview = $("attachments-preview");
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024; // 50 MB per file
+
+if (btnAttach && fileInput) {
+    btnAttach.addEventListener("click", () => fileInput.click());
+    // Lesson #153: HEIC / HEIF не поддерживается в браузерах вне macOS Safari.
+    // Если пользватель как-то протащил HEIC (drag/drop или Safari игнорирует accept),
+    // показываем chip в UI вместо того чтобы принять файл и зависнуть на encrypt.
+    const UNSUPPORTED_MIMES = new Set(["image/heic", "image/heif"]);
+    const UNSUPPORTED_EXTS = /\.(heic|heif)$/i;
+    function isUnsupported(file) {
+        return UNSUPPORTED_MIMES.has(file.type) || UNSUPPORTED_EXTS.test(file.name || "");
+    }
+    fileInput.addEventListener("change", async (e) => {
+        const files = Array.from(e.target.files || []);
+        for (const file of files) {
+            if (isUnsupported(file)) {
+                pushRejectedChip(file, "HEIC/HEIF не поддерживается. Сконвертируйте в JPG/PNG.");
+                continue;
+            }
+            if (file.size > MAX_ATTACHMENT_BYTES) {
+                alert(`Файл ${file.name} превышает 50 МБ (${formatSize(file.size)}).`);
+                continue;
+            }
+            const dataB64 = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const buf = reader.result;
+                    const bytes = new Uint8Array(buf);
+                    let bin = "";
+                    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+                    resolve(btoa(bin));
+                };
+                reader.onerror = reject;
+                reader.readAsArrayBuffer(file);
+            });
+            pendingAttachments.push({
+                name: file.name,
+                mime: file.type || "application/octet-stream",
+                size: file.size,
+                data_b64: dataB64,
+            });
+            pendingAttachmentsMeta.push({
+                name: file.name,
+                mime: file.type || "application/octet-stream",
+                size: file.size,
+            });
+        }
+        fileInput.value = ""; // reset для повторного выбора того же файла
+        renderAttachmentsPreview();
+    });
+}
+
+function renderAttachmentsPreview() {
+    if (!attachmentsPreview) return;
+    attachmentsPreview.innerHTML = "";
+    for (let i = 0; i < pendingAttachments.length; i++) {
+        const a = pendingAttachments[i];
+        const chip = document.createElement("span");
+        chip.className = "attach-chip";
+        chip.innerHTML = `📎 ${escapeHtml(a.name)} (${formatSize(a.size)}) <span class="x" data-idx="${i}">✕</span>`;
+        chip.querySelector(".x").addEventListener("click", () => {
+            pendingAttachments.splice(i, 1);
+            pendingAttachmentsMeta.splice(i, 1);
+            renderAttachmentsPreview();
+        });
+        attachmentsPreview.appendChild(chip);
+    }
+    // Rejected files (HEIC, etc) — chip с warning.
+    for (let i = 0; i < rejectedChips.length; i++) {
+        const r = rejectedChips[i];
+        const chip = document.createElement("span");
+        chip.className = "attach-chip rejected";
+        chip.title = r.reason;
+        chip.innerHTML = `⚠️ ${escapeHtml(r.name)} (${formatSize(r.size)}) — ${escapeHtml(r.reason)} <span class="x" data-ridx="${i}">✕</span>`;
+        chip.querySelector(".x").addEventListener("click", () => {
+            rejectedChips.splice(i, 1);
+            renderAttachmentsPreview();
+        });
+        attachmentsPreview.appendChild(chip);
+    }
+}
+
+// Lesson #153: push rejected file chip (HEIC, etc.) в preview area.
+let rejectedChips = [];
+function pushRejectedChip(file, reason) {
+    rejectedChips.push({ name: file.name, size: file.size, reason });
+    renderAttachmentsPreview();
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+}
 
 btnBack?.addEventListener("click", () => {
     sidebar.classList.remove("hidden");
@@ -1181,7 +1687,7 @@ function handleIncomingEnvelope(env) {
     const peer = normalizePeer(fromNpub === myNpub ? toField : fromNpub);
     if (!messages[peer]) messages[peer] = [];
 
-    // Use canonical fromNpub+ts as dedup key (sig is too long and would never
+    // Use canonical from Npub+ts as dedup key (sig is too long and would never
     // match the optimistic message key).
     const sigKey = fromNpub + env.ts;
     // Lesson #128: более надёжный дедуп — по envelope_hash, если WS push его
@@ -1206,48 +1712,50 @@ function handleIncomingEnvelope(env) {
         return;
     }
 
-    const { text: bodyText, isBinary } = extractBodyText(env);
+    // E2E: если есть `ct` — расшифровываем async, иначе plaintext fallback.
+    decryptEnvelopeForRender(env).then(({ text: bodyText, isBinary, attachments }) => {
+        // Remember peer's display name if it came along with the envelope.
+        const fromName = env.from_name || (env.envelope && env.envelope.from_name);
+        if (fromNpub && fromName && fromNpub !== myNpub) {
+            setContactName(fromNpub, fromName);
+        }
 
-    // Remember peer's display name if it came along with the envelope.
-    const fromName = env.from_name || (env.envelope && env.envelope.from_name);
-    if (fromNpub && fromName && fromNpub !== myNpub) {
-        setContactName(fromNpub, fromName);
-    }
+        const msg = {
+            from: fromNpub, to: toField, body: bodyText, ts: env.ts,
+            direction: "in",
+            sig: env.sig || "", _sig: sigKey, _hash: hash,
+            isBinary: isBinary, status: null, attachments: attachments || [],
+        };
+        messages[peer].push(msg);
 
-    const msg = {
-        from: fromNpub, to: toField, body: bodyText, ts: env.ts,
-        direction: "in",
-        sig: env.sig || "", _sig: sigKey, _hash: hash,
-        isBinary: isBinary, status: null,
-    };
-    messages[peer].push(msg);
+        if (!contacts[peer]) {
+            contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
+        }
+        contacts[peer].lastMessagePreview = bodyText.slice(0, 80);
+        contacts[peer].lastTs = env.ts;
 
-    if (!contacts[peer]) {
-        contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
-    }
-    contacts[peer].lastMessagePreview = bodyText.slice(0, 80);
-    contacts[peer].lastTs = env.ts;
-    // Lesson #127: при reload WS присылает старые envelopes. Если ts <= maxTs,
-    // сообщение уже было показано/прочитано — не bumpUnread.
-    // Lesson #131 + #132.1: при ЛЮБОМ входящем envelope (в т.ч. self-sender
-    // с другого устройства) — снимаем скрытие. Без этого чат навсегда
-    // останется скрытым, если юзер использует один ключ на нескольких
-    // устройствах и удалит чат.
-    if (isHiddenPeer(peer)) {
-        unhidePeer(peer);
-    }
-    const prevMax = getMaxTs(peer);
-    if (activePeer !== peer && env.ts > prevMax) {
-        bumpUnread(peer);
-        contacts[peer].unreadCount = getUnread(peer);
-    }
-    updateMaxTs(peer, env.ts);
+        // Lesson #127: при reload WS присылает старые envelopes. Если ts <= maxTs,
+        // сообщение уже было показано/прочитано — не bumpUnread.
+        // Lesson #131 + #132.1: при ЛЮБОМ входящем envelope (в т.ч. self-sender
+        // с другого устройства) — снимаем скрытие. Без этого чат навсегда
+        // останется скрытым, если юзер использует один ключ на нескольких
+        // устройствах и удалит чат.
+        if (isHiddenPeer(peer)) {
+            unhidePeer(peer);
+        }
+        const prevMax = getMaxTs(peer);
+        if (activePeer !== peer && env.ts > prevMax) {
+            bumpUnread(peer);
+            contacts[peer].unreadCount = getUnread(peer);
+        }
+        updateMaxTs(peer, env.ts);
 
-    renderChatList();
-    if (activePeer === peer) {
-        renderMessages();
-        scrollToBottom();
-    }
+        renderChatList();
+        if (activePeer === peer) {
+            renderMessages();
+            scrollToBottom();
+        }
+    });
 }
 
 // ── HTTP Polling (fallback) ──
@@ -1479,7 +1987,7 @@ async function tryAutoRestore() {
     try {
         await ensureWasm();
         const mod = await loadWasmModule();
-        const res = mod.identity_restore(savedKey);
+        const res = unwrap(mod.identity_restore(savedKey));
         if (res && res.ok && res.data && res.data.npub === savedNpub) {
             myNpub = res.data.npub;
             signKeyHex = res.data.signing_sk_hex;

@@ -55,13 +55,11 @@ impl MessageStore {
                 to_alias      TEXT NOT NULL,
                 body          BLOB NOT NULL,
                 sig           BLOB NOT NULL DEFAULT X'',
-                ts            INTEGER NOT NULL,
-                expires_at    INTEGER NOT NULL DEFAULT 0
+                ts            INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_envelopes_from ON envelopes(from_npub);
             CREATE INDEX IF NOT EXISTS idx_envelopes_to_alias ON envelopes(to_alias);
             CREATE INDEX IF NOT EXISTS idx_envelopes_to_alias_ts ON envelopes(to_alias, ts);
-            CREATE INDEX IF NOT EXISTS idx_envelopes_expires_at ON envelopes(expires_at);
             CREATE TABLE IF NOT EXISTS user_aliases (
                 alias  TEXT PRIMARY KEY,
                 npub   TEXT NOT NULL,

@@ -113,9 +113,9 @@ impl SubscriberHub {
 
     /// Broadcast a pending entry to all subscribers of `to_alias`.
     /// Returns number of subscribers reached.
-    pub fn broadcast(&self, entry: &PendingEntry) -> usize {
+    pub fn broadcast(&self, entry: &PendingEntry, store: Option<&crate::storage::MessageStore>) -> usize {
         let msg = WsMessage::Push(entry.clone());
-        let payload = PushPayload::from_entry(entry);
+        let payload = PushPayload::from_entry(entry, store);
         let mut inner = self.inner.lock();
         let mut n = 0usize;
         if let Some(list) = inner.subs.get_mut(&entry.to_alias) {
@@ -167,7 +167,7 @@ mod tests {
             envelope_bytes: vec![0xaa; 8],
             envelope_hash_hex: "deadbeef".into(),
         };
-        let n = hub.broadcast(&entry);
+        let n = hub.broadcast(&entry, None);
         assert_eq!(n, 1);
         let got = rx.try_recv().unwrap();
         match got {
