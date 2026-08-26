@@ -135,15 +135,15 @@
             }
             return;
           }
-          // app.js not loaded yet — wait up to 10s for it (PWA cold-start on iPhone
-          // can take 3-5s when app.js + WASM module load over Cloudflare tunnel).
-          // Retries every 200ms. Once handler appears, invokes it.
+          // app.js not loaded yet — wait up to 30s for it (PWA cold-start on iPhone
+          // can take 10-20s when app.js + WASM module (181 KB) load over Cloudflare
+          // tunnel from Russian IP — Lesson #203 (Олег 2026-08-26)).
           const err = document.getElementById("identity-error");
           if (err) {
             err.hidden = false;
-            err.textContent = "PWA загружается… подожди";
+            err.textContent = "PWA загружается… подожди (до 30 сек)";
           }
-          const deadline = Date.now() + 10000;
+          const deadline = Date.now() + 30000;
           while (Date.now() < deadline && typeof window[fnName] !== "function") {
             await new Promise(r => setTimeout(r, 200));
           }
