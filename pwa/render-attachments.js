@@ -165,6 +165,11 @@ function renderByMime({ mime, name, blobUrl, size }) {
         img.loading = "lazy";
         img.className = "attach-image";
         img.onclick = () => openFullscreen(blobUrl, mime);
+        // Lesson #225 (Олег 2026-08-26 16:05): register img element → blob URL
+        // для MutationObserver auto-revoke на detach.
+        if (window.__murmurBlobOwners) {
+            window.__murmurBlobOwners.set(img, blobUrl);
+        }
         figure.appendChild(img);
     } else if (mime.startsWith("video/")) {
         const v = document.createElement("video");
@@ -172,6 +177,7 @@ function renderByMime({ mime, name, blobUrl, size }) {
         v.controls = true;
         v.preload = "metadata";
         v.className = "attach-video";
+        if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(v, blobUrl);
         figure.appendChild(v);
     } else if (mime.startsWith("audio/")) {
         const a = document.createElement("audio");
@@ -179,6 +185,7 @@ function renderByMime({ mime, name, blobUrl, size }) {
         a.controls = true;
         a.preload = "metadata";
         a.className = "attach-audio";
+        if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(a, blobUrl);
         figure.appendChild(a);
     } else {
         const link = document.createElement("a");
