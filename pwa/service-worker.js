@@ -8,7 +8,7 @@
 // below deletes every cache whose name doesn't match the current version,
 // so old SW-controlled clients get the fresh files automatically without
 // the user needing to add ?v=N to the URL.
-const CACHE_VERSION = "murmur-v85";
+const CACHE_VERSION = "murmur-v86";
 const PRECACHE = []; // No precache — browser handles HTTP cache naturally.
 
 // Lesson #217 (Олег 2026-08-26 15:21): allow client to request skipWaiting
@@ -52,18 +52,35 @@ self.addEventListener("activate", (event) => {
   })());
 });
 
-// Lesson #219 (Олег 2026-08-26 15:42): fetch handler возвращён ТОЛЬКО для
-// навигации (HTML) — перенаправляет на версионированный URL, чтобы пробить
-// iOS Safari PWA HTML cache. Не перехватываем app.js / images / API —
-// для них HTTP cache достаточно (?v= query string).
+// Lesson #220 (Олег 2026-08-26 15:51): ULTRA-DEFENSIVE fix — предыдущий
+// Lesson #219 redirect ломал iPhone с "Load cannot follow more than 20
+// redirections" — SW redirectил на ?v=85, SW опять перехватывал, бесконечный loop.
+//
+// НОВОЕ решение: redirect ТОЛЬКО когда:
+// 1. Это navigation request (не sub-resource)
+// 2. URL НЕ содержит ?v= query (иначе уже на fresh URL — pass through)
+// Это избегает redirect-loop, но всё ещё пробивает iOS HTML cache для initial loads.
 self.addEventListener("fetch", (event) => {
     const req = event.request;
-    // Только navigation requests (HTML)
     if (req.mode === "navigate") {
         const url = new URL(req.url);
-        // Перенаправляем на версионированный путь
-        const target = `${url.origin}/index.html?v=${CACHE_VERSION}`;
-        event.respondWith(Response.redirect(target, 302));
+        // Pass-through если уже версионированный URL (избегаем loop)
+        if (url.searchParams.has("v")) {
+            return;  // let browser handle normally
+        }
+        // Pass-through если уже /index.html (на случай если initial URL)
+        if (url.pathname.endsWith("/index.html")) {
+            return;
+        }
+        // Pass-through для API routes
+        if (url.pathname.startsWith("/api/")) {
+            return;
+        }
+        // Только для root "/" → redirect на versioned index
+        if (url.pathname === "/" || url.pathname === "") {
+            const target = `${url.origin}/index.html?v=${CACHE_VERSION}`;
+            event.respondWith(Response.redirect(target, 302));
+        }
     }
     // Остальное: pass-through
 });
