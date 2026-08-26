@@ -636,11 +636,17 @@ function enterMessenger() {
     // Lesson #212: show app version + SW version banner for debugging
     const banner = $("version-banner");
     if (banner) {
-        // Lesson #218: window.__APP_VERSION__ ставится в inline-script в index.html
-        // (document.currentScript возвращает null для defer-скриптов)
-        const scriptVer = window.__APP_VERSION__ || "?";
+        // Lesson #222: 3-tier version detection — meta tag → window var → script query
+        let scriptVer = "?";
+        try {
+            const meta = document.querySelector('meta[name="app-version"]');
+            if (meta && meta.content) {
+                scriptVer = meta.content.replace(/^v/i, "");
+            }
+        } catch (e) {}
+        if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v86. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v87. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
