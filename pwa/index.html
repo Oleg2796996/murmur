@@ -11,7 +11,11 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
     <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
-    <link rel="stylesheet" href="styles.css">
+    <!-- Lesson #216: cache busting via ?v= query string. iOS Safari PWA
+     caches app.js via HTTP cache independently of SW. Query string forces
+     re-fetch on each version bump. SW CACHE_VERSION also bumps for SW
+     activation, but the app.js itself needs explicit URL change. -->
+    <link rel="stylesheet" href="styles.css?v=83">
 </head>
 <body>
     <!-- ================= IDENTITY SCREEN (create/restore) ================= -->
@@ -171,14 +175,36 @@
       // Safety: if app.js was loaded before this script, handlers are already wired there.
       console.log("[murmur] inline handlers bound");
     </script>
-    <script src="blob-cache.js" defer></script>
-    <script src="render-attachments.js" defer></script>
-    <script src="app.js" defer></script>
+    <!-- Lesson #216 (Олег 2026-08-26 15:18): ?v= cache busting — iOS Safari
+     HTTP cache не обновляет app.js по CACHE_VERSION bump alone.
+     Query string = guaranteed fresh load on each deploy. -->
+    <script src="blob-cache.js?v=83" defer></script>
+    <script src="render-attachments.js?v=83" defer></script>
+    <script src="app.js?v=83" defer></script>
     <script>
       // Register service worker for offline support & cache versioning.
       // Bump CACHE_VERSION in service-worker.js to invalidate client caches.
       if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/service-worker.js").catch(console.error);
+        navigator.serviceWorker.register("/service-worker.js?v=83").then(reg => {
+          // Lesson #217 (Олег 2026-08-26 15:21): на iPhone PWA новый SW часто
+          // НЕ устанавливается даже после reinstall. Force-update check
+          // каждые 30 секунд пока PWA активна — гарантирует что клиент
+          // подхватит новый SW сразу как сервер его отдаст.
+          setInterval(() => reg.update().catch(() => {}), 30000);
+          // Принудительный reload если новый SW взяв control — но только если
+          // есть controlled client и не было manual user action (reload).
+          if (reg.waiting) {
+            // Если ждёт — попросить skipWaiting и reload клиентов
+            reg.waiting.postMessage({ type: "SKIP_WAITING" });
+          }
+        }).catch(console.error);
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          // Новый SW взял control — reload чтобы загрузить свежий app.js?в=v83
+          if (!sessionStorage.getItem("reloaded-by-sw")) {
+            sessionStorage.setItem("reloaded-by-sw", "1");
+            location.reload();
+          }
+        });
       }
     </script>
 </body>
