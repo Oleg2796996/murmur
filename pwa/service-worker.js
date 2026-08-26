@@ -8,8 +8,15 @@
 // below deletes every cache whose name doesn't match the current version,
 // so old SW-controlled clients get the fresh files automatically without
 // the user needing to add ?v=N to the URL.
-const CACHE_VERSION = "murmur-v82";
+const CACHE_VERSION = "murmur-v83";
 const PRECACHE = []; // No precache — browser handles HTTP cache naturally.
+
+// Lesson #217 (Олег 2026-08-26 15:21): allow client to request skipWaiting
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
+});
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -35,6 +42,13 @@ self.addEventListener("activate", (event) => {
       names.map((n) => (n === CACHE_VERSION ? null : caches.delete(n)))
     );
     await self.clients.claim();
+    // Lesson #217 (Олег 2026-08-26 15:21): на iPhone PWA даже после reinstall
+    // остаётся на старом SW (не активируется новый). После activate — force-reload
+    // всех controlled clients, чтобы они загрузили свежие app.js?в=v83 из server.
+    const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const client of clients) {
+        try { client.navigate(client.url); } catch (e) { /* ignore */ }
+    }
   })());
 });
 

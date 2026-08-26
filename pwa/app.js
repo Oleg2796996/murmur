@@ -636,9 +636,13 @@ function enterMessenger() {
     // Lesson #212: show app version + SW version banner for debugging
     const banner = $("version-banner");
     if (banner) {
-        const swVer = (typeof self !== "undefined" && self.CACHE_VERSION) || "?";
-        banner.textContent = "app?v80 · sw?" + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v80. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        // Lesson #216: показываем РЕАЛЬНЫЙ script src version из document.currentScript
+        const me = document.currentScript;
+        const mySrc = me?.src || "";
+        const verMatch = mySrc.match(/[?&]v=(\d+)/);
+        const scriptVer = verMatch ? verMatch[1] : "?";
+        banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
+        banner.title = "Build murmur-v83. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
