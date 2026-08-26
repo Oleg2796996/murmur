@@ -417,6 +417,8 @@ function renderOutgoingAttachment({ mime, name, url, size }) {
         img.alt = name || "image";
         img.loading = "lazy";
         img.className = "attach-image";
+        // Lesson #225: register для auto-revoke на detach
+        if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(img, url);
         figure.appendChild(img);
     } else if (mime.startsWith("video/")) {
         const v = document.createElement("video");
@@ -424,6 +426,7 @@ function renderOutgoingAttachment({ mime, name, url, size }) {
         v.controls = true;
         v.preload = "metadata";
         v.className = "attach-video";
+        if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(v, url);
         figure.appendChild(v);
     } else if (mime.startsWith("audio/")) {
         const a = document.createElement("audio");
@@ -431,6 +434,7 @@ function renderOutgoingAttachment({ mime, name, url, size }) {
         a.controls = true;
         a.preload = "metadata";
         a.className = "attach-audio";
+        if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(a, url);
         figure.appendChild(a);
     } else {
         const link = document.createElement("a");
@@ -646,7 +650,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v87. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v88. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -1568,9 +1572,12 @@ function renderMessages() {
                         const mime = att.mime || "application/octet-stream";
                         const blob = b64ToBlob(att.plaintext_b64, mime);
                         const url = URL.createObjectURL(blob);
-                        // Lesson #207: track URL for revoke on next render
-                        window.__murmurUrlsToRevoke.push(url);
+                        // Lesson #225: track в WeakMap imgElement→blobUrl для авто-revoke
+                        // (но сначала надо создать img element чтобы зарегистрировать)
                         const el = renderOutgoingAttachment({ mime, name: att.name, url, size: att.size });
+                        if (el && el.tagName === "IMG" && window.__murmurBlobOwners) {
+                            window.__murmurBlobOwners.set(el, url);
+                        }
                         placeholderEl.appendChild(el);
                     } catch (e) {
                         console.error("[attach-out] render failed:", e);
@@ -1634,27 +1641,39 @@ function renderMessages() {
             })();
         }
     }
-    // Lesson #207: blob URLs must be revoked ONLY when their DOM element is removed
-    // (not on a fixed setTimeout — on slow iPhone tunnel decrypt+fetch takes >5s,
-    // and the previous setTimeout(5000) was revoking URLs while decrypt was still
-    // in flight, leaving the placeholder spinner forever with a broken blob:src).
-    // WeakMap: element -> Set<url>. On detach, revoke all urls.
-    const urlOwners = window.__murmurUrlOwners || new WeakMap();
-    window.__murmurUrlOwners = urlOwners;
-    if (previousUrls && previousUrls.length > 0) {
-        for (const url of previousUrls) {
-            // Only revoke if no owner DOM element references it (already detached).
-            // We can't easily detect that here — instead, defer revoke until
-            // element.remove() via observer (Lesson #213).
-            // For now: revoke after 30s (covers even slowest decrypt path).
-            setTimeout(() => {
-                try { URL.revokeObjectURL(url); } catch (e) { /* ignore */ }
-            }, 30000);
-        }
-        if (previousUrls.length > 0) {
-            console.log("[murmur] queued revoke for", previousUrls.length, "blob URLs (30s)");
+    // Lesson #225 (Олег 2026-08-26 16:05): ИЗЯЩНОЕ решение для blob URL lifecycle.
+    //
+    // Проблема: Lesson #213 setTimeout(30000) revokeObjectURL убивал blob URL
+    // ДО того как img element был detached от DOM — img.src = blob:revoked_url
+    // → broken image icon. На iPhone slow tunnel decrypt >30s → ещё хуже.
+    //
+    // Решение: WeakMap<imgElement, blobUrl>. MutationObserver отслеживает когда
+    // img удаляется из DOM → revoke его URL. Никаких таймаутов — URLs живут
+    // ровно столько, сколько нужен для отображения. Слабая ссылка WeakMap —
+    // img element GC → URL entry тоже GC (без утечек).
+    if (typeof window.__murmurBlobOwners === "undefined") {
+        window.__murmurBlobOwners = new WeakMap();  // imgEl -> blobUrl
+        if (!window.__murmurBlobObserver) {
+            window.__murmurBlobObserver = new MutationObserver((mutations) => {
+                for (const mut of mutations) {
+                    for (const node of mut.removedNodes) {
+                        if (node && node.tagName === "IMG" && node.src && node.src.startsWith("blob:")) {
+                            const url = window.__murmurBlobOwners.get(node);
+                            if (url) {
+                                try { URL.revokeObjectURL(url); } catch (e) { /* ignore */ }
+                                window.__murmurBlobOwners.delete(node);
+                                console.log("[murmur] auto-revoke img blob URL on detach");
+                            }
+                        }
+                    }
+                }
+            });
+            window.__murmurBlobObserver.observe(document.body, { childList: true, subtree: true });
         }
     }
+    // Lesson #225: previousUrls больше не нужен — URLs revoke'ятся автоматически
+    // когда img detach'ится. Никакого setTimeout, никаких ручных вызовов.
+    void previousUrls;  // silence unused warning
 }
 
 // Day divider label: "Сегодня", "Вчера", or "12 авг".
@@ -2560,17 +2579,29 @@ async function pollHistoryForPeer(peer) {
                         for (let i = 0; i < encMsgs.length; i++) {
                             const r = results[i];
                             const m = encMsgs[i];
-                            // Phase 3: server's attachment_refs (blob_id, wrapped_key, iv, mime)
-                            // come from _server_msg.attachments, NOT from decrypted plaintext.
-                            if (m._server_msg && Array.isArray(m._server_msg.attachments)) {
+                            // Lesson #224 (Олег 2026-08-26 16:05): для outgoing с
+                            // resolvedAttachmentsMeta (из outbox fallback или
+                            // Lesson #214) НЕ заменять attachments_meta на
+                            // _server_msg.attachments — это вызывает ДУБЛЬ чип
+                            // (рендер из resolvedAttachmentsMeta + из новых
+                            // attachments_meta). Только incoming может
+                            // подставлять attachments_meta с сервера.
+                            if (m.direction === "in" && m._server_msg && Array.isArray(m._server_msg.attachments)) {
                                 m.attachments_meta = m._server_msg.attachments;
                             }
                             if (r && r.text && r.text !== "__DECRYPT_FAILED__") {
-                                m.body = r.text;
-                                if (r.attachments) m.attachments = r.attachments;
+                                // Lesson #224: для outgoing НЕ перезаписывать body —
+                                // он либо из outbox (correct), либо из Lesson #201
+                                // fallback (correct). Только incoming — async decrypt.
+                                if (m.direction === "in") {
+                                    m.body = r.text;
+                                    if (r.attachments) m.attachments = r.attachments;
+                                }
                                 changed = true;
                             } else if (r && r.text === "__DECRYPT_FAILED__") {
-                                m.body = "[не удалось расшифровать]";
+                                if (m.direction === "in") {
+                                    m.body = "[не удалось расшифровать]";
+                                }
                                 changed = true;
                             }
                         }
