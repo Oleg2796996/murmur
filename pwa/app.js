@@ -1321,7 +1321,7 @@ async function loadHistory(peer, beforeTs) {
                             }
                             if (best) {
                                 local = best;
-                                console.warn("[murmur] loadHistory: outbox ts-proximity fallback for peer", peer.slice(0, 12), "delta=", bestDelta);
+                                console.warn("[murmur] loadHistory: outbox ts-proximity fallback for peer", peer.slice(0, 12), "delta=", bestDelta, "want_ts=", m.ts, "got_ts=", best.ts, "hash_want=", hash, "hash_got=", best._hash, "body_want=", m.body ? m.body.slice(0, 20) : null, "body_got=", best.body ? best.body.slice(0, 20) : null);
                             }
                         }
                     }
