@@ -38,6 +38,8 @@ futures = "0.3"
 async-channel = "2"
 parking_lot = "0.12"
 sha3 = "0.10"
+rand = "0.8"
+sha2 = "0.10"
 futures-lite = "2"
 clap = { version = "4", features = ["derive"] }
 

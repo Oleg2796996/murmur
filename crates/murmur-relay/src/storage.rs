@@ -35,6 +35,20 @@ pub struct HistoryRow {
     pub sig: Vec<u8>,
     pub ts: i64,
     pub envelope_hash: String,
+    /// Phase 2 (Variant Б): attachments for this envelope.
+    /// [{blob_id, wrapped_key, name, mime, size, position}]
+    pub attachments: Vec<AttachmentMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AttachmentMeta {
+    pub blob_id: String,
+    pub wrapped_key: String,
+    pub iv: String,
+    pub name: String,
+    pub mime: Option<String>,
+    pub size: Option<u64>,
+    pub position: i64,
 }
 
 #[derive(Debug)]
@@ -65,6 +79,32 @@ impl MessageStore {
                 npub   TEXT NOT NULL,
                 unread INTEGER NOT NULL DEFAULT 0
             );
+            -- Phase 1 attachments (Variant B): blobs table + attachment_refs table.
+            -- Lesson #165: отдельный /upload endpoint, inline base64 anti-pattern.
+            CREATE TABLE IF NOT EXISTS blobs (
+                id           TEXT PRIMARY KEY,
+                sha256       CHAR(64) NOT NULL UNIQUE,
+                mime         VARCHAR(127) NOT NULL,
+                size         INTEGER NOT NULL CHECK (size > 0 AND size <= 52428800),
+                storage_path TEXT NOT NULL,
+                created_at   INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS INTEGER)),
+                ref_count    INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE INDEX IF NOT EXISTS idx_blobs_sha256 ON blobs(sha256);
+            CREATE INDEX IF NOT EXISTS idx_blobs_created_at ON blobs(created_at);
+            CREATE TABLE IF NOT EXISTS attachment_refs (
+                id             TEXT PRIMARY KEY,
+                envelope_hash  CHAR(64) NOT NULL,
+                blob_id        TEXT NOT NULL REFERENCES blobs(id),
+                wrapped_key    TEXT NOT NULL,
+                iv             TEXT NOT NULL DEFAULT '',
+                name           VARCHAR(255) NOT NULL,
+                position       SMALLINT NOT NULL DEFAULT 0,
+                created_at     INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS INTEGER)),
+                original_size  INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_attachment_refs_envelope ON attachment_refs(envelope_hash);
+            CREATE INDEX IF NOT EXISTS idx_attachment_refs_blob ON attachment_refs(blob_id);
             ",
         )?;
         // Migration: если таблица envelopes была создана раньше, добавить expires_at.
@@ -95,12 +135,62 @@ impl MessageStore {
                  CREATE INDEX IF NOT EXISTS idx_envelopes_recipient_unread ON envelopes(to_alias, from_npub, read_at);",
             )?;
         }
+        // Migration: original_size в attachment_refs (Phase 2 enhancement).
+        let has_original_size: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('attachment_refs') WHERE name = 'original_size'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if has_original_size == 0 {
+            conn.execute_batch(
+                "ALTER TABLE attachment_refs ADD COLUMN original_size INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
+        // Migration: iv в attachment_refs (Phase 3 — нужен получателю для AES-GCM decrypt).
+        let has_iv: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('attachment_refs') WHERE name = 'iv'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if has_iv == 0 {
+            conn.execute_batch(
+                "ALTER TABLE attachment_refs ADD COLUMN iv TEXT NOT NULL DEFAULT '';",
+            )?;
+        }
         debug!(db_path = %path.display(), "message store initialised");
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
     fn exec_sql(&self, sql: &str, p: impl rusqlite::Params) -> rusqlite::Result<usize> {
         self.conn.lock().execute(sql, p)
+    }
+
+    /// Crate-internal accessor for upload module to do raw SQL.
+    pub(crate) fn with_conn<R>(&self, f: impl FnOnce(&mut rusqlite::Connection) -> rusqlite::Result<R>) -> rusqlite::Result<R> {
+        let mut c = self.conn.lock();
+        f(&mut c)
+    }
+
+    /// Generate a v4-like UUID string from OS RNG. Used for attachment_refs.id.
+    pub fn new_attachment_ref_id() -> String {
+        use rand::RngCore;
+        let mut bytes = [0u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        // Set version (4) and variant (RFC 4122).
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5],
+            bytes[6], bytes[7],
+            bytes[8], bytes[9],
+            bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        )
     }
 
     pub fn upsert_envelope(
@@ -118,6 +208,75 @@ impl MessageStore {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![hash, from, to_alias, body, sig, ts, expires_at],
         )?;
+        Ok(n > 0)
+    }
+
+    /// Phase 2 (Variant Б): upsert envelope + insert attachment_refs atomically.
+    /// attachments_meta: [{blob_id, wrapped_key, name, mime, size}] from envelope JSON.
+    /// Returns Ok(true) if a NEW envelope was inserted (refcount for blobs incremented),
+    /// Ok(false) if it was a duplicate (refs skipped to avoid double-counting).
+    pub fn upsert_envelope_with_attachments(
+        &self,
+        hash: &str,
+        from: &str,
+        to_alias: &str,
+        body: &[u8],
+        sig: &[u8],
+        ts: i64,
+        expires_at: i64,
+        attachments_meta: &[serde_json::Value],
+    ) -> rusqlite::Result<bool> {
+        let mut c = self.conn.lock();
+        let tx = c.transaction()?;
+        let n = tx.execute(
+            "INSERT OR IGNORE INTO envelopes (envelope_hash, from_npub, to_alias, body, sig, ts, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![hash, from, to_alias, body, sig, ts, expires_at],
+        )?;
+        if n > 0 && !attachments_meta.is_empty() {
+            // Increment ref_count for each blob referenced (only on first insert).
+            for (pos, att) in attachments_meta.iter().enumerate() {
+                let blob_id = att.get("blob_id").and_then(|v| v.as_str()).unwrap_or("");
+                let wrapped_key = att.get("wrapped_key").and_then(|v| v.as_str()).unwrap_or("");
+                let name = att.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let iv = att.get("iv").and_then(|v| v.as_str()).unwrap_or("");
+                // original_size = plaintext file size (before AES-256-GCM).
+                // For Phase 2, captured from envelope attachments_meta.
+                let original_size = att.get("size").and_then(|v| v.as_u64()).unwrap_or(0) as i64;
+                if blob_id.is_empty() || wrapped_key.is_empty() {
+                    continue;
+                }
+                // Validate blob exists before inserting ref.
+                let blob_exists: bool = tx.query_row(
+                    "SELECT 1 FROM blobs WHERE id = ?1",
+                    params![blob_id],
+                    |_| Ok(true),
+                ).unwrap_or(false);
+                if !blob_exists {
+                    continue; // skip refs to non-existent blobs (orphan protection)
+                }
+                tx.execute(
+                    "INSERT INTO attachment_refs (id, envelope_hash, blob_id, wrapped_key, iv, name, position, original_size)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        MessageStore::new_attachment_ref_id(),
+                        hash,
+                        blob_id,
+                        wrapped_key,
+                        iv,
+                        name,
+                        pos as i64,
+                        original_size,
+                    ],
+                )?;
+                // Increment blob ref_count (so orphan cleanup knows it's still used).
+                tx.execute(
+                    "UPDATE blobs SET ref_count = ref_count + 1 WHERE id = ?1",
+                    params![blob_id],
+                )?;
+            }
+        }
+        tx.commit()?;
         Ok(n > 0)
     }
 
@@ -242,6 +401,12 @@ impl MessageStore {
         if let Some(b) = body {
             if let Ok(s) = String::from_utf8(b.clone()) {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                    // E2E: если envelope зашифрован (`ct` есть) — preview ВСЕГДА
+                    // placeholder, иначе утекает ciphertext+signed_payload+sig.
+                    // (Олег 2026-08-25 08:18 MSK)
+                    if v.get("ct").and_then(|x| x.as_str()).is_some() {
+                        return Ok("🔒 зашифрованное сообщение".to_string());
+                    }
                     if let Some(bs) = v.get("body").and_then(|b| b.as_str()) {
                         return Ok(trunc(bs, 80));
                     }
@@ -251,6 +416,14 @@ impl MessageStore {
                     {
                         return Ok(trunc(bs, 80));
                     }
+                    // Envelope JSON без body и без ct — fallback attachments.
+                    if let Some(arr) = v.get("attachments_meta").and_then(|a| a.as_array()) {
+                        if let Some(first) = arr.first().and_then(|x| x.get("name")).and_then(|n| n.as_str()) {
+                            return Ok(format!("📎 {}", first));
+                        }
+                    }
+                    // Ничего не нашли — возвращаем placeholder, а не сырой JSON.
+                    return Ok("🔒 зашифрованное сообщение".to_string());
                 }
                 return Ok(trunc(&s, 80));
             }
@@ -301,7 +474,7 @@ impl MessageStore {
              ORDER BY ts DESC LIMIT ?3".to_string()
         };
 
-        let rows: Vec<HistoryRow> = if let Some(bt) = before_ts {
+        let mut rows: Vec<HistoryRow> = if let Some(bt) = before_ts {
             let mapped = c
                 .prepare(&sql)?
                 .query_map(params![npub, peer, bt, limit], |r| {
@@ -312,6 +485,7 @@ impl MessageStore {
                         sig: r.get(3)?,
                         ts: r.get(4)?,
                         envelope_hash: r.get(5)?,
+                        attachments: Vec::new(),
                     })
                 })?
                 .filter_map(|r| r.ok())
@@ -328,12 +502,53 @@ impl MessageStore {
                         sig: r.get(3)?,
                         ts: r.get(4)?,
                         envelope_hash: r.get(5)?,
+                        attachments: Vec::new(),
                     })
                 })?
                 .filter_map(|r| r.ok())
                 .collect();
             mapped
         };
+
+        // Phase 2: load attachment_refs for each envelope in batch.
+        if !rows.is_empty() {
+            let placeholders = std::iter::repeat("?").take(rows.len()).collect::<Vec<_>>().join(",");
+            let att_sql = format!(
+                "SELECT ar.envelope_hash, ar.blob_id, ar.wrapped_key, ar.iv, ar.name, b.mime, ar.original_size, ar.position \
+                 FROM attachment_refs ar JOIN blobs b ON b.id = ar.blob_id \
+                 WHERE ar.envelope_hash IN ({}) ORDER BY ar.position",
+                placeholders
+            );
+            let hashes: Vec<&str> = rows.iter().map(|r| r.envelope_hash.as_str()).collect();
+            let mut att_stmt = c.prepare(&att_sql)?;
+            let att_rows = att_stmt
+                .query_map(rusqlite::params_from_iter(hashes), |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        AttachmentMeta {
+                            blob_id: r.get(1)?,
+                            wrapped_key: r.get(2)?,
+                            iv: r.get(3)?,
+                            name: r.get(4)?,
+                            mime: Some(r.get::<_, String>(5)?),
+                            size: r.get::<_, Option<i64>>(6)?.map(|v| v as u64),
+                            position: r.get(7)?,
+                        },
+                    ))
+                })?
+                .filter_map(|r| r.ok());
+            // Group by envelope_hash.
+            let mut by_hash: std::collections::HashMap<String, Vec<AttachmentMeta>> =
+                std::collections::HashMap::new();
+            for (h, meta) in att_rows {
+                by_hash.entry(h).or_default().push(meta);
+            }
+            for row in rows.iter_mut() {
+                if let Some(meta) = by_hash.remove(&row.envelope_hash) {
+                    row.attachments = meta;
+                }
+            }
+        }
 
         let next = rows.last().map(|r| r.ts);
         Ok(HistoryResponse {

@@ -1464,8 +1464,10 @@ function renderMessages() {
             }
             return;
         }
-        // For incoming: server returned attachments_meta only (no plaintext).
-        if (m.attachments_meta && Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0) {
+        // For incoming ONLY: server returned attachments_meta only (no plaintext).
+        // Outgoing messages with attachments_meta but without plaintext_b64 are
+        // already rendered as remote-attach placeholders above (Lesson #195).
+        if (m.direction === "in" && m.attachments_meta && Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0) {
             // Render placeholder container, then async decrypt + replace.
             const placeholderEl = document.createElement("div");
             placeholderEl.className = "msg-attach-list";
