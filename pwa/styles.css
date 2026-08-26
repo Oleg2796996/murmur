@@ -208,6 +208,10 @@ button.small { padding: 8px 12px; font-size: 13px; }
 }
 .logout-btn:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
 .notif-btn {
+    /* Lesson #242 (Олег 2026-08-26 22:15): скрыть кнопку уведомлений.
+       Олег попросил убрать из UI. Логика (pushManager.subscribe) сохранена
+       — если понадобится вернуть, просто удалить display:none. */
+    display: none !important;
     background: var(--surface-2);
     border: 1px solid var(--border);
     color: var(--text);

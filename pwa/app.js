@@ -661,7 +661,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v99. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v100. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -1527,13 +1527,28 @@ async function loadHistory(peer, beforeTs) {
     ]);
             if (newMsgs.length > 0) {
                 messages[peer] = newMsgs.concat(messages[peer]);
-                // Обновляем preview sidebar: берём самое свежее сообщение.
-                // (Олег 2026-08-25 08:18 MSK — preview не должен быть raw JSON.)
-                const newest = messages[peer][0];
+                // Lesson #241 (Олег 2026-08-26 22:15): брать САМОЕ НОВОЕ сообщение
+                // по max ts, не [0]. newMsgs идёт в начало массива, но если
+                // пользователь скроллит вверх (paginate) — newMsgs содержит СТАРЫЕ
+                // сообщения, [0] уже не самое новое.
+                let newest = null;
+                for (const m of messages[peer]) {
+                    if (!newest || (m.ts || 0) > (newest.ts || 0)) newest = m;
+                }
                 if (newest && newest.body) {
                     if (!contacts[peer]) contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
-                    contacts[peer].lastMessagePreview = sanitizePreview(newest.body);
                     contacts[peer].lastTs = newest.ts;
+                    // Lesson #241: НЕ обновлять preview здесь, если body
+                    // ещё-зашифрованный JSON envelope. sanitizePreview вернёт
+                    // '🔒 зашифрованное сообщение' что выглядит как регресс.
+                    // Пусть Lesson #238 v3 (async decrypt) обновит preview
+                    // после расшифровки.
+                    const bodyStr = String(newest.body);
+                    if (!bodyStr.startsWith("{")) {
+                        // decrypted plaintext или plain text
+                        contacts[peer].lastMessagePreview = bodyStr.slice(0, 80);
+                    }
+                    // else: оставляем предыдущий preview, async decrypt обновит
                 }
             }
             if (j.next_before_ts) oldestTsForPeer[peer] = j.next_before_ts;
