@@ -1508,29 +1508,41 @@ function renderMessages() {
             const placeholderEl = document.createElement("div");
             placeholderEl.className = "msg-attach-list";
             div.insertBefore(placeholderEl, div.firstChild);
+            // Lesson #210 (Олег 2026-08-26 13:38): parallel renderAttachment with
+            // ABORT CONTROLLER. Sequential await блокировал — 2-е фото ждало 1-е
+            // fetch+decrypt (30+s) → iPhone PWA deadlock через renderMessages
+            // повторные вызовы (от pollHist) — DOM reset терял предыдущие fetches
+            // → blob URLs никогда не возвращались → loading spinner вечный.
+            const renderAbort = new AbortController();
+            // Register this controller for this render call — previous render's
+            // controllers are aborted when renderMessages fires again.
+            if (typeof window.__murmurRenderAbort === "undefined") window.__murmurRenderAbort = null;
+            if (window.__murmurRenderAbort) {
+                try { window.__murmurRenderAbort.abort("newer render starting"); } catch (e) { /* ignore */ }
+            }
+            window.__murmurRenderAbort = renderAbort;
             (async () => {
-                if (!window.MurmurRenderAttachments) {
-                    try {
-                        // Try to use globally loaded script first, if not, dynamic import.
-                        if (typeof window.MurmurRenderAttachments === 'undefined') {
-                             const mod = await import("./render-attachments.js");
-                             window.MurmurRenderAttachments = mod.MurmurRenderAttachments || mod;
+                try {
+                    if (!window.MurmurRenderAttachments) {
+                        const mod = await import("./render-attachments.js");
+                        window.MurmurRenderAttachments = mod.MurmurRenderAttachments || mod;
+                    }
+                    if (renderAbort.signal.aborted) return;
+                    const renderer = window.MurmurRenderAttachments.renderAttachment ?
+                                     window.MurmurRenderAttachments :
+                                     window.MurmurRenderAttachments.MurmurRenderAttachments;
+                    // PARALLEL: render all attachments simultaneously (NOT sequential!)
+                    await Promise.allSettled(m.attachments_meta.map(async (att) => {
+                        if (renderAbort.signal.aborted) return null;
+                        try {
+                            return await renderer.renderAttachment(att, placeholderEl, renderAbort.signal);
+                        } catch (e) {
+                            console.error("[attach] render failed:", e);
+                            return null;
                         }
-                    } catch (e) {
-                        console.error("[attach] dynamic import failed:", e);
-                        return;
-                    }
-                }
-                const renderer = window.MurmurRenderAttachments.renderAttachment ? 
-                                 window.MurmurRenderAttachments : 
-                                 window.MurmurRenderAttachments.MurmurRenderAttachments;
-
-                for (const att of m.attachments_meta) {
-                    try {
-                        await renderer.renderAttachment(att, placeholderEl);
-                    } catch (e) {
-                        console.error("[attach] render failed:", e);
-                    }
+                    }));
+                } catch (e) {
+                    console.error("[attach] init failed:", e);
                 }
             })();
         }
