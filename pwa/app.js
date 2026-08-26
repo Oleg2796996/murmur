@@ -661,7 +661,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v96. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v97. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -1381,17 +1381,21 @@ async function loadHistory(peer, beforeTs) {
     // при повторных openChat.
     area.querySelectorAll(".loading-spinner").forEach(el => el.remove());
     area.prepend(loadingEl);
-    // 25s timeout: Cloudflare tunnel cold-start can take 10-20s on first request after deploy.
+    // Lesson #239 (Олег 2026-08-26 21:42 MSK): 45s timeout (было 25s) + exponential
+    // backoff на retry + SINGLE banner вместо 5 дублей. Плохой инет + CF tunnel
+    // cold-start = до 30-40s на первый запрос.
     const fetchCtrl = new AbortController();
     const timeoutId = setTimeout(() => {
         fetchCtrl.abort();
-        console.warn("[murmur] loadHistory: timeout 25s");
+        console.warn("[murmur] loadHistory: timeout 45s");
+        // Lesson #239: clearAll existing error-msg + spinner, show SINGLE banner
+        area.querySelectorAll(".loading-spinner, .error-msg").forEach(el => el.remove());
         loadingEl.remove();
         const errEl = document.createElement("div");
         errEl.className = "error-msg";
-        errEl.innerHTML = "Не удалось загрузить историю (25s). <button class='link-btn' onclick='openChat(\"" + peer + "\")'>Повторить</button>";
+        errEl.innerHTML = "⏳ Не удалось загрузить историю. Плохой инет — <button class='link-btn' onclick='openChat(\"" + peer + "\")'>повторить</button>";
         area.appendChild(errEl);
-    }, 25000);
+    }, 45000);
     // (Олег 2026-08-25 08:13 MSK) Lesson #158: WASM decrypt может зависнуть
     // без exception на iPhone PWA. decryptWithTimeout — per-decrypt timeout
     // wrapper (defined at module scope for reuse by pollHistoryForPeer).
@@ -2748,6 +2752,20 @@ async function pollHistoryForPeer(peer) {
                             requestAnimationFrame(() => {
                                 try { messagesArea.scrollTop = messagesArea.scrollHeight; } catch (e) { /* ignore */ }
                             });
+                        }
+                        // Lesson #238 (Олег 2026-08-26 21:42 MSK): sidebar preview
+                        // обновляется после async decrypt — даже если пользователь
+                        // сейчас в другом чате. sanitizePreview маскирует JSON,
+                        // нам нужен расшифрованный text.
+                        if (changed && m.direction === "in" && m.body && contacts && contacts.peers) {
+                            const cp = contacts.peers.find(p => (p.npub || p.id) === peer);
+                            if (cp) {
+                                const preview = m.body.slice(0, 80);
+                                if (cp.lastMessagePreview !== preview) {
+                                    cp.lastMessagePreview = preview;
+                                    renderChatList();
+                                }
+                            }
                         }
                     })
                     .catch(e => console.warn("[pollHist] async decrypt chain failed:", e));
