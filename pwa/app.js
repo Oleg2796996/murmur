@@ -1306,6 +1306,13 @@ async function loadHistory(peer, beforeTs) {
                             if (o._sig === sigKey) return true;
                             return false;
                         });
+                        // Lesson #198 (Олег 2026-08-26): если outbox всё ещё не нашлось
+                        // (сервер мог переписать ts), попробовать fallback по body+ts окрестности
+                        // (последняя запись для peer).
+                        if (!local && outbox.length > 0) {
+                            local = outbox[outbox.length - 1];
+                            console.warn("[murmur] loadHistory: outbox fallback to last entry for peer", peer.slice(0, 12));
+                        }
                     }
                     if (local && local.body) {
                         // Нашли локальный plaintext — используем его, не расшифровываем.
