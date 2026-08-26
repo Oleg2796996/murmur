@@ -400,6 +400,13 @@ button.small { padding: 8px 12px; font-size: 13px; }
     flex: 1;
     background: var(--bg);
     min-width: 0;
+    /* Lesson #234 (Олег 2026-08-26 19:27): min-height: 0 ОБЯЗАТЕЛЬНО для
+       flex-column item. Без этого min-height: auto = контент растёт сверх
+       flex:1, flex:1 не ужимает → .chat-view выше viewport → body overflow
+       → скролл не работает. Симптом: вертикальная ориентация — input bar
+       не виден, bubbles обрезаны, scroll не работает. Горизонтальная
+       работает случайно (там flex-direction: row, проблема не проявляется). */
+    min-height: 0;
 }
 
 .chat-header {
@@ -691,7 +698,7 @@ button.small { padding: 8px 12px; font-size: 13px; }
     .messenger { flex-direction: column; }
     /* When chat-open is set, hide the sidebar; when not set, hide the chat-view. */
     .messenger.chat-open .sidebar { display: none; }
-    .messenger.chat-open .chat-view { display: flex; flex: 1; }
+    .messenger.chat-open .chat-view { display: flex; flex: 1; min-height: 0; }
     .messenger:not(.chat-open) .sidebar { display: flex; flex: 1; }
     .messenger:not(.chat-open) .chat-view { display: none; }
     .messenger:not(.chat-open) .no-chat { display: flex; flex: 1; }
