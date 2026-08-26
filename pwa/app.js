@@ -661,7 +661,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v95. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v96. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -2724,7 +2724,15 @@ async function pollHistoryForPeer(peer) {
                                 const sig = m._sig || (m.from_npub || m.from) + m.ts;
                                 const sigMatch = sig;
                                 if (window.__murmurRenderedSigs && window.__murmurRenderedSigs.has(sigMatch)) {
-                                    const bubbleEl = document.querySelector(`.msg-bubble[data-sig="${CSS.escape(sig)}"]`);
+                                    // Lesson #236 (Олег 2026-08-26 21:07): selector
+                                    // '.msg-bubble' был неправильный! Реальный class
+                                    // = 'bubble'. Selector возвращал null → body
+                                    // никогда не обновлялся. Mac не расшифровывал
+                                    // текст, iPhone — случайно работал.
+                                    // + CSS.escape fallback для старых Safari (без
+                                    // native CSS.escape).
+                                    const escFn = window.CSS && CSS.escape ? CSS.escape : (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+                                    const bubbleEl = document.querySelector(`.bubble[data-sig="${escFn(sig)}"]`);
                                     if (bubbleEl) {
                                         const bodyEl = bubbleEl.querySelector('.msg-body');
                                         if (bodyEl && m.body) bodyEl.textContent = m.body;
