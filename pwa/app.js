@@ -650,7 +650,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v88. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v89. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -845,6 +845,38 @@ if (cacheStatsBtn && !cacheStatsBtn.dataset.bound) {
         } finally {
             cacheStatsBtn.disabled = false;
         }
+    });
+}
+// Lesson #227 (Олег 2026-08-26 16:25): DIAGNOSTIC button — выводит
+// window.__MURMUR_DIAG__ JSON в alert. Использовать для воспроизведения бага.
+const diagBtn = $("btn-diag");
+if (diagBtn && !diagBtn.dataset.bound) {
+    diagBtn.dataset.bound = "1";
+    diagBtn.style.display = "";
+    diagBtn.addEventListener("click", () => {
+        const d = window.__MURMUR_DIAG__ || { msg: "no diag data yet" };
+        // Also collect current DOM state.
+        const domState = {
+            imgs_in_dom: document.querySelectorAll("img.attach-image").length,
+            imgs_with_blob: Array.from(document.querySelectorAll("img.attach-image")).filter(i => i.src.startsWith("blob:")).length,
+            imgs_broken: Array.from(document.querySelectorAll("img.attach-image")).filter(i => i.naturalWidth === 0 && i.src.startsWith("blob:")).length,
+            bubbles_with_chip: document.querySelectorAll(".msg-attach-remote").length,
+            outgoing_bubbles: document.querySelectorAll(".msg.out").length,
+        };
+        d.dom_now = domState;
+        const text = JSON.stringify(d, null, 2);
+        // Use textarea (alert can't show long text well)
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.cssText = "position:fixed;top:5%;left:5%;width:90%;height:90%;z-index:99999;font-size:11px;font-family:monospace;background:#fff;color:#000;";
+        ta.id = "__murmur_diag_modal__";
+        const close = document.createElement("button");
+        close.textContent = "✕ ЗАКРЫТЬ";
+        close.style.cssText = "position:fixed;top:5%;right:5%;z-index:100000;padding:5px 10px;background:#f00;color:#fff;border:none;font-weight:bold;cursor:pointer;";
+        close.onclick = () => { ta.remove(); close.remove(); };
+        document.body.appendChild(ta);
+        document.body.appendChild(close);
+        console.log("[MURMUR-DIAG]", d);
     });
 }
 if (notifBtn && !notifBtn.dataset.bound) {
@@ -1501,6 +1533,39 @@ function renderMessages() {
     if (!activePeer) return;
     const all = messages[activePeer] || [];
     const msgs = [...all].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    // Lesson #227 (Олег 2026-08-26 16:25): DIAGNOSTIC instrumentation —
+    // record every renderMessages call with stack + DOM diff.
+    if (typeof window.__MURMUR_DIAG__ === "undefined") {
+        window.__MURMUR_DIAG__ = {
+            renderMessages_count: 0,
+            renderMessages_history: [],
+            img_created: 0,
+            img_revoked: 0,
+            img_in_dom_now: 0,
+            blob_urls_active: 0,
+            last_render_cause: "?",
+            async_races_detected: 0,
+        };
+    }
+    const diag = window.__MURMUR_DIAG__;
+    diag.renderMessages_count++;
+    // Capture who triggered this render by walking call stack.
+    const stack = new Error().stack || "";
+    const cause = (stack.match(/at (\w+)/g) || []).slice(1, 4).join(" ← ");
+    diag.last_render_cause = cause;
+    diag.renderMessages_history.push({
+        n: diag.renderMessages_count,
+        ts: Date.now(),
+        msgs_count: msgs.length,
+        cause: cause,
+        // Snapshot of which messages have decrypted blobs vs which don't
+        with_attachments: msgs.filter(m => m.attachments_meta && m.attachments_meta.length > 0).length,
+        with_plaintext: msgs.filter(m => m.attachments_meta && m.attachments_meta.every(a => a.plaintext_b64)).length,
+        outgoing_with_chip: msgs.filter(m => m.direction === "out" && m._outgoing_chip_rendered).length,
+    });
+    // Cap history (avoid unbounded growth)
+    if (diag.renderMessages_history.length > 50) diag.renderMessages_history.shift();
+    console.log("[MURMUR-DIAG] renderMessages call #" + diag.renderMessages_count + " cause=" + cause + " msgs=" + msgs.length);
     // Lesson #207 (Олег 2026-08-26 12:01): clean up revoked blob URLs from previous
     // render to prevent memory leak. Each outgoing attachment creates a URL.createObjectURL
     // (Lesson #155), and they accumulate forever without revoke → iPhone PWA hang.

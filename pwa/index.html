@@ -22,12 +22,12 @@
      script. iOS Safari PWA cached HTML может не иметь inline-script (HTML cache
      pre-bump). Meta tag читается через document.querySelector + .content
      (работает даже если inline script не выполнился). -->
-    <meta name="app-version" content="v88">
+    <meta name="app-version" content="v89">
     <!-- Lesson #216: cache busting via ?v= query string. iOS Safari PWA
      caches app.js via HTTP cache independently of SW. Query string forces
      re-fetch on each version bump. SW CACHE_VERSION also bumps for SW
      activation, but the app.js itself needs explicit URL change. -->
-    <link rel="stylesheet" href="styles.css?v=88">
+    <link rel="stylesheet" href="styles.css?v=89">
 </head>
 <body>
     <!-- ================= IDENTITY SCREEN (create/restore) ================= -->
@@ -75,6 +75,7 @@
                 <!-- Lesson #211+215: cache stats — скрыт по умолчанию, виден только
                  если IndexedDB уже имеет > 0 записей (через app.js JS) -->
                 <button id="btn-cache-stats" class="notif-btn" title="Статистика кэша вложений" style="display:none;">💾</button>
+                <button id="btn-diag" class="notif-btn" title="Diagnostic dump">📊</button>
                 <div class="me">
                     <div class="me-npub">
                         <code id="my-npub" title="клик — копировать полный npub">…</code>
@@ -203,14 +204,14 @@
     <!-- Lesson #216 (Олег 2026-08-26 15:18): ?v= cache busting — iOS Safari
      HTTP cache не обновляет app.js по CACHE_VERSION bump alone.
      Query string = guaranteed fresh load on each deploy. -->
-    <script src="blob-cache.js?v=88" defer></script>
-    <script src="render-attachments.js?v=88" defer></script>
-    <script src="app.js?v=88" defer></script>
+    <script src="blob-cache.js?v=89" defer></script>
+    <script src="render-attachments.js?v=89" defer></script>
+    <script src="app.js?v=89" defer></script>
     <script>
       // Register service worker for offline support & cache versioning.
       // Bump CACHE_VERSION in service-worker.js to invalidate client caches.
       if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/service-worker.js?v=88").then(reg => {
+        navigator.serviceWorker.register("/service-worker.js?v=89").then(reg => {
           // Lesson #217 (Олег 2026-08-26 15:21): на iPhone PWA новый SW часто
           // НЕ устанавливается даже после reinstall. Force-update check
           // каждые 30 секунд пока PWA активна — гарантирует что клиент
