@@ -138,6 +138,8 @@ let contacts = {};
 let messages = {};
 let activePeer = null;
 let oldestTsForPeer = {};
+// Expose for E2E test diagnostics (Олег 2026-08-26)
+window.__murmurState = () => ({ messages, activePeer, contacts });
 let pollTimer = null;
 // Attachments (Олег 2026-08-24 11:00 MSK) — файлы прикрепленные к текущему сообщению.
 let pendingAttachments = [];        // [{name, mime, size, data_b64}] — уйдут в зашифрованный body
@@ -1838,6 +1840,7 @@ messageInput?.addEventListener("keydown", (e) => {
 });
 
 btnSend?.addEventListener("click", sendMessage);
+window.sendMessage = sendMessage;
 
 // Attach button + file input (Олег 2026-08-24 11:00 MSK)
 const btnAttach = $("btn-attach");
