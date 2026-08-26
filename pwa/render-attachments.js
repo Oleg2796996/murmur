@@ -99,8 +99,26 @@ async function renderAttachment(att, containerEl, abortSignal) {
     let blobUrl = null;
     try {
         // Lesson #210 (Олег 2026-08-26 13:38): AbortSignal support — abortable fetch
-        // + cleanup when newer renderMessages replaces us
         if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
+
+        // Lesson #211 (Олег 2026-08-26 14:14): CACHE-FIRST lookup.
+        // Если blob уже расшифрован и сохранён в IndexedDB — просто показываем.
+        // Иначе fetch + decrypt + save в cache.
+        const cache = window.MurmurBlobCache;
+        if (cache && cache.isAvailable && cache.isAvailable()) {
+            const cachedBlob = await cache.get(att.blob_id);
+            if (cachedBlob) {
+                if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
+                blobUrl = URL.createObjectURL(cachedBlob);
+                const mime = att.mime || cachedBlob.type || "application/octet-stream";
+                const el = renderByMime({ mime, name: att.name, blobUrl, size: cachedBlob.size });
+                placeholder.replaceWith(el);
+                console.log("[attach-cache] HIT", att.blob_id.slice(0, 8), "size=", cachedBlob.size);
+                return el;
+            }
+            console.log("[attach-cache] MISS", att.blob_id.slice(0, 8));
+        }
+
         // a. Fetch ciphertext
         const ct = await withTimeout(fetchBlob(att.blob_id, abortSignal), 30000, "fetchBlob");
         if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
@@ -114,6 +132,10 @@ async function renderAttachment(att, containerEl, abortSignal) {
         // d. Blob + URL
         const mime = att.mime || "application/octet-stream";
         const blob = new Blob([plain], { type: mime });
+        // Lesson #211: save to cache for next render (fire-and-forget)
+        if (cache && cache.isAvailable && cache.isAvailable()) {
+            cache.put(att.blob_id, blob, mime).catch(e => console.warn("[attach-cache] put failed", e));
+        }
         blobUrl = URL.createObjectURL(blob);
         // e. Render based on mime
         const el = renderByMime({ mime, name: att.name, blobUrl, size: plain.length });

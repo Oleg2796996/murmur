@@ -54,6 +54,8 @@
                      Один клик = gesture → permission → subscribe → UI on.
                      Если браузер уже granted + есть подписка, клик отписывает. -->
                 <button id="btn-notifications" class="notif-btn" title="Включить уведомления">🔔</button>
+                <!-- Lesson #211 (Олег 2026-08-26 14:14): manual cache control -->
+                <button id="btn-cache-stats" class="notif-btn" title="Статистика кэша вложений (клик → очистить)">💾</button>
                 <div class="me">
                     <div class="me-npub">
                         <code id="my-npub" title="клик — копировать полный npub">…</code>
@@ -166,6 +168,7 @@
       // Safety: if app.js was loaded before this script, handlers are already wired there.
       console.log("[murmur] inline handlers bound");
     </script>
+    <script src="blob-cache.js" defer></script>
     <script src="render-attachments.js" defer></script>
     <script src="app.js" defer></script>
     <script>

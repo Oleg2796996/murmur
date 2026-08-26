@@ -542,6 +542,29 @@ function bytesToBase64(bytes) {
 }
 
 // ── Identity Screen ──
+// Lesson #211 (Олег 2026-08-26 14:14): если signing key изменился, очистить cache
+// (старые blobs расшифрованы для СТАРОГО privkey — новый их не прочитает).
+async function invalidateCacheIfKeyChanged() {
+    if (!window.MurmurBlobCache || !window.MurmurBlobCache.isAvailable || !window.MurmurBlobCache.isAvailable()) return;
+    try {
+        const newHash = await sha256hex(signKeyHex);
+        const tag = `murmur.cache.keyhash`;
+        const prev = localStorage.getItem(tag);
+        if (prev && prev !== newHash) {
+            console.log("[cache] signing key changed — clearing blob cache");
+            await window.MurmurBlobCache.clear();
+        }
+        localStorage.setItem(tag, newHash);
+    } catch (e) { /* ignore — cache will keep working, just may fail decrypt */ }
+}
+
+// sha256hex helper — available globally via SubtleCrypto (used for cache key hash)
+async function sha256hex(text) {
+    const enc = new TextEncoder().encode(text);
+    const buf = await crypto.subtle.digest("SHA-256", enc);
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function _handleCreate() {
     try {
         await ensureWasm();
@@ -555,6 +578,7 @@ async function _handleCreate() {
         localStorage.setItem(LS_NPUB, myNpub);
         localStorage.setItem(LS_KEY, signKeyHex);
         localStorage.setItem(LS_NAME, myAlias);
+        await invalidateCacheIfKeyChanged();
         enterMessenger();
     } catch (e) {
         console.error("[murmur] _handleCreate error:", e);
@@ -581,6 +605,7 @@ window._handleRestore = async function() {
         localStorage.setItem(LS_NPUB, myNpub);
         localStorage.setItem(LS_KEY, signKeyHex);
         localStorage.setItem(LS_NAME, myAlias);
+        await invalidateCacheIfKeyChanged();
         enterMessenger();
     } catch (e) { $("identity-error").textContent = "Error: " + e.message; }
 };
@@ -666,10 +691,15 @@ function enterMessenger() {
     updateBadge();
 }
 
-$("btn-logout")?.addEventListener("click", () => {
+$("btn-logout")?.addEventListener("click", async () => {
     if (!confirm("Are you sure? Identity will be deleted.")) return;
     localStorage.removeItem(LS_NPUB);
     localStorage.removeItem(LS_KEY);
+    // Lesson #211: clear blob cache on logout — different signing key means
+    // existing cached blobs are encrypted for OLD pubkey → would fail to decrypt.
+    if (window.MurmurBlobCache) {
+        try { await window.MurmurBlobCache.clear(); } catch (e) { /* ignore */ }
+    }
     if (pollTimer) clearInterval(pollTimer);
     if (ws) { ws.close(); ws = null; }
     contacts = {}; messages = {}; activePeer = null;
@@ -756,6 +786,38 @@ async function updateNotifBtnState() {
     }
 }
 const notifBtn = $("btn-notifications");
+// Lesson #211 (Олег 2026-08-26 14:14): manual cache stats + clear
+const cacheStatsBtn = $("btn-cache-stats");
+if (cacheStatsBtn && !cacheStatsBtn.dataset.bound) {
+    cacheStatsBtn.dataset.bound = "1";
+    cacheStatsBtn.addEventListener("click", async () => {
+        cacheStatsBtn.disabled = true;
+        try {
+            const cache = window.MurmurBlobCache;
+            if (!cache || !cache.isAvailable()) {
+                alert("IndexedDB недоступен на этом устройстве.");
+                return;
+            }
+            const stats = await cache.stats();
+            if (stats.count === 0) {
+                alert(`Кэш пуст (0 MB / ${Math.round(stats.maxBytes / 1024 / 1024)} MB лимит)`);
+                return;
+            }
+            const mb = (stats.bytes / 1024 / 1024).toFixed(1);
+            const limitMb = Math.round(stats.maxBytes / 1024 / 1024);
+            if (confirm(`Кэш: ${stats.count} файлов, ${mb} MB / ${limitMb} MB.\n\nОчистить кэш? (attachments перезагрузятся при следующем просмотре)`)) {
+                await cache.clear();
+                alert("Кэш очищен. Перезагрузи страницу для применения.");
+                // Don't auto-reload — let user decide.
+                cacheStatsBtn.title = "Кэш очищен (пуст)";
+            }
+        } catch (e) {
+            alert("Ошибка: " + e.message);
+        } finally {
+            cacheStatsBtn.disabled = false;
+        }
+    });
+}
 if (notifBtn && !notifBtn.dataset.bound) {
     notifBtn.dataset.bound = "1";
     updateNotifBtnState();
@@ -2559,6 +2621,7 @@ async function tryAutoRestore() {
             myNpub = res.data.npub;
             signKeyHex = res.data.signing_sk_hex;
             myAlias = localStorage.getItem(LS_NAME) || ("murmur-" + (res.data.npub || "").slice(4, 10));
+            await invalidateCacheIfKeyChanged();
             enterMessenger();
         } else {
             console.warn("auto-restore: npub mismatch / restore failed", res);
