@@ -1724,6 +1724,15 @@ async function sendMessage() {
                 const respJson = await r.json();
                 if (respJson && respJson.hash) {
                     renderedMsg._hash = respJson.hash;
+                    // Lesson #197 (Олег 2026-08-26): обновить outbox с реальным _hash,
+                    // иначе после reload loadHistory не найдёт локальный plaintext
+                    // и попытается расшифровать зашифрованное-для-Bob (failed).
+                    const outbox = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
+                    const outboxKey = renderedMsg._sig;
+                    if (outbox[outboxKey]) {
+                        outbox[outboxKey]._hash = respJson.hash;
+                        localStorage.setItem(LS_OUTBOX, JSON.stringify(outbox));
+                    }
                 }
             } catch (e) { /* /envelope может не вернуть JSON — fallback на ts */ }
             const last = messages[activePeer][messages[activePeer].length - 1];
