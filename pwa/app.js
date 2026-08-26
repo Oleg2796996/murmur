@@ -1307,11 +1307,22 @@ async function loadHistory(peer, beforeTs) {
                             return false;
                         });
                         // Lesson #198 (Олег 2026-08-26): если outbox всё ещё не нашлось
-                        // (сервер мог переписать ts), попробовать fallback по body+ts окрестности
-                        // (последняя запись для peer).
+                        // (сервер мог переписать ts), попробовать найти запись с
+                        // ближайшим ts (в пределах 60 секунд) — это исходящее, которое
+                        // мы только что отправили, но сервер вернул с другим ts.
                         if (!local && outbox.length > 0) {
-                            local = outbox[outbox.length - 1];
-                            console.warn("[murmur] loadHistory: outbox fallback to last entry for peer", peer.slice(0, 12));
+                            let best = null, bestDelta = Infinity;
+                            for (const o of outbox) {
+                                const delta = Math.abs((o.ts || 0) - (m.ts || 0));
+                                if (delta < bestDelta && delta <= 60) {
+                                    best = o;
+                                    bestDelta = delta;
+                                }
+                            }
+                            if (best) {
+                                local = best;
+                                console.warn("[murmur] loadHistory: outbox ts-proximity fallback for peer", peer.slice(0, 12), "delta=", bestDelta);
+                            }
                         }
                     }
                     if (local && local.body) {
