@@ -661,7 +661,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v100. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v101. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -1554,6 +1554,7 @@ async function loadHistory(peer, beforeTs) {
             if (j.next_before_ts) oldestTsForPeer[peer] = j.next_before_ts;
             renderMessages();
             renderChatList();
+            resyncSidebarPreviews();
         }
     } catch (e) { clearTimeout(timeoutId); loadingEl.remove(); console.warn("[murmur] loadHistory FAILED:", e.message); }
 }
@@ -2800,6 +2801,44 @@ async function pollHistoryForPeer(peer) {
         if (typeof window.__pollErrors !== 'undefined') window.__pollErrors.push({t: Date.now(), fn: 'pollHistoryForPeer', msg: String(e && e.message), stack: String(e && e.stack)});
     }
 }
+
+// Lesson #243 (Олег 2026-08-26 22:27): re-sync sidebar preview для всех
+// peer'ов в messages. Нужен потому что Lesson #238 v3 срабатывает только
+// когда сообщение ПОЛУЧЕНО впервые через pollHist. Но если сообщение
+// пришло ДО деплоя v100, или async decrypt вернул пустоту/ошибку в первый
+// раз, или Lesson #201 fallback оставил body='' — preview остаётся
+// 'зашифрованное сообщение' навсегда.
+//
+// Проходим по всем messages в памяти и обновляем sidebar preview для
+// КАЖДОГО incoming с расшифрованным plaintext body.
+function resyncSidebarPreviews() {
+    if (!contacts || !messages) return;
+    let any = false;
+    for (const peer of Object.keys(messages)) {
+        const arr = messages[peer];
+        if (!Array.isArray(arr) || arr.length === 0) continue;
+        // Самое новое сообщение (max ts)
+        let newest = null;
+        for (const m of arr) {
+            if (!newest || (m.ts || 0) > (newest.ts || 0)) newest = m;
+        }
+        if (!newest || newest.direction !== "in") continue;
+        if (!newest.body || String(newest.body).startsWith("{")) continue;
+        if (!contacts[peer]) contacts[peer] = { peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
+        const preview = String(newest.body).slice(0, 80);
+        if (contacts[peer].lastMessagePreview !== preview) {
+            contacts[peer].lastMessagePreview = preview;
+            contacts[peer].lastTs = newest.ts || Date.now();
+            any = true;
+        }
+    }
+    if (any) {
+        console.log("[resyncSidebarPreviews] updated", Object.keys(messages).length, "peers");
+        renderChatList();
+    }
+}
+// Зовём после pollHist (новые сообщения могли прийти) и периодически.
+setInterval(resyncSidebarPreviews, 5000);
 
 // Lesson #132.4: рекурсивный setTimeout вместо setInterval.
 // iOS PWA печально известен тем, что замораживает setInterval в фоне (или при
