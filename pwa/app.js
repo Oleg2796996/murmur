@@ -1410,6 +1410,12 @@ function renderMessages() {
     if (!activePeer) return;
     const all = messages[activePeer] || [];
     const msgs = [...all].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    // Lesson #207 (Олег 2026-08-26 12:01): clean up revoked blob URLs from previous
+    // render to prevent memory leak. Each outgoing attachment creates a URL.createObjectURL
+    // (Lesson #155), and they accumulate forever without revoke → iPhone PWA hang.
+    if (typeof window.__murmurUrlsToRevoke === "undefined") window.__murmurUrlsToRevoke = [];
+    const previousUrls = window.__murmurUrlsToRevoke;
+    window.__murmurUrlsToRevoke = [];
     messagesArea.innerHTML = "";
 
     let lastDay = null;
@@ -1475,6 +1481,8 @@ function renderMessages() {
                         const mime = att.mime || "application/octet-stream";
                         const blob = b64ToBlob(att.plaintext_b64, mime);
                         const url = URL.createObjectURL(blob);
+                        // Lesson #207: track URL for revoke on next render
+                        window.__murmurUrlsToRevoke.push(url);
                         const el = renderOutgoingAttachment({ mime, name: att.name, url, size: att.size });
                         placeholderEl.appendChild(el);
                     } catch (e) {
@@ -1527,6 +1535,16 @@ function renderMessages() {
             })();
         }
     }
+    // Lesson #207: revoke previous render's blob URLs to prevent memory leak
+    // (otherwise URLs accumulate forever, iPhone PWA hangs after few messages).
+    setTimeout(() => {
+        for (const u of previousUrls) {
+            try { URL.revokeObjectURL(u); } catch (e) { /* ignore */ }
+        }
+        if (previousUrls.length > 0) {
+            console.log("[murmur] revoked", previousUrls.length, "blob URLs from previous render");
+        }
+    }, 5000);  // 5s delay — attachments need time to load
 }
 
 // Day divider label: "Сегодня", "Вчера", or "12 авг".
@@ -2322,10 +2340,21 @@ async function pollHistoryForPeer(peer) {
                 }
                 if (localOut && localOut.body) {
                     resolvedBody = localOut.body;
+                    // Lesson #206 (Олег 2026-08-26 12:01): use outbox's attachments_meta
+                    // ВСЕГДА, если оно заполнено — иначе UI дублирует chip
+                    // (один с plaintext из outbox, второй без из server-fetched meta).
+                    // Fallback к server-side только если outbox не сохранил ничего.
                     if (Array.isArray(localOut.attachments_meta) && localOut.attachments_meta.length > 0) {
                         resolvedAttachmentsMeta = localOut.attachments_meta;
+                        resolvedAttachments = localOut.attachments || localOut.attachments_meta || [];
+                    } else if (Array.isArray(localOut.attachments) && localOut.attachments.length > 0) {
+                        // Outbox сохранил attachments но не attachments_meta (старая версия кода)
+                        resolvedAttachmentsMeta = localOut.attachments.map(a => ({
+                            ...a,
+                            plaintext_b64: null,  // marker: рендерим remote chip без decrypt
+                        }));
                     }
-                    console.log("[pollHist] outgoing resolved via outbox", peer.slice(0, 12), "body=", resolvedBody.slice(0, 20), "att_count=", resolvedAttachmentsMeta.length, "_hash=", hash, "out_hash=", localOut._hash);
+                    console.log("[pollHist] outgoing resolved via outbox", peer.slice(0, 12), "body=", resolvedBody.slice(0, 20), "att_count=", resolvedAttachmentsMeta.length, "_hash=", hash, "out_hash=", localOut._hash, "plaintext=", resolvedAttachmentsMeta.every(a => a.plaintext_b64));
                 } else if (fromNpub === myNpub) {
                     // Lesson #201 (Олег 2026-08-26): outbox не нашёлся (например,
                     // после hard refresh iPhone PWA / outbox cleanup). Для исходящих
