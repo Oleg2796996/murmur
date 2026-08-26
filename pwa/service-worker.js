@@ -8,7 +8,7 @@
 // below deletes every cache whose name doesn't match the current version,
 // so old SW-controlled clients get the fresh files automatically without
 // the user needing to add ?v=N to the URL.
-const CACHE_VERSION = "murmur-v94";
+const CACHE_VERSION = "murmur-v95";
 const PRECACHE = []; // No precache — browser handles HTTP cache naturally.
 
 // Lesson #217 (Олег 2026-08-26 15:21): allow client to request skipWaiting
