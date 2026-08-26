@@ -661,7 +661,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v93. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v94. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -1635,7 +1635,7 @@ function renderMessages() {
         // Исходящие рендерятся из локального кэша outbox.
         // Больше не используем data:URL в bodyHtml (Lesson #170).
         div.innerHTML =
-            bodyHtml +
+            "<div class='msg-body'>" + bodyHtml + "</div>" +
             "<span class='bubble-time'>" + formatTime(m.ts) + (statusGlyph ? " " + statusGlyph : "") + "</span>";
         messagesArea.appendChild(div);
         // Lesson #230: mark this sig as rendered.
@@ -2733,6 +2733,13 @@ async function pollHistoryForPeer(peer) {
                             }
                             renderMessages();
                             scrollToBottom();
+                            // Lesson #233 (Олег 2026-08-26 17:25): после in-place
+                            // body update — scroll заново, так как body height мог
+                            // измениться (🔒 шифрованное сообщение → расшифрованный
+                            // текст), и input bar должен быть внизу.
+                            requestAnimationFrame(() => {
+                                try { messagesArea.scrollTop = messagesArea.scrollHeight; } catch (e) { /* ignore */ }
+                            });
                         }
                     })
                     .catch(e => console.warn("[pollHist] async decrypt chain failed:", e));
