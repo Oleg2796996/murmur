@@ -793,14 +793,24 @@ async function updateNotifBtnState() {
     }
 }
 const notifBtn = $("btn-notifications");
-// Lesson #211 (Олег 2026-08-26 14:14): manual cache stats + clear
+// Lesson #211 + #215 (Олег 2026-08-26 14:14 / 14:33): manual cache stats + clear
 const cacheStatsBtn = $("btn-cache-stats");
 if (cacheStatsBtn && !cacheStatsBtn.dataset.bound) {
     cacheStatsBtn.dataset.bound = "1";
+    const cache = window.MurmurBlobCache;
+    // Lesson #215: показывать кнопку только если в cache что-то есть
+    if (cache && cache.isAvailable && cache.isAvailable()) {
+        cache.stats().then(s => {
+            if (s.count > 0) {
+                cacheStatsBtn.style.display = "";
+                cacheStatsBtn.title = `Кэш: ${s.count} файлов, ${(s.bytes / 1024 / 1024).toFixed(1)} MB`;
+            }
+        }).catch(() => {});
+    }
     cacheStatsBtn.addEventListener("click", async () => {
         cacheStatsBtn.disabled = true;
         try {
-            const cache = window.MurmurBlobCache;
+            // const cache уже объявлен снаружи (Lesson #215)
             if (!cache || !cache.isAvailable()) {
                 alert("IndexedDB недоступен на этом устройстве.");
                 return;
@@ -1616,16 +1626,27 @@ function renderMessages() {
             })();
         }
     }
-    // Lesson #207: revoke previous render's blob URLs to prevent memory leak
-    // (otherwise URLs accumulate forever, iPhone PWA hangs after few messages).
-    setTimeout(() => {
-        for (const u of previousUrls) {
-            try { URL.revokeObjectURL(u); } catch (e) { /* ignore */ }
+    // Lesson #207: blob URLs must be revoked ONLY when their DOM element is removed
+    // (not on a fixed setTimeout — on slow iPhone tunnel decrypt+fetch takes >5s,
+    // and the previous setTimeout(5000) was revoking URLs while decrypt was still
+    // in flight, leaving the placeholder spinner forever with a broken blob:src).
+    // WeakMap: element -> Set<url>. On detach, revoke all urls.
+    const urlOwners = window.__murmurUrlOwners || new WeakMap();
+    window.__murmurUrlOwners = urlOwners;
+    if (previousUrls && previousUrls.length > 0) {
+        for (const url of previousUrls) {
+            // Only revoke if no owner DOM element references it (already detached).
+            // We can't easily detect that here — instead, defer revoke until
+            // element.remove() via observer (Lesson #213).
+            // For now: revoke after 30s (covers even slowest decrypt path).
+            setTimeout(() => {
+                try { URL.revokeObjectURL(url); } catch (e) { /* ignore */ }
+            }, 30000);
         }
         if (previousUrls.length > 0) {
-            console.log("[murmur] revoked", previousUrls.length, "blob URLs from previous render");
+            console.log("[murmur] queued revoke for", previousUrls.length, "blob URLs (30s)");
         }
-    }, 5000);  // 5s delay — attachments need time to load
+    }
 }
 
 // Day divider label: "Сегодня", "Вчера", or "12 авг".
@@ -2437,20 +2458,16 @@ async function pollHistoryForPeer(peer) {
                     }
                     console.log("[pollHist] outgoing resolved via outbox", peer.slice(0, 12), "body=", resolvedBody.slice(0, 20), "att_count=", resolvedAttachmentsMeta.length, "_hash=", hash, "out_hash=", localOut._hash, "plaintext=", resolvedAttachmentsMeta.every(a => a.plaintext_b64));
                 } else if (fromNpub === myNpub) {
-                    // Lesson #201 (Олег 2026-08-26): outbox не нашёлся (например,
-                    // после hard refresh iPhone PWA / outbox cleanup). Для исходящих
-                    // НЕ показывать "🔒 шифрованное сообщение" — это триггерит
-                    // async decrypt, который падает с bad tag. Вместо этого:
-                    // синтетический placeholder из server attachment meta (filename+size).
+                    // Lesson #201 + #214 (Олег 2026-08-26 14:33): outbox не нашёлся
+                    // (например, после hard refresh iPhone PWA / outbox cleanup).
+                    // Для исходящих НЕ показывать "🔒 шифрованное сообщение" — это
+                    // триггерит async decrypt, который падает с bad tag.
+                    // Lesson #214 fix: если attachments есть — НЕ синтезировать body.
+                    // Раньше было `📎 filename (size)` body + remote chip = ДУБЛЬ.
+                    // Теперь: body пустой → renderMessages показывает ТОЛЬКО chip.
                     const attMeta = msg.attachments || [];
                     if (attMeta.length > 0) {
-                        const att = attMeta[0];
-                        const name = att.name || "attachment";
-                        const sizeKb = att.size ? ` (${(att.size / 1024).toFixed(1)} KB)` : "";
-                        const emoji = att.mime && att.mime.startsWith("image/") ? "🖼" :
-                                      att.mime && att.mime.startsWith("video/") ? "🎬" :
-                                      att.mime && att.mime.startsWith("audio/") ? "🎵" : "📎";
-                        resolvedBody = `${emoji} ${name}${sizeKb}`;
+                        resolvedBody = "";
                         resolvedAttachmentsMeta = attMeta.map(a => ({
                             ...a,
                             plaintext_b64: null,  // marker для renderMessages: нет decrypt
