@@ -1627,8 +1627,9 @@ async function decryptEnvelope(sealedB64) {
         return JSON.parse(json);
     } catch (e) {
         console.error("[decrypt] fatal fail:", e);
-        // DIAGNOSTIC ALERT: help us see what's happening on iPhone
-        alert("Decrypt Error:\n" + e.message + "\n\nInput (truncated): " + (sealedB64 ? sealedB64.slice(0, 50) : "null"));
+        // Не показывать alert — Lesson #202 (Олег 2026-08-26): decrypt errors для
+        // СВОИХ исходящих — норма (outbox не найден / другой key). Пользователю
+        // показывается "📎 filename" placeholder через pollHist fallback.
         throw e;
     }
 }
@@ -2298,7 +2299,8 @@ async function pollHistoryForPeer(peer) {
             let resolvedBody = bodyText;
             let resolvedAttachments = msg.attachments || [];
             let resolvedAttachmentsMeta = msg.attachments || [];
-            if (fromNpub === myNpub) {
+            let isOutgoingSelf = fromNpub === myNpub;
+            if (isOutgoingSelf) {
                 const outbox = loadOutboxForPeer(peer);
                 let localOut = outbox.find(o => {
                     if (hash && o._hash === hash) return true;
@@ -2318,6 +2320,37 @@ async function pollHistoryForPeer(peer) {
                     if (Array.isArray(localOut.attachments_meta) && localOut.attachments_meta.length > 0) {
                         resolvedAttachmentsMeta = localOut.attachments_meta;
                     }
+                } else {
+                    // Lesson #201 (Олег 2026-08-26): outbox не нашёлся (например,
+                    // после hard refresh iPhone PWA / outbox cleanup). Для исходящих
+                    // НЕ показывать "🔒 шифрованное сообщение" — это триггерит
+                    // async decrypt, который падает с bad tag. Вместо этого:
+                    // синтетический placeholder из server attachment meta (filename+size).
+                    const attMeta = msg.attachments || [];
+                    if (attMeta.length > 0) {
+                        const att = attMeta[0];
+                        const name = att.name || "attachment";
+                        const sizeKb = att.size ? ` (${(att.size / 1024).toFixed(1)} KB)` : "";
+                        const mimeShort = (att.mime || "").split("/")[1] || "file";
+                        const emoji = att.mime && att.mime.startsWith("image/") ? "🖼" :
+                                      att.mime && att.mime.startsWith("video/") ? "🎬" :
+                                      att.mime && att.mime.startsWith("audio/") ? "🎵" : "📎";
+                        resolvedBody = `${emoji} ${name}${sizeKb}`;
+                        // Также сохранить attachment meta для renderMessages
+                        // (будет рендерить как attachment chip без decrypt)
+                        resolvedAttachmentsMeta = attMeta.map(a => ({
+                            ...a,
+                            plaintext_b64: null,  // marker для renderMessages: нет decrypt
+                            mime: a.mime,
+                            name: a.name,
+                            size: a.size,
+                        }));
+                    } else {
+                        // Текстовое исходящее без outbox — fallback к body
+                        resolvedBody = "[исходящее сообщение]";
+                    }
+                }
+            }
                     console.log("[pollHist] outgoing resolved via outbox", peer.slice(0, 12), "body=", resolvedBody.slice(0, 20), "att_count=", resolvedAttachmentsMeta.length, "_hash=", hash, "out_hash=", localOut._hash);
                 } else if (fromNpub === myNpub) {
                     console.warn("[pollHist] outgoing NOT resolved", peer.slice(0, 12), "msg_hash=", hash, "msg_ts=", msg.ts, "outbox_count=", outbox.length, "outbox_keys=", outbox.map(o => ({_hash: o._hash, _sig: o._sig, ts: o.ts})).slice(0, 3));
