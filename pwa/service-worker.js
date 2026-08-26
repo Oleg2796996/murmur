@@ -8,7 +8,7 @@
 // below deletes every cache whose name doesn't match the current version,
 // so old SW-controlled clients get the fresh files automatically without
 // the user needing to add ?v=N to the URL.
-const CACHE_VERSION = "murmur-v52";
+const CACHE_VERSION = "murmur-v64";
 const PRECACHE = []; // No precache — browser handles HTTP cache naturally.
 
 self.addEventListener("install", (event) => {

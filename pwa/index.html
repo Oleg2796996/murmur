@@ -100,11 +100,13 @@
             </section>
 
             <footer id="input-area" class="input-area" hidden>
-                <button id="btn-attach" class="attach-btn" title="Прикрепить файл (до 50 МБ)">📎</button>
-                <input type="file" id="file-input" multiple accept="image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/ogg,audio/wav,video/mp4,application/pdf,text/plain" style="display:none" />
                 <div id="attachments-preview" class="attachments-preview"></div>
-                <textarea id="message-input" placeholder="сообщение…" rows="1" autocomplete="off"></textarea>
-                <button id="btn-send" class="send-btn" title="отправить">&#8594;</button>
+                <div class="input-row">
+                    <button id="btn-attach" class="attach-btn" title="Прикрепить файл (до 50 МБ)">📎</button>
+                    <input type="file" id="file-input" multiple accept="image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/ogg,audio/wav,video/mp4,application/pdf,text/plain" style="display:none" />
+                    <textarea id="message-input" placeholder="сообщение…" rows="1" autocomplete="off"></textarea>
+                    <button id="btn-send" class="send-btn" title="отправить">&#8594;</button>
+                </div>
             </footer>
         </main>
     </div>
@@ -164,6 +166,7 @@
       // Safety: if app.js was loaded before this script, handlers are already wired there.
       console.log("[murmur] inline handlers bound");
     </script>
+    <script src="render-attachments.js" defer></script>
     <script src="app.js" defer></script>
     <script>
       // Register service worker for offline support & cache versioning.
