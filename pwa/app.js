@@ -2315,6 +2315,9 @@ async function pollHistoryForPeer(peer) {
                     if (Array.isArray(localOut.attachments_meta) && localOut.attachments_meta.length > 0) {
                         resolvedAttachmentsMeta = localOut.attachments_meta;
                     }
+                    console.log("[pollHist] outgoing resolved via outbox", peer.slice(0, 12), "body=", resolvedBody.slice(0, 20), "att_count=", resolvedAttachmentsMeta.length, "_hash=", hash, "out_hash=", localOut._hash);
+                } else if (fromNpub === myNpub) {
+                    console.warn("[pollHist] outgoing NOT resolved", peer.slice(0, 12), "msg_hash=", hash, "msg_ts=", msg.ts, "outbox_count=", outbox.length, "outbox_keys=", outbox.map(o => ({_hash: o._hash, _sig: o._sig, ts: o.ts})).slice(0, 3));
                 }
             }
 
