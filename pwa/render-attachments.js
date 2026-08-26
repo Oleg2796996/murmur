@@ -28,10 +28,13 @@ function b64decode(b64) {
 }
 
 // 1. Fetch blob ciphertext from server
-async function fetchBlob(blobId) {
+async function fetchBlob(blobId, abortSignal) {
     const r = await fetch(`${ATTACH_API_BASE}/api/blob/${blobId}`, {
         method: "GET",
         credentials: "omit",
+        // Lesson #210 (Олег 2026-08-26 13:38): pass abort signal to fetch so a
+        // newer renderMessages call can cancel our inflight ciphertext download.
+        signal: abortSignal || undefined,
     });
     if (!r.ok) {
         throw new Error(`fetchBlob HTTP ${r.status}`);
@@ -79,7 +82,7 @@ function withTimeout(promise, ms, label) {
 }
 
 // 4. Main: decrypt + render
-async function renderAttachment(att, containerEl) {
+async function renderAttachment(att, containerEl, abortSignal) {
     if (!att || !att.blob_id || !att.wrapped_key || !att.iv) {
         const err = document.createElement("div");
         err.className = "attach-error";
@@ -95,13 +98,19 @@ async function renderAttachment(att, containerEl) {
 
     let blobUrl = null;
     try {
+        // Lesson #210 (Олег 2026-08-26 13:38): AbortSignal support — abortable fetch
+        // + cleanup when newer renderMessages replaces us
+        if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
         // a. Fetch ciphertext
-        const ct = await withTimeout(fetchBlob(att.blob_id), 30000, "fetchBlob");
+        const ct = await withTimeout(fetchBlob(att.blob_id, abortSignal), 30000, "fetchBlob");
+        if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
         // b. Unwrap AES key (ECIES)
         const key = await withTimeout(eciesUnwrapKey(att.wrapped_key), 15000, "eciesUnwrap");
+        if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
         // c. Decrypt
         const iv = b64decode(att.iv);
         const plain = await aesDecrypt({ ciphertext: ct, key, iv });
+        if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
         // d. Blob + URL
         const mime = att.mime || "application/octet-stream";
         const blob = new Blob([plain], { type: mime });
@@ -111,6 +120,11 @@ async function renderAttachment(att, containerEl) {
         placeholder.replaceWith(el);
         return el;
     } catch (err) {
+        // Lesson #210: not a real error if we were aborted (normal cleanup).
+        if (abortSignal && abortSignal.aborted) {
+            placeholder.remove();
+            return null;
+        }
         placeholder.textContent = `⚠️ ${err.message || "decrypt failed"}`;
         placeholder.className = "attach-error";
         return placeholder;
