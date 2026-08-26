@@ -8,7 +8,7 @@
 // below deletes every cache whose name doesn't match the current version,
 // so old SW-controlled clients get the fresh files automatically without
 // the user needing to add ?v=N to the URL.
-const CACHE_VERSION = "murmur-v84";
+const CACHE_VERSION = "murmur-v85";
 const PRECACHE = []; // No precache — browser handles HTTP cache naturally.
 
 // Lesson #217 (Олег 2026-08-26 15:21): allow client to request skipWaiting
@@ -52,12 +52,20 @@ self.addEventListener("activate", (event) => {
   })());
 });
 
-// NOTE: fetch handler removed. It was causing UI breakage on iOS PWA
-// (stale HTML/JS/CSS served from cache, buttons unclickable). We rely on
-// the browser's normal HTTP cache. SW is now only for push notifications.
+// Lesson #219 (Олег 2026-08-26 15:42): fetch handler возвращён ТОЛЬКО для
+// навигации (HTML) — перенаправляет на версионированный URL, чтобы пробить
+// iOS Safari PWA HTML cache. Не перехватываем app.js / images / API —
+// для них HTTP cache достаточно (?v= query string).
 self.addEventListener("fetch", (event) => {
-    // pass-through: do not respondWith, browser handles it normally.
-    return;
+    const req = event.request;
+    // Только navigation requests (HTML)
+    if (req.mode === "navigate") {
+        const url = new URL(req.url);
+        // Перенаправляем на версионированный путь
+        const target = `${url.origin}/index.html?v=${CACHE_VERSION}`;
+        event.respondWith(Response.redirect(target, 302));
+    }
+    // Остальное: pass-through
 });
 
 self.addEventListener("push", (event) => {
