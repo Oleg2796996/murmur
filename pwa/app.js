@@ -661,7 +661,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v98. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v99. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -2710,9 +2710,29 @@ async function pollHistoryForPeer(peer) {
                                     if (r.attachments) m.attachments = r.attachments;
                                 }
                                 changed = true;
+                                // Lesson #238 v3 (Олег 2026-08-26 22:02 MSK):
+                                // sidebar preview update ВНУТРИ цикла по m, не
+                                // снаружи. v2 использовал m вне loop scope —
+                                // ReferenceError, .catch() глотал, ничего не
+                                // происходило. Lesson #232 inline update тоже
+                                // внутри цикла — работает. Сейчас то же самое.
+                                if (m.direction === "in" && m.body && contacts) {
+                                    if (!contacts[peer]) contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
+                                    const preview = String(m.body).slice(0, 80);
+                                    if (contacts[peer].lastMessagePreview !== preview) {
+                                        contacts[peer].lastMessagePreview = preview;
+                                        contacts[peer].lastTs = m.ts || Date.now();
+                                        renderChatList();
+                                    }
+                                }
                             } else if (r && r.text === "__DECRYPT_FAILED__") {
                                 if (m.direction === "in") {
                                     m.body = "[не удалось расшифровать]";
+                                    // Lesson #238 v3: failed decrypt тоже обновляет preview
+                                    if (contacts && contacts[peer]) {
+                                        contacts[peer].lastMessagePreview = "[не удалось расшифровать]";
+                                        renderChatList();
+                                    }
                                 }
                                 changed = true;
                             }
@@ -2753,22 +2773,9 @@ async function pollHistoryForPeer(peer) {
                                 try { messagesArea.scrollTop = messagesArea.scrollHeight; } catch (e) { /* ignore */ }
                             });
                         }
-                        // Lesson #238 v2 (Олег 2026-08-26 21:56 MSK): исправлен
-                        // contacts.peers.find() → contacts[peer]. Оригинал падал
-                        // с undefined.find (contacts это hash-table {} не массив).
-                        // Ошибка ловилась в .catch ниже и игнорилась, sidebar не
-                        // обновлялся. Outgoing работали потому что они из outbox +
-                        // отдельный path Lesson #2030 (contacts[activePeer].lastMessagePreview
-                        // = text.slice(0,80) + renderChatList()).
-                        if (changed && m.direction === "in" && m.body && contacts) {
-                            if (!contacts[peer]) contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
-                            const preview = m.body.slice(0, 80);
-                            if (contacts[peer].lastMessagePreview !== preview) {
-                                contacts[peer].lastMessagePreview = preview;
-                                contacts[peer].lastTs = m.ts || Date.now();
-                                renderChatList();
-                            }
-                        }
+                        // Lesson #238 v3 (moved into loop above) — sidebar preview update
+                        // теперь ВНУТРИ for-loop где m определён. v2 был снаружи
+                        // → ReferenceError → .catch глотал → не работало.
                     })
                     .catch(e => console.warn("[pollHist] async decrypt chain failed:", e));
             }
