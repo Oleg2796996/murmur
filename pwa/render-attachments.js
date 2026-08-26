@@ -150,9 +150,38 @@ async function renderAttachment(att, containerEl, abortSignal) {
             placeholder.remove();
             return null;
         }
-        placeholder.textContent = `⚠️ ${err.message || "decrypt failed"}`;
-        placeholder.className = "attach-error";
-        return placeholder;
+        // Lesson #244 (Олег 2026-08-26 22:46): retry button + clearer error message.
+        // Oleg: 'тут тоже первые фото после обновления перестали отображаться'.
+        // Если blob fetch или decrypt упал — пользователь должен иметь возможность
+        // повторить, не дожидаясь полного reload.
+        const errEl = document.createElement("div");
+        errEl.className = "attach-error";
+        const errMsg = err.message || "не удалось расшифровать";
+        errEl.innerHTML = `🔒 ${errMsg}<br><button class="link-btn" style="margin-top:6px;font-size:0.85em">↻ повторить</button>`;
+        placeholder.replaceWith(errEl);
+        // Retry handler: clear cache (in case stale), re-run renderAttachment.
+        errEl.querySelector("button").addEventListener("click", async () => {
+            errEl.remove();
+            const cache = window.MurmurBlobCache;
+            if (cache && cache.isAvailable && cache.isAvailable()) {
+                await cache.delete(att.blob_id).catch(() => {});
+            }
+            // Re-render — renderMessages calls renderAttachment again.
+            // We need to find the bubble and trigger re-render.
+            if (typeof window.__retryAttachment === "function") {
+                window.__retryAttachment(att, containerEl, abortSignal);
+            } else {
+                // Fallback: clear placeholder, call recursively with fresh
+                const freshPlaceholder = document.createElement("div");
+                freshPlaceholder.className = "attach-decrypting";
+                freshPlaceholder.textContent = "🔓 расшифровка…";
+                containerEl.appendChild(freshPlaceholder);
+                try {
+                    await renderAttachment(att, containerEl, abortSignal);
+                } catch (e) { /* ignore */ }
+            }
+        });
+        return errEl;
     }
     // Note: blobUrl lifetime is tied to the rendered element. Caller can
     // revoke when element is removed from DOM (e.g., message deletion).
