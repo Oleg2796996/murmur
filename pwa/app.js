@@ -661,7 +661,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v90. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v91. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -1540,7 +1540,28 @@ async function loadHistory(peer, beforeTs) {
 }
 
 // ── Render Messages ──
-function renderMessages() {
+async function renderMessages() {
+    if (!activePeer) return;
+    // Lesson #229 (Олег 2026-08-26 16:50): WAIT for previous render's attach
+    // tasks before starting new one. Без этого fire-and-forget async attach
+    // renders заканчивались ПОСЛЕ innerHTML="" — placeholderEl уже уничтожен,
+    // cache HIT вызывал .replaceWith на detached element → фото не появлялось.
+    if (window.__murmurPendingRender && window.__murmurPendingRender !== renderMessages._inflight) {
+        try { await window.__murmurPendingRender; } catch (e) { /* ignore */ }
+    }
+    renderMessages._inflight = (async () => {
+        await _renderMessagesImpl();
+    })();
+    window.__murmurPendingRender = renderMessages._inflight;
+    try {
+        await renderMessages._inflight;
+    } finally {
+        if (window.__murmurPendingRender === renderMessages._inflight) {
+            window.__murmurPendingRender = null;
+        }
+    }
+}
+async function _renderMessagesImpl() {
     if (!activePeer) return;
     const all = messages[activePeer] || [];
     const msgs = [...all].sort((a, b) => (a.ts || 0) - (b.ts || 0));
@@ -1691,6 +1712,14 @@ function renderMessages() {
                 try { window.__murmurRenderAbort.abort("newer render starting"); } catch (e) { /* ignore */ }
             }
             window.__murmurRenderAbort = renderAbort;
+            // Lesson #229 (Олег 2026-08-26 16:50): собираем Promise всех
+            // attach renders в window.__murmurAttachTasks. renderMessages вызовет
+            // await на них ПЕРЕД возвратом. Без этого IIFE fire-and-forget
+            // теряется при следующем innerHTML="" — cache HIT на повторном render
+            // срабатывает ПОСЛЕ того как placeholderEl уже уничтожен.
+            if (typeof window.__murmurAttachTasks === "undefined") window.__murmurAttachTasks = [];
+            const thisRenderTasks = [];
+            window.__murmurAttachTasks.push(thisRenderTasks);
             (async () => {
                 try {
                     if (!window.MurmurRenderAttachments) {
@@ -1702,15 +1731,20 @@ function renderMessages() {
                                      window.MurmurRenderAttachments :
                                      window.MurmurRenderAttachments.MurmurRenderAttachments;
                     // PARALLEL: render all attachments simultaneously (NOT sequential!)
-                    await Promise.allSettled(m.attachments_meta.map(async (att) => {
-                        if (renderAbort.signal.aborted) return null;
-                        try {
-                            return await renderer.renderAttachment(att, placeholderEl, renderAbort.signal);
-                        } catch (e) {
-                            console.error("[attach] render failed:", e);
-                            return null;
-                        }
-                    }));
+                    const allTasks = m.attachments_meta.map((att) => {
+                        const t = (async () => {
+                            if (renderAbort.signal.aborted) return null;
+                            try {
+                                return await renderer.renderAttachment(att, placeholderEl, renderAbort.signal);
+                            } catch (e) {
+                                console.error("[attach] render failed:", e);
+                                return null;
+                            }
+                        })();
+                        thisRenderTasks.push(t);
+                        return t;
+                    });
+                    await Promise.allSettled(allTasks);
                 } catch (e) {
                     console.error("[attach] init failed:", e);
                 }
@@ -1750,6 +1784,15 @@ function renderMessages() {
     // Lesson #225: previousUrls больше не нужен — URLs revoke'ятся автоматически
     // когда img detach'ится. Никакого setTimeout, никаких ручных вызовов.
     void previousUrls;  // silence unused warning
+    // Lesson #229 (Олег 2026-08-26 16:50): ждём завершения всех attach renders
+    // ЭТОГО вызова renderMessages перед возвратом. Без этого IIFE fire-and-forget
+    // теряется при следующем innerHTML="" — cache HIT срабатывает ПОСЛЕ того как
+    // placeholderEl уже уничтожен.
+    if (window.__murmurAttachTasks && window.__murmurAttachTasks.length > 0) {
+        const tasks = window.__murmurAttachTasks.slice();
+        window.__murmurAttachTasks = [];
+        await Promise.allSettled(tasks.flat());
+    }
 }
 
 // Day divider label: "Сегодня", "Вчера", or "12 авг".
