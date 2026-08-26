@@ -2290,9 +2290,36 @@ async function pollHistoryForPeer(peer) {
             }
 
             const { text: bodyText, isBinary } = extractMessageText(msg);
+            // Lesson #199 (Олег 2026-08-26): для исходящих — идти в outbox вместо
+            // "🔒 шифрованное сообщение", иначе UI покажет placeholder + decrypt errors.
+            let resolvedBody = bodyText;
+            let resolvedAttachments = msg.attachments || [];
+            let resolvedAttachmentsMeta = msg.attachments || [];
+            if (fromNpub === myNpub) {
+                const outbox = loadOutboxForPeer(peer);
+                let localOut = outbox.find(o => {
+                    if (hash && o._hash === hash) return true;
+                    if (o._sig === sigKey) return true;
+                    return false;
+                });
+                if (!localOut && outbox.length > 0) {
+                    let best = null, bestDelta = Infinity;
+                    for (const o of outbox) {
+                        const delta = Math.abs((o.ts || 0) - (msg.ts || 0));
+                        if (delta < bestDelta && delta <= 60) { best = o; bestDelta = delta; }
+                    }
+                    if (best) localOut = best;
+                }
+                if (localOut && localOut.body) {
+                    resolvedBody = localOut.body;
+                    if (Array.isArray(localOut.attachments_meta) && localOut.attachments_meta.length > 0) {
+                        resolvedAttachmentsMeta = localOut.attachments_meta;
+                    }
+                }
+            }
 
             const envelope = {
-                from: fromNpub, to: toField, body: bodyText, ts: msg.ts,
+                from: fromNpub, to: toField, body: resolvedBody, ts: msg.ts,
                 direction: fromNpub === myNpub ? "out" : "in",
                 sig: msg.sig || "", _sig: sigKey, _hash: hash,
                 isBinary: isBinary,
@@ -2300,7 +2327,8 @@ async function pollHistoryForPeer(peer) {
                 // Phase 3: keep server fields for async decrypt (loadHistory decrypts
                 // via raw `m` with body_base64; here we need it on envelope too).
                 _server_msg: msg,
-                attachments_meta: msg.attachments || [],
+                attachments: resolvedAttachments,
+                attachments_meta: resolvedAttachmentsMeta,
             };
             messages[peer].push(envelope);
             added = true;
@@ -2347,8 +2375,10 @@ async function pollHistoryForPeer(peer) {
             // Phase 3: async decrypt new envelopes to replace placeholder
             // body "🔒 шифрованное сообщение" with real text (and attach meta).
             // Mirrors loadHistory pDecrypt pattern (Олег 2026-08-25 16:25 MSK).
+            // Lesson #199 (Олег 2026-08-26): для исходящих (direction === "out")
+            // НЕ пытаться расшифровать — у нас уже есть body/attachments_meta.
             const allMsgs = messages[peer];
-            const encMsgs = allMsgs.filter(m => m.body === "🔒 шифрованное сообщение" && m._server_msg);
+            const encMsgs = allMsgs.filter(m => m.body === "🔒 шифрованное сообщение" && m._server_msg && m.direction === "in");
             console.log("[pollHist] total in peer:", allMsgs.length, "encMsgs:", encMsgs.length, "first body:", allMsgs[0]?.body?.slice(0, 30), "first has server_msg:", !!allMsgs[0]?._server_msg);
             if (encMsgs.length > 0) {
                 Promise.all(encMsgs.map(m => decryptWithTimeout(m._server_msg).catch(() => null)))
