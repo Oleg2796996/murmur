@@ -7,6 +7,13 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="murmur">
+    <!-- Lesson #219 (Олег 2026-08-26 15:42): iPhone PWA standalone mode кэширует
+     HTML агрессивно. Cache-Control: no-store в meta http-equiv не всегда
+     работает, но Cache-Control: no-cache + no-store + must-revalidate +
+     Pragma: no-cache + Expires: 0 — комбинация пробивает больше кэшей. -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>murmur</title>
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -15,7 +22,7 @@
      caches app.js via HTTP cache independently of SW. Query string forces
      re-fetch on each version bump. SW CACHE_VERSION also bumps for SW
      activation, but the app.js itself needs explicit URL change. -->
-    <link rel="stylesheet" href="styles.css?v=84">
+    <link rel="stylesheet" href="styles.css?v=85">
 </head>
 <body>
     <!-- ================= IDENTITY SCREEN (create/restore) ================= -->
@@ -191,14 +198,14 @@
     <!-- Lesson #216 (Олег 2026-08-26 15:18): ?v= cache busting — iOS Safari
      HTTP cache не обновляет app.js по CACHE_VERSION bump alone.
      Query string = guaranteed fresh load on each deploy. -->
-    <script src="blob-cache.js?v=84" defer></script>
-    <script src="render-attachments.js?v=84" defer></script>
-    <script src="app.js?v=84" defer></script>
+    <script src="blob-cache.js?v=85" defer></script>
+    <script src="render-attachments.js?v=85" defer></script>
+    <script src="app.js?v=85" defer></script>
     <script>
       // Register service worker for offline support & cache versioning.
       // Bump CACHE_VERSION in service-worker.js to invalidate client caches.
       if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/service-worker.js?v=84").then(reg => {
+        navigator.serviceWorker.register("/service-worker.js?v=85").then(reg => {
           // Lesson #217 (Олег 2026-08-26 15:21): на iPhone PWA новый SW часто
           // НЕ устанавливается даже после reinstall. Force-update check
           // каждые 30 секунд пока PWA активна — гарантирует что клиент
