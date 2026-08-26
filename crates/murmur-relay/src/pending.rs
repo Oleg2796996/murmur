@@ -41,6 +41,12 @@ struct Inner {
 }
 
 impl PendingStore {
+    /// Path to the `<home>/pending` directory. Exposed so other modules
+    /// (e.g. upload) can derive home_dir via `.parent()`.
+    pub fn pending_dir(&self) -> PathBuf {
+        self.inner.lock().pending_dir.clone()
+    }
+
     pub fn new(home: &Path) -> std::io::Result<Self> {
         let pending_dir = home.join("pending");
         fs::create_dir_all(&pending_dir)?;

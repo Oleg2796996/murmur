@@ -212,7 +212,7 @@ pub fn accept_envelope(
     if let Some(store) = store {
         let ts_ms = ts as i64;
         let expires_at_ms = ts_ms + 86400; // 24 hours TTL
-        let inserted = match store.upsert_envelope(&hash_hex, &parsed.sender_npub, &alias, &parsed.payload, &parsed.signature, ts_ms, expires_at_ms) {
+        let inserted = match store.upsert_envelope_with_attachments(&hash_hex, &parsed.sender_npub, &alias, &parsed.payload, &parsed.signature, ts_ms, expires_at_ms, &parsed.attachments_meta) {
             Ok(v) => v,
             Err(e) => {
                 warn!(err=%e, "sqlite upsert failed");

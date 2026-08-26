@@ -538,6 +538,12 @@ impl PushServer {
                                 let push: &PushServer = &push_self;
                                 handle_post_envelope(req, pending.clone(), hub.clone(), push, db.clone()).await
                             }
+                            (Method::POST, "/api/upload") => {
+                                handle_api_upload(req, db.clone(), pending.clone()).await
+                            }
+                            (Method::GET, path) if path.starts_with("/api/blob/") => {
+                                handle_api_blob_download(req, db.clone()).await
+                            }
                             (Method::GET | Method::HEAD, _) => {
                                 if let Some(resp) = serve_static(&path, &static_dir, method == Method::HEAD) {
                                     Ok(resp)
@@ -1115,6 +1121,17 @@ async fn handle_api_history(
             // Convert raw body bytes to base64 and build response rows.
             let messages: Vec<serde_json::Value> = h.messages.iter().map(|m| {
                 let direction = if m.from_npub == npub { "out" } else { "in" };
+                let atts: Vec<serde_json::Value> = m.attachments.iter().map(|a| {
+                    serde_json::json!({
+                        "blob_id": a.blob_id,
+                        "wrapped_key": a.wrapped_key,
+                        "iv": a.iv,
+                        "name": a.name,
+                        "mime": a.mime,
+                        "size": a.size,
+                        "position": a.position,
+                    })
+                }).collect();
                 serde_json::json!({
                     "from": m.from_npub,
                     "to": m.to_alias,
@@ -1125,6 +1142,8 @@ async fn handle_api_history(
                     // Lesson #128: добавляем hash для надёжного дедупа на клиенте
                     // (сервер может переписать ts, тогда дедуп по myNpub+ts ломается).
                     "envelope_hash": m.envelope_hash,
+                    // Phase 2 (Variant Б): attachments_meta with blob_id + wrapped_key.
+                    "attachments": atts,
                 })
             }).collect();
 
@@ -1172,6 +1191,146 @@ fn json_error(status: StatusCode, msg: &str) -> Response<Full<Bytes>> {
         .header("access-control-allow-origin", "*")
         .body(Full::new(Bytes::from(body)))
         .unwrap()
+}
+
+// --- /api/upload + /api/blob/{id} (Phase 1 attachments, Variant B) ---
+
+use crate::upload::{handle_download as upload_handle_download, handle_upload as upload_handle_upload, UploadRequest};
+
+async fn handle_api_upload(
+    req: Request<Incoming>,
+    store: Option<crate::storage::MessageStore>,
+    pending: crate::PendingStore,
+) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    let db = match &store {
+        Some(db) => db,
+        None => return Ok(json_error(StatusCode::SERVICE_UNAVAILABLE, "message store not initialised")),
+    };
+
+    // 1. Parse query params (metadata: sha256, mime, name, size, wrapped_key).
+    let query = req.uri().query().unwrap_or("");
+    let mut sha256: Option<String> = None;
+    let mut mime: Option<String> = None;
+    let mut name: Option<String> = None;
+    let mut size: Option<u64> = None;
+    let mut wrapped_key: Option<String> = None;
+    for kv in query.split('&') {
+        if let Some(rest) = kv.strip_prefix("sha256=") {
+            sha256 = Some(url_decode(rest));
+        } else if let Some(rest) = kv.strip_prefix("mime=") {
+            mime = Some(url_decode(rest));
+        } else if let Some(rest) = kv.strip_prefix("name=") {
+            name = Some(url_decode(rest));
+        } else if let Some(rest) = kv.strip_prefix("size=") {
+            size = rest.parse().ok();
+        } else if let Some(rest) = kv.strip_prefix("wrapped_key=") {
+            wrapped_key = Some(url_decode(rest));
+        }
+    }
+
+    let (sha256, mime, name, size, wrapped_key) = match (sha256, mime, name, size, wrapped_key) {
+        (Some(s), Some(m), Some(n), Some(sz), Some(wk)) => (s, m, n, sz, wk),
+        _ => return Ok(json_error(StatusCode::BAD_REQUEST, "missing required query params: sha256, mime, name, size, wrapped_key")),
+    };
+
+    // 2. Read body (binary).
+    let body = match http_body_util::BodyExt::collect(req).await {
+        Ok(b) => b.to_bytes(),
+        Err(e) => return Ok(json_error(StatusCode::BAD_REQUEST, &format!("body collect: {e}"))),
+    };
+
+    // 3. Derive home_dir from pending's pending_dir parent.
+    // pending_dir = `<home>/pending` → parent = home_dir.
+    let home_dir = pending.pending_dir().parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let upload_req = UploadRequest {
+        body,
+        wrapped_key,
+        mime,
+        name,
+        sha256,
+        size,
+    };
+
+    match upload_handle_upload(db, &home_dir, upload_req) {
+        Ok(meta) => {
+            let resp = serde_json::json!({
+                "ok": true,
+                "blob_id": meta.blob_id,
+                "sha256": meta.sha256,
+                "size": meta.size,
+                "mime": meta.mime,
+            });
+            Ok(Response::builder()
+                .status(StatusCode::CREATED)
+                .header("content-type", "application/json")
+                .header("access-control-allow-origin", "*")
+                .body(Full::new(Bytes::from(resp.to_string())))
+                .unwrap())
+        }
+        Err(e) => Ok(json_error(e.status(), &e.message())),
+    }
+}
+
+async fn handle_api_blob_download(
+    req: Request<Incoming>,
+    store: Option<crate::storage::MessageStore>,
+) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    let db = match &store {
+        Some(db) => db,
+        None => return Ok(json_error(StatusCode::SERVICE_UNAVAILABLE, "message store not initialised")),
+    };
+
+    let blob_id = req.uri().path().trim_start_matches("/api/blob/");
+    if blob_id.is_empty() || blob_id.contains('/') {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "invalid blob_id"));
+    }
+
+    let (path, meta) = match upload_handle_download(db, blob_id) {
+        Ok(p) => p,
+        Err(e) => return Ok(json_error(e.status(), &e.message())),
+    };
+
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) => return Ok(json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("read blob: {e}"))),
+    };
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", &meta.mime)
+        .header("content-length", meta.size)
+        .header("x-blob-id", &meta.blob_id)
+        .header("x-blob-sha256", &meta.sha256)
+        .header("access-control-allow-origin", "*")
+        .header("cache-control", "private, max-age=31536000, immutable")
+        .body(Full::new(Bytes::from(bytes)))
+        .unwrap())
+}
+
+fn url_decode(s: &str) -> String {
+    use std::str;
+    let mut out = Vec::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (hex_val(bytes[i+1]), hex_val(bytes[i+2])) {
+                out.push((h << 4) | l);
+                i += 3;
+                continue;
+            }
+        } else if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    str::from_utf8(&out).unwrap_or(s).to_string()
 }
 
 // --- base64url helpers (no padding) ---
