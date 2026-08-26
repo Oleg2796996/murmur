@@ -661,7 +661,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v91. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v92. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -1540,28 +1540,7 @@ async function loadHistory(peer, beforeTs) {
 }
 
 // ── Render Messages ──
-async function renderMessages() {
-    if (!activePeer) return;
-    // Lesson #229 (Олег 2026-08-26 16:50): WAIT for previous render's attach
-    // tasks before starting new one. Без этого fire-and-forget async attach
-    // renders заканчивались ПОСЛЕ innerHTML="" — placeholderEl уже уничтожен,
-    // cache HIT вызывал .replaceWith на detached element → фото не появлялось.
-    if (window.__murmurPendingRender && window.__murmurPendingRender !== renderMessages._inflight) {
-        try { await window.__murmurPendingRender; } catch (e) { /* ignore */ }
-    }
-    renderMessages._inflight = (async () => {
-        await _renderMessagesImpl();
-    })();
-    window.__murmurPendingRender = renderMessages._inflight;
-    try {
-        await renderMessages._inflight;
-    } finally {
-        if (window.__murmurPendingRender === renderMessages._inflight) {
-            window.__murmurPendingRender = null;
-        }
-    }
-}
-async function _renderMessagesImpl() {
+function renderMessages() {
     if (!activePeer) return;
     const all = messages[activePeer] || [];
     const msgs = [...all].sort((a, b) => (a.ts || 0) - (b.ts || 0));
@@ -1604,10 +1583,24 @@ async function _renderMessagesImpl() {
     if (typeof window.__murmurUrlsToRevoke === "undefined") window.__murmurUrlsToRevoke = [];
     const previousUrls = window.__murmurUrlsToRevoke;
     window.__murmurUrlsToRevoke = [];
-    messagesArea.innerHTML = "";
+    // Lesson #230 (Олег 2026-08-26 16:55): ONLY clear when activePeer changes
+    // or renderMessages called with fundamentally different state.
+    // Default: НЕ clear (preserves already-rendered imgs + their blob URLs).
+    if (typeof window.__murmurLastRenderedPeer === "undefined") window.__murmurLastRenderedPeer = null;
+    if (window.__murmurLastRenderedPeer !== activePeer) {
+        messagesArea.innerHTML = "";
+        window.__murmurLastRenderedPeer = activePeer;
+        window.__murmurRenderedSigs = new Set();
+    }
 
     let lastDay = null;
+        // Lesson #230 (Олег 2026-08-26 16:55): track rendered sigs.
+    // Пропускаем bubbles для уже отрисованных messages.
+    if (!window.__murmurRenderedSigs) window.__murmurRenderedSigs = new Set();
+    const renderedSigs = window.__murmurRenderedSigs;
     for (const m of msgs) {
+        const sig = m._sig || (m.from_npub || m.from) + m.ts;
+        if (renderedSigs.has(sig)) continue; // already in DOM, skip
         const day = formatDayDivider(m.ts);
         if (day && day !== lastDay) {
             const divider = document.createElement("div");
@@ -1642,6 +1635,8 @@ async function _renderMessagesImpl() {
             bodyHtml +
             "<span class='bubble-time'>" + formatTime(m.ts) + (statusGlyph ? " " + statusGlyph : "") + "</span>";
         messagesArea.appendChild(div);
+        // Lesson #230: mark this sig as rendered.
+        renderedSigs.add(sig);
         // Phase 3: render attachments from outbox plaintext (own outgoing) or
         // decrypt via WASM (incoming) — both async, no inline data: URLs.
         const outboxAttachments = (m.direction === "out" && m._sig) ? null : null; // placeholder — populated below
@@ -1784,15 +1779,6 @@ async function _renderMessagesImpl() {
     // Lesson #225: previousUrls больше не нужен — URLs revoke'ятся автоматически
     // когда img detach'ится. Никакого setTimeout, никаких ручных вызовов.
     void previousUrls;  // silence unused warning
-    // Lesson #229 (Олег 2026-08-26 16:50): ждём завершения всех attach renders
-    // ЭТОГО вызова renderMessages перед возвратом. Без этого IIFE fire-and-forget
-    // теряется при следующем innerHTML="" — cache HIT срабатывает ПОСЛЕ того как
-    // placeholderEl уже уничтожен.
-    if (window.__murmurAttachTasks && window.__murmurAttachTasks.length > 0) {
-        const tasks = window.__murmurAttachTasks.slice();
-        window.__murmurAttachTasks = [];
-        await Promise.allSettled(tasks.flat());
-    }
 }
 
 // Day divider label: "Сегодня", "Вчера", or "12 авг".
