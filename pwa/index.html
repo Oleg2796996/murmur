@@ -15,7 +15,7 @@
      caches app.js via HTTP cache independently of SW. Query string forces
      re-fetch on each version bump. SW CACHE_VERSION also bumps for SW
      activation, but the app.js itself needs explicit URL change. -->
-    <link rel="stylesheet" href="styles.css?v=83">
+    <link rel="stylesheet" href="styles.css?v=84">
 </head>
 <body>
     <!-- ================= IDENTITY SCREEN (create/restore) ================= -->
@@ -175,17 +175,30 @@
       // Safety: if app.js was loaded before this script, handlers are already wired there.
       console.log("[murmur] inline handlers bound");
     </script>
+    <!-- Lesson #218 (Олег 2026-08-26 15:36): inline version detection.
+     `document.currentScript` возвращает null для `<script defer>` (известный bug
+     браузеров). Inline script сначала ставит `window.__APP_VERSION__` из
+     document.querySelector('script[src*="app.js"]').getAttribute('src'). -->
+    <script>
+        (function() {
+            try {
+                const s = document.querySelector('script[src*="app.js"]');
+                const m = s && s.getAttribute("src").match(/[?&]v=(\d+)/);
+                window.__APP_VERSION__ = m ? m[1] : "?";
+            } catch (e) { window.__APP_VERSION__ = "?"; }
+        })();
+    </script>
     <!-- Lesson #216 (Олег 2026-08-26 15:18): ?v= cache busting — iOS Safari
      HTTP cache не обновляет app.js по CACHE_VERSION bump alone.
      Query string = guaranteed fresh load on each deploy. -->
-    <script src="blob-cache.js?v=83" defer></script>
-    <script src="render-attachments.js?v=83" defer></script>
-    <script src="app.js?v=83" defer></script>
+    <script src="blob-cache.js?v=84" defer></script>
+    <script src="render-attachments.js?v=84" defer></script>
+    <script src="app.js?v=84" defer></script>
     <script>
       // Register service worker for offline support & cache versioning.
       // Bump CACHE_VERSION in service-worker.js to invalidate client caches.
       if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/service-worker.js?v=83").then(reg => {
+        navigator.serviceWorker.register("/service-worker.js?v=84").then(reg => {
           // Lesson #217 (Олег 2026-08-26 15:21): на iPhone PWA новый SW часто
           // НЕ устанавливается даже после reinstall. Force-update check
           // каждые 30 секунд пока PWA активна — гарантирует что клиент

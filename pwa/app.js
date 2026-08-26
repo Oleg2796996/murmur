@@ -636,11 +636,9 @@ function enterMessenger() {
     // Lesson #212: show app version + SW version banner for debugging
     const banner = $("version-banner");
     if (banner) {
-        // Lesson #216: показываем РЕАЛЬНЫЙ script src version из document.currentScript
-        const me = document.currentScript;
-        const mySrc = me?.src || "";
-        const verMatch = mySrc.match(/[?&]v=(\d+)/);
-        const scriptVer = verMatch ? verMatch[1] : "?";
+        // Lesson #218: window.__APP_VERSION__ ставится в inline-script в index.html
+        // (document.currentScript возвращает null для defer-скриптов)
+        const scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
         banner.title = "Build murmur-v83. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
