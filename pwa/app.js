@@ -633,6 +633,13 @@ function enterMessenger() {
     identityScreen.hidden = true;
     messenger.hidden = false;
     messenger.classList.add("active");
+    // Lesson #212: show app version + SW version banner for debugging
+    const banner = $("version-banner");
+    if (banner) {
+        const swVer = (typeof self !== "undefined" && self.CACHE_VERSION) || "?";
+        banner.textContent = "app?v80 · sw?" + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
+        banner.title = "Build murmur-v80. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+    }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
     if (fullEl) fullEl.textContent = myNpub;
