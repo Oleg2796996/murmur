@@ -558,8 +558,8 @@ button.small { padding: 8px 12px; font-size: 13px; }
 /* INPUT AREA */
 .input-area {
     display: flex;
-    gap: 8px;
-    align-items: flex-end;
+    flex-direction: column;
+    gap: 6px;
     /* Combined inset: safe-area (home indicator) + visual breathing room.
        Use max() so on Android/older iOS without safe-area we still have
        at least 8px of padding. */
@@ -567,6 +567,12 @@ button.small { padding: 8px 12px; font-size: 13px; }
     background: var(--panel);
     border-top: 1px solid var(--border);
     flex-shrink: 0;
+}
+
+.input-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
 }
 
 #message-input {
@@ -617,7 +623,7 @@ button.small { padding: 8px 12px; font-size: 13px; }
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    padding: 6px 8px;
+    padding: 0 4px;
     min-height: 0;
     max-height: 100px;
     overflow-y: auto;
@@ -643,13 +649,24 @@ button.small { padding: 8px 12px; font-size: 13px; }
     color: #1a1a1a;
     font-weight: 600;
 }
+.attach-chip.uploading {
+    background: var(--accent);
+    opacity: 0.7;
+    font-style: italic;
+}
+}
 .attach-preview-img { max-width: 80px; max-height: 60px; border-radius: 6px; object-fit: cover; }
 
 /* In-message attachment preview (Олег 2026-08-24 11:00 MSK, image/video/audio) */
-.msg-attach-img { max-width: 220px; max-height: 220px; border-radius: 8px; margin-top: 4px; display: block; cursor: pointer; }
-.msg-attach-video { max-width: 240px; border-radius: 8px; margin-top: 4px; display: block; }
-.msg-attach-audio { width: 240px; margin-top: 4px; }
+.msg-attach-wrapper {
+    width: 100%;
+    margin-bottom: 4px;
+}
+.msg-attach-img { max-width: 100%; max-height: 220px; border-radius: 8px; display: block; cursor: pointer; }
+.msg-attach-video { max-width: 100%; border-radius: 8px; display: block; }
+.msg-attach-audio { width: 100%; }
 .msg-attach-file {
+
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -688,4 +705,110 @@ button.small { padding: 8px 12px; font-size: 13px; }
     font-size: 11px;
     text-align: center;
     padding: 4px;
+}
+
+/* ================= PHASE 3 ATTACHMENTS ================= */
+/* Telegram-style: image preview above text bubble, full-width, rounded.
+   Bubble-attach shows the file as a separate figure above text. */
+
+.msg-attach-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0 0 4px 0;
+    max-width: 100%;
+}
+
+.msg-attach-remote {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+}
+
+.attach-figure {
+    margin: 0;
+    padding: 0;
+    max-width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.attach-image {
+    max-width: 100%;
+    max-height: 280px;
+    width: auto;
+    border-radius: 10px;
+    display: block;
+    cursor: pointer;
+    background: #00000010;
+}
+
+.attach-video {
+    max-width: 100%;
+    max-height: 280px;
+    border-radius: 10px;
+    display: block;
+}
+
+.attach-audio {
+    width: 100%;
+    margin: 2px 0;
+}
+
+.attach-file {
+    display: inline-block;
+    padding: 8px 12px;
+    background: #ffffff14;
+    border-radius: 10px;
+    text-decoration: none;
+    color: inherit;
+    font-size: 14px;
+    word-break: break-all;
+}
+
+.attach-figure figcaption {
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 0 2px;
+}
+
+.attach-decrypting {
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 6px 8px;
+    background: #ffffff10;
+    border-radius: 8px;
+    font-style: italic;
+}
+
+.attach-error {
+    color: #ff6b6b;
+    font-size: 12px;
+    padding: 6px 8px;
+    background: #ff6b6b20;
+    border-radius: 8px;
+}
+
+.fullscreen-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.92);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    cursor: pointer;
+}
+
+.fullscreen-image {
+    max-width: 96vw;
+    max-height: 96vh;
+    border-radius: 6px;
 }

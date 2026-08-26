@@ -50,6 +50,61 @@ const LS_NPUB = "murmur.npub";
 const LS_KEY = "murmur.sk";
 const LS_NAME = "murmur.name";
 const LS_CONTACT_NAMES = "murmur.contact_names";
+// Lesson #159 (Олег 2026-08-25 08:18 MSK): после reload локальный кэш messages[peer]
+// обнуляется. Без постоянного кэша исходящие на устройстве отправителя превращаются
+// в «исходящее, шифрование нарушено». Решение: outbox — localStorage кэш (sig → {body,
+// att, ts, from, to}) восстанавливается на init.
+const LS_OUTBOX = "murmur.outbox";
+
+async function saveToOutbox(msg, plaintext, attachmentsPlaintext) {
+    try {
+        const outbox = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
+        const key = msg._sig || (msg.from + ":" + msg.ts);
+        // attachmentsPlaintext = [{ blob_id, plaintext_b64, mime, name, size }]
+        // — used for outgoing render without decrypt round-trip (Lesson #155).
+        outbox[key] = {
+            body: plaintext,
+            attachments: msg.attachments || [],
+            attachments_meta: attachmentsPlaintext || [],
+            ts: msg.ts,
+            from: msg.from,
+            to: msg.to,
+            sig: msg.sig,
+            _hash: msg._hash,
+            savedAt: Date.now(),
+        };
+        // Trim outbox to last 200 entries to keep localStorage manageable.
+        const keys = Object.keys(outbox);
+        if (keys.length > 200) {
+            keys.sort((a, b) => (outbox[a].ts || 0) - (outbox[b].ts || 0));
+            const toDelete = keys.slice(0, keys.length - 200);
+            toDelete.forEach(k => delete outbox[k]);
+        }
+        localStorage.setItem(LS_OUTBOX, JSON.stringify(outbox));
+    } catch (e) {
+        console.warn("[murmur] saveToOutbox failed:", e);
+    }
+}
+
+function loadOutboxForPeer(peerNpub) {
+    try {
+        const outbox = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
+        const result = [];
+        for (const [key, m] of Object.entries(outbox)) {
+            if (m.from === peerNpub || m.to === peerNpub) {
+                result.push({
+                    ...m,
+                    _sig: key,
+                    direction: m.from === peerNpub ? "out" : "in",
+                });
+            }
+        }
+        return result;
+    } catch (e) {
+        console.warn("[murmur] loadOutboxForPeer failed:", e);
+        return [];
+    }
+}
 const WS_URL = RELAY.replace("https://", "wss://").replace("http://", "ws://");
 const POLL_INTERVAL = 5000;
 const HISTORY_LIMIT = 100;
@@ -314,8 +369,24 @@ async function decryptEnvelopeForRender(env) {
         return { text: body, isBinary: false, attachments: plain.attachments || [], attachmentsMeta };
     } catch (e) {
         console.warn("decrypt failed:", e);
-        return { text: "🔒 не удалось расшифровать", isBinary: false };
+        // (Олег 2026-08-25 07:55 MSK): caller в loadHistory различает исходящие
+        // и входящие — для исходящих показываем attachments_meta вместо «🔒».
+        return { text: "__DECRYPT_FAILED__", isBinary: false };
     }
+}
+
+// Lesson #158 (Олег 2026-08-25 08:13 MSK): WASM decrypt может зависнуть
+// без exception на iPhone PWA. Per-decrypt таймаут через Promise.race.
+// Вынесен в module scope — loadHistory и pollHistoryForPeer используют.
+const DECRYPT_TIMEOUT_MS = 8000;
+function decryptWithTimeout(m) {
+    return Promise.race([
+        decryptEnvelopeForRender(m),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("decrypt timeout " + DECRYPT_TIMEOUT_MS + "ms")), DECRYPT_TIMEOUT_MS)),
+    ]).catch((e) => {
+        console.warn("[murmur] decrypt failed/timed out:", e.message);
+        return { text: "__DECRYPT_FAILED__", isBinary: false, attachments: [] };
+    });
 }
 
 /// Format byte size for UI ("4.5 MB", "123 KB")
@@ -324,6 +395,50 @@ function formatSize(n) {
     if (n < 1024*1024) return (n/1024).toFixed(1) + " KB";
     if (n < 1024*1024*1024) return (n/(1024*1024)).toFixed(1) + " MB";
     return (n/(1024*1024*1024)).toFixed(2) + " GB";
+}
+
+// Convert base64 string to Blob (for outgoing attachment self-render from outbox cache).
+function b64ToBlob(b64, mime) {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return new Blob([out], { type: mime || "application/octet-stream" });
+}
+
+// Render an outgoing attachment from local plaintext (no decrypt round-trip).
+function renderOutgoingAttachment({ mime, name, url, size }) {
+    const figure = document.createElement("figure");
+    figure.className = "attach-figure";
+    if (mime.startsWith("image/")) {
+        const img = document.createElement("img");
+        img.src = url;
+        img.alt = name || "image";
+        img.loading = "lazy";
+        img.className = "attach-image";
+        figure.appendChild(img);
+    } else if (mime.startsWith("video/")) {
+        const v = document.createElement("video");
+        v.src = url;
+        v.controls = true;
+        v.preload = "metadata";
+        v.className = "attach-video";
+        figure.appendChild(v);
+    } else if (mime.startsWith("audio/")) {
+        const a = document.createElement("audio");
+        a.src = url;
+        a.controls = true;
+        a.preload = "metadata";
+        a.className = "attach-audio";
+        figure.appendChild(a);
+    } else {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = name || "file";
+        link.className = "attach-file";
+        link.textContent = `📎 ${name || "file"} (${formatSize(size)})`;
+        figure.appendChild(link);
+    }
+    return figure;
 }
 
 function formatTime(ts) {
@@ -355,6 +470,16 @@ function formatChatTime(ts) {
 function truncateNpub(npub) {
     if (!npub || npub.length <= 14) return npub || "";
     return npub.slice(0, 8) + "..." + npub.slice(-6);
+}
+
+// Защита от утечки JSON envelope в preview sidebar:
+// сервер для зашифрованных сообщений должен присылать «🔒 ...», но
+// старые preview в БД или кэше могут содержать сырой JSON. Заменяем на placeholder.
+function sanitizePreview(p) {
+    if (!p) return "";
+    const s = String(p);
+    if (s.startsWith("{")) return "🔒 зашифрованное сообщение";
+    return s.slice(0, 80);
 }
 
 // Stable color for an avatar based on the npub (deterministic per peer).
@@ -968,13 +1093,13 @@ async function loadContacts() {
                     // Новый контакт — восстанавливаем unread из localStorage.
                     contacts[key] = {
                         peer: c.peer,
-                        lastMessagePreview: c.last_message_preview || "",
+                        lastMessagePreview: sanitizePreview(c.last_message_preview),
                         lastTs: c.last_ts || 0,
                         unreadCount: unreadMap[key] || 0,
                     };
                 } else {
                     if (c.last_ts > contacts[key].lastTs) {
-                        contacts[key].lastMessagePreview = c.last_message_preview || "";
+                        contacts[key].lastMessagePreview = sanitizePreview(c.last_message_preview);
                         contacts[key].lastTs = c.last_ts;
                     }
                     // Не перезаписываем локальный unread с сервера — мы их считаем сами.
@@ -1116,6 +1241,9 @@ async function loadHistory(peer, beforeTs) {
     const loadingEl = document.createElement("div");
     loadingEl.className = "loading-spinner";
     loadingEl.textContent = "Loading...";
+    // Lesson #158: чистим ВСЕ предыдущие spinners, чтобы они не копились
+    // при повторных openChat.
+    area.querySelectorAll(".loading-spinner").forEach(el => el.remove());
     area.prepend(loadingEl);
     // 25s timeout: Cloudflare tunnel cold-start can take 10-20s on first request after deploy.
     const fetchCtrl = new AbortController();
@@ -1128,6 +1256,9 @@ async function loadHistory(peer, beforeTs) {
         errEl.innerHTML = "Не удалось загрузить историю (25s). <button class='link-btn' onclick='openChat(\"" + peer + "\")'>Повторить</button>";
         area.appendChild(errEl);
     }, 25000);
+    // (Олег 2026-08-25 08:13 MSK) Lesson #158: WASM decrypt может зависнуть
+    // без exception на iPhone PWA. decryptWithTimeout — per-decrypt timeout
+    // wrapper (defined at module scope for reuse by pollHistoryForPeer).
     try {
         const r = await fetch(url, { cache: "no-store", credentials: "omit", signal: fetchCtrl.signal });
         clearTimeout(timeoutId);
@@ -1150,28 +1281,104 @@ async function loadHistory(peer, beforeTs) {
                 if (hash && existingHashSet.has(hash)) continue;
                 if (!hash && existingSigSet.has(sigKey)) continue;
                 // E2E async decrypt (Олег 2026-08-24 11:00 MSK)
-                pDecrypt.push(decryptEnvelopeForRender(m).then(({ text: bodyText, attachments: attArr }) => {
+                // Олег 2026-08-25 07:55 MSK: для исходящих от меня (fromNpub === myNpub)
+                // НЕ расшифровываем — у нас есть локальный plaintext в `messages[peer]`.
+                // Ищем существующий outgoing по _sig (fromNpub+ts) или _hash.
+                const isOutgoing = fromNpub === myNpub;
+                if (isOutgoing) {
+                    // Попытка найти локальный plaintext по _sig или _hash.
+                    // Lesson #159 (Олег 2026-08-25 08:18 MSK): после reload
+                    // messages[peer] пуст — идём в outbox localStorage (где
+                    // сохраняется с момента отправки). Это избавляет от анти-паттерна
+                    // «шифровать+расшифровывать собственные исходящие».
+                    let local = (messages[peer] || []).find(localMsg => {
+                        if (hash && localMsg._hash === hash) return true;
+                        if (!hash && localMsg._sig === sigKey) return true;
+                        return false;
+                    });
+                    if (!local) {
+                        // Fallback: outbox cache (после reload).
+                        const outbox = loadOutboxForPeer(peer);
+                        local = outbox.find(o => {
+                            if (hash && o._hash === hash) return true;
+                            if (!hash && o._sig === sigKey) return true;
+                            return false;
+                        });
+                    }
+                    if (local && local.body) {
+                        // Нашли локальный plaintext — используем его, не расшифровываем.
+                        const msg = {
+                            from: fromNpub, to: toField, body: local.body, ts: m.ts,
+                            direction: "out",
+                            sig: m.sig || "", _sig: sigKey, _hash: hash,
+                            isBinary: false,
+                            status: "sent",
+                            attachments: local.attachments || [],
+                        };
+                        newMsgs.push(msg);
+                        if (hash) existingHashSet.add(hash);
+                        existingSigSet.add(sigKey);
+                        return; // skip decrypt
+                    }
+                    // Нет локального — это сообщение отправлено с ДРУГОГО устройства
+                    // или до установки PWA. Расшифровываем.
+                }
+                pDecrypt.push(decryptWithTimeout(m).then(({ text: bodyText, attachments: attArr }) => {
                     const fromName = m.from_name || (m.envelope && m.envelope.from_name);
                     if (fromNpub && fromName && fromNpub !== myNpub) {
                         setContactName(fromNpub, fromName);
                     }
+                    // Для исходящих от меня: если decrypt упал (__DECRYPT_FAILED__) —
+                    // НЕ показываем «🔒 не удалось расшифровать». Вместо этого
+                    // показываем attachments_meta (если есть) или короткий
+                    // placeholder.
+                    let finalBody = bodyText;
+                    if (isOutgoing && bodyText === "__DECRYPT_FAILED__") {
+                        const meta = m.attachments_meta || (m.envelope && m.envelope.attachments_meta) || [];
+                        if (meta.length) {
+                            finalBody = "📎 " + meta.map(a => a.name + " (" + formatSize(a.size) + ")").join(", ");
+                        } else {
+                            finalBody = "[исходящее, шифрование нарушено]";
+                        }
+                    }
                     const msg = {
-                        from: fromNpub, to: toField, body: bodyText, ts: m.ts,
+                        from: fromNpub, to: toField, body: finalBody, ts: m.ts,
                         direction: m.direction || (fromNpub === myNpub ? "out" : "in"),
                         sig: m.sig || "", _sig: sigKey, _hash: hash,
                         isBinary: false,
                         status: m.direction === "out" ? "sent" : null,
                         attachments: attArr || [],
+                        // Phase 3: relay's attachment_refs (blob_id, wrapped_key, iv, mime, name, size).
+                        // Used by renderMessages to async decrypt + render incoming attachments.
+                        attachments_meta: m.attachments || [],
                     };
                     newMsgs.push(msg);
                     if (hash) existingHashSet.add(hash);
                     existingSigSet.add(sigKey);
                 }));
             }
-            await Promise.all(pDecrypt);
-            if (newMsgs.length > 0) messages[peer] = newMsgs.concat(messages[peer]);
+            // Lesson #158: даже если per-decrypt timeout стоит, защитим Promise.all общим
+    // таймаутом — иначе если один decrypt «утек» (например, бесконечный цикл в WASM),
+    // loadingEl.remove() никогда не вызовется, и пользователь будет видеть спам "Loading...".
+    const BATCH_TIMEOUT_MS = 20000;
+    await Promise.race([
+        Promise.all(pDecrypt),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("loadHistory batch timeout " + BATCH_TIMEOUT_MS + "ms")), BATCH_TIMEOUT_MS)),
+    ]);
+            if (newMsgs.length > 0) {
+                messages[peer] = newMsgs.concat(messages[peer]);
+                // Обновляем preview sidebar: берём самое свежее сообщение.
+                // (Олег 2026-08-25 08:18 MSK — preview не должен быть raw JSON.)
+                const newest = messages[peer][0];
+                if (newest && newest.body) {
+                    if (!contacts[peer]) contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
+                    contacts[peer].lastMessagePreview = sanitizePreview(newest.body);
+                    contacts[peer].lastTs = newest.ts;
+                }
+            }
             if (j.next_before_ts) oldestTsForPeer[peer] = j.next_before_ts;
             renderMessages();
+            renderChatList();
         }
     } catch (e) { clearTimeout(timeoutId); loadingEl.remove(); console.warn("[murmur] loadHistory FAILED:", e.message); }
 }
@@ -1210,26 +1417,85 @@ function renderMessages() {
         }
         // E2E: расшифрованное сообщение в m.body (если содержит attachments — они уже в массиве)
         const bodyText = m.body || "";
-        const attachments = m.attachments || [];
         let bodyHtml = escapeHtml(bodyText);
-        // Inline attachments preview (Олег 2026-08-24 11:00 MSK)
-        if (attachments.length > 0) {
-            for (const a of attachments) {
-                if (a.mime && a.mime.startsWith("image/")) {
-                    bodyHtml += `<img class="msg-attach-img" src="data:${escapeHtml(a.mime)};base64,${escapeHtml(a.data_b64)}" alt="${escapeHtml(a.name)}" />`;
-                } else if (a.mime && a.mime.startsWith("video/")) {
-                    bodyHtml += `<video class="msg-attach-video" controls src="data:${escapeHtml(a.mime)};base64,${escapeHtml(a.data_b64)}"></video>`;
-                } else if (a.mime && a.mime.startsWith("audio/")) {
-                    bodyHtml += `<audio class="msg-attach-audio" controls src="data:${escapeHtml(a.mime)};base64,${escapeHtml(a.data_b64)}"></audio>`;
-                } else {
-                    bodyHtml += `<a class="msg-attach-file" download="${escapeHtml(a.name)}" href="data:${escapeHtml(a.mime)};base64,${escapeHtml(a.data_b64)}">📎 ${escapeHtml(a.name)} (${formatSize(a.size)})</a>`;
-                }
-            }
-        }
+
+        // Входящие вложения рендерятся асинхронно через render-attachments.js
+        // Исходящие рендерятся из локального кэша outbox.
+        // Больше не используем data:URL в bodyHtml (Lesson #170).
         div.innerHTML =
             bodyHtml +
             "<span class='bubble-time'>" + formatTime(m.ts) + (statusGlyph ? " " + statusGlyph : "") + "</span>";
         messagesArea.appendChild(div);
+        // Phase 3: render attachments from outbox plaintext (own outgoing) or
+        // decrypt via WASM (incoming) — both async, no inline data: URLs.
+        const outboxAttachments = (m.direction === "out" && m._sig) ? null : null; // placeholder — populated below
+        // For outgoing: m.attachments_meta from outbox cache (with plaintext_b64)
+        if (m.direction === "out" && m.attachments_meta && Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0) {
+            const placeholderEl = document.createElement("div");
+            placeholderEl.className = "msg-attach-list";
+            div.insertBefore(placeholderEl, div.firstChild);
+            // Two cases:
+            // 1. Local outbox row — has plaintext_b64, render directly.
+            // 2. Server-fetched outgoing row (e.g. Alice views her own chat) —
+            //    no plaintext_b64, just a wrapped_key for the recipient.
+            //    Render a non-decrypting placeholder to avoid ECIES bad-tag error
+            //    (Lesson #195).
+            const hasPlaintext = m.attachments_meta.every(att => att.plaintext_b64);
+            if (hasPlaintext) {
+                for (const att of m.attachments_meta) {
+                    try {
+                        const mime = att.mime || "application/octet-stream";
+                        const blob = b64ToBlob(att.plaintext_b64, mime);
+                        const url = URL.createObjectURL(blob);
+                        const el = renderOutgoingAttachment({ mime, name: att.name, url, size: att.size });
+                        placeholderEl.appendChild(el);
+                    } catch (e) {
+                        console.error("[attach-out] render failed:", e);
+                    }
+                }
+            } else {
+                // Remote-outgoing: show static chips without trying to decrypt.
+                for (const att of m.attachments_meta) {
+                    const chip = document.createElement("div");
+                    chip.className = "msg-attach-remote";
+                    chip.textContent = "\ud83d\udcf7 " + (att.name || "file") + " (" + formatSize(att.size || 0) + ")";
+                    placeholderEl.appendChild(chip);
+                }
+            }
+            return;
+        }
+        // For incoming: server returned attachments_meta only (no plaintext).
+        if (m.attachments_meta && Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0) {
+            // Render placeholder container, then async decrypt + replace.
+            const placeholderEl = document.createElement("div");
+            placeholderEl.className = "msg-attach-list";
+            div.insertBefore(placeholderEl, div.firstChild);
+            (async () => {
+                if (!window.MurmurRenderAttachments) {
+                    try {
+                        // Try to use globally loaded script first, if not, dynamic import.
+                        if (typeof window.MurmurRenderAttachments === 'undefined') {
+                             const mod = await import("./render-attachments.js");
+                             window.MurmurRenderAttachments = mod.MurmurRenderAttachments || mod;
+                        }
+                    } catch (e) {
+                        console.error("[attach] dynamic import failed:", e);
+                        return;
+                    }
+                }
+                const renderer = window.MurmurRenderAttachments.renderAttachment ? 
+                                 window.MurmurRenderAttachments : 
+                                 window.MurmurRenderAttachments.MurmurRenderAttachments;
+
+                for (const att of m.attachments_meta) {
+                    try {
+                        await renderer.renderAttachment(att, placeholderEl);
+                    } catch (e) {
+                        console.error("[attach] render failed:", e);
+                    }
+                }
+            })();
+        }
     }
 }
 
@@ -1326,14 +1592,21 @@ async function encryptForRecipient(recipientNpub, plainObj) {
 /// ECIES decrypt a base64 sealed envelope to original plain object.
 async function decryptEnvelope(sealedB64) {
     const mod = await loadWasmModule();
-    const r = unwrap(mod.decrypt_envelope(sealedB64));
-    if (!r.ok) throw new Error("decrypt_envelope: " + r.error);
-    // r.data = base64 plaintext bytes → decode → JSON.parse.
-    const binStr = atob(r.data);
-    const bytes = new Uint8Array(binStr.length);
-    for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
-    const json = new TextDecoder().decode(bytes);
-    return JSON.parse(json);
+    try {
+        const r = unwrap(mod.decrypt_envelope(sealedB64));
+        if (!r.ok) throw new Error("WASM error: " + r.error);
+        // r.data = base64 plaintext bytes → decode → JSON.parse.
+        const binStr = atob(r.data);
+        const bytes = new Uint8Array(binStr.length);
+        for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+        const json = new TextDecoder().decode(bytes);
+        return JSON.parse(json);
+    } catch (e) {
+        console.error("[decrypt] fatal fail:", e);
+        // DIAGNOSTIC ALERT: help us see what's happening on iPhone
+        alert("Decrypt Error:\n" + e.message + "\n\nInput (truncated): " + (sealedB64 ? sealedB64.slice(0, 50) : "null"));
+        throw e;
+    }
 }
 
 async function sendMessage() {
@@ -1342,7 +1615,14 @@ async function sendMessage() {
     // disabled навсегда. finally гарантирует разблокировку.
     if (!activePeer) return;
     const text = messageInput.value.trim();
-    if (!text) return;
+    // Phase 2 (Variant Б): can send empty text if there are attachments.
+    if (!text && pendingAttachments.length === 0) return;
+    // Wait for any pending uploads to finish.
+    const stillUploading = pendingAttachments.some((a) => a._uploading);
+    if (stillUploading) {
+        alert("Подождите, пока файлы загрузятся…");
+        return;
+    }
     await ensureWasm();
     messageInput.value = "";
     messageInput.style.height = "auto";
@@ -1352,26 +1632,30 @@ async function sendMessage() {
     let renderedMsg = null;
     try {
         // E2E: resolve peer → npub, encrypt body via WASM ECIES.
+        // Attachments: NO inline base64 (Lesson #165) — already uploaded as
+        // encrypted blobs; envelope carries [{blob_id, wrapped_key, name, mime, size}].
         const peerKey = await resolvePeerKey(activePeer);
         if (!peerKey) {
             console.error("sendMessage: cannot resolve peer key for", activePeer);
             return;
         }
+        // Clone meta before clearing, to avoid race with subsequent edits.
+        const metaSnapshot = pendingAttachmentsMeta.map((a) => Object.assign({}, a));
         const sealedB64 = await encryptForRecipient(peerKey.npub, {
             body: text,
-            attachments: pendingAttachments, // [{name, mime, size, data_b64}]
+            attachments: metaSnapshot.map((a) => ({ name: a.name, mime: a.mime, size: a.size })),
         });
         pendingAttachments = []; // clear after encrypt
+        pendingAttachmentsMeta = []; // clear after encrypt
         renderAttachmentsPreview();
 
         const msg = {
             from: myNpub,
             to: activePeer,
             ct: sealedB64,         // ← E2E sealed envelope (base64)
-            attachments_meta: pendingAttachmentsMeta, // public meta (no file data)
+            attachments_meta: metaSnapshot, // [{blob_id, sha256, wrapped_key, name, mime, size}]
             ts: Math.floor(Date.now() / 1000),
         };
-        pendingAttachmentsMeta = [];
         const myName = (localStorage.getItem(LS_NAME) || "").trim();
         if (myName && myName !== myNpub) msg.from_name = myName;
         const mod = await loadWasmModule();
@@ -1391,15 +1675,38 @@ async function sendMessage() {
         }
         msg.signed_payload = btoa(binStr);
 
+        // Lesson #159: собираем plaintext cache для outbox + optimistic render
+        // (чтобы не делать encrypt→send→receive→decrypt round-trip для своих,
+        //  Lesson #155 — анти-паттерн).
+        // attachmentsWithPlaintext — массив meta с plaintext_b64 для self-render.
+        const attachmentsWithPlaintext = metaSnapshot
+            .filter((a) => a.plaintext_b64)
+            .map((a) => ({
+                blob_id: a.blob_id,
+                mime: a.mime,
+                name: a.name,
+                size: a.size,
+                plaintext_b64: a.plaintext_b64,
+            }));
+
         // Optimistic render
         if (!messages[activePeer]) messages[activePeer] = [];
         renderedMsg = {
             from: myNpub, to: activePeer, body: text, ts: msg.ts,
             direction: "out", sig: sig.data, _sig: myNpub + msg.ts,
             status: "sent", isBinary: false, _hash: null,
+            attachments_meta: attachmentsWithPlaintext, // [{blob_id, mime, name, size, plaintext_b64}]
         };
         messages[activePeer].push(renderedMsg);
         optimisticRendered = true;
+        // Lesson #159: сохраняем в outbox localStorage, чтобы после reload можно было
+        // отрисовать без decrypt (анти-паттерн шифровать/расшифровывать собственные).
+        console.log("[send] attachmentsWithPlaintext count =", attachmentsWithPlaintext.length, "metaSnapshot =", metaSnapshot.length);
+        saveToOutbox(renderedMsg, text, attachmentsWithPlaintext);
+        renderMessages();
+        scrollToBottom();
+        renderMessages();
+        scrollToBottom();
         renderMessages();
         scrollToBottom();
 
@@ -1440,6 +1747,17 @@ async function sendMessage() {
     } finally {
         // 🔒 Lesson #152: всегда разблокируем кнопку, даже если WASM encrypt упал.
         btnSend.disabled = false;
+        // 🧹 Lesson #196: всегда очищаем attachments-preview и input после send,
+        // даже если encrypt/POST упал. Иначе preview висит, и следующее сообщение
+        // "теряется" в чате.
+        attachmentsPreview.innerHTML = "";
+        pendingAttachments = [];
+        pendingAttachmentsMeta = [];
+        messageInput.value = "";
+        messageInput.style.height = "auto";
+        // 🔄 Lesson #196: перерендерить messages-area, чтобы новый bubble появился
+        // даже если WASM упал в середине.
+        if (typeof renderMessages === "function") renderMessages();
     }
 }
 
@@ -1508,41 +1826,103 @@ if (btnAttach && fileInput) {
     }
     fileInput.addEventListener("change", async (e) => {
         const files = Array.from(e.target.files || []);
+        if (!files.length) return;
+        // Phase 2 (Variant Б): encrypt each file client-side, upload via /api/upload,
+        // collect {blob_id, wrapped_key, name, mime, size} into pendingAttachmentsMeta.
+        // NO inline base64 (Lesson #165) — blob_id only goes into envelope.
+        if (!activePeer) {
+            pushRejectedChip({ name: "—", size: 0 }, "Выберите чат перед прикреплением файла.");
+            fileInput.value = "";
+            return;
+        }
+        let peerKey;
+        try {
+            peerKey = await resolvePeerKey(activePeer);
+        } catch (err) {
+            console.error("resolvePeerKey failed:", err);
+        }
+        if (!peerKey) {
+            pushRejectedChip({ name: "—", size: 0 }, "Не удалось разрешить ключ получателя.");
+            fileInput.value = "";
+            return;
+        }
+        // Ensure attachments module loaded (dynamic import, code-splitting #171).
+        if (!window.MurmurAttachments) {
+            try {
+                await import("./attachments.js");
+            } catch (err) {
+                pushRejectedChip({ name: "—", size: 0 }, "Не удалось загрузить модуль шифрования.");
+                console.error(err);
+                fileInput.value = "";
+                return;
+            }
+        }
         for (const file of files) {
             if (isUnsupported(file)) {
                 pushRejectedChip(file, "HEIC/HEIF не поддерживается. Сконвертируйте в JPG/PNG.");
                 continue;
             }
             if (file.size > MAX_ATTACHMENT_BYTES) {
-                alert(`Файл ${file.name} превышает 50 МБ (${formatSize(file.size)}).`);
+                pushRejectedChip(file, `Превышает 50 МБ (${formatSize(file.size)}).`);
                 continue;
             }
-            const dataB64 = await new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => {
-                    const buf = reader.result;
-                    const bytes = new Uint8Array(buf);
-                    let bin = "";
-                    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-                    resolve(btoa(bin));
-                };
-                reader.onerror = reject;
-                reader.readAsArrayBuffer(file);
-            });
-            pendingAttachments.push({
+            // Local preview chip (with progress).
+            const tempId = "tmp_" + Math.random().toString(36).slice(2, 8);
+            const placeholder = {
                 name: file.name,
                 mime: file.type || "application/octet-stream",
                 size: file.size,
-                data_b64: dataB64,
-            });
-            pendingAttachmentsMeta.push({
-                name: file.name,
-                mime: file.type || "application/octet-stream",
-                size: file.size,
-            });
+                _tempId: tempId,
+                _uploading: true,
+            };
+            pendingAttachments.push(placeholder);
+            pendingAttachmentsMeta.push(placeholder);
+            renderAttachmentsPreview();
+            try {
+                const result = await window.MurmurAttachments.attachEncryptAndUpload({
+                    file,
+                    peerNpub: peerKey.npub,
+                    onProgress: (loaded, total) => {
+                        const idx = pendingAttachments.findIndex((a) => a._tempId === tempId);
+                        if (idx >= 0) {
+                            pendingAttachments[idx]._progress = loaded / total;
+                            renderAttachmentsPreview();
+                        }
+                    },
+                });
+                // Replace placeholder with real meta (blob_id, wrapped_key, iv).
+                const idx = pendingAttachments.findIndex((a) => a._tempId === tempId);
+                if (idx >= 0) {
+                    Object.assign(pendingAttachments[idx], {
+                        blob_id: result.blob_id,
+                        sha256: result.sha256,
+                        wrapped_key: result.wrapped_key,
+                        iv: result.iv, // base64 12-byte IV for AES-GCM decrypt (Lesson #182)
+                        plaintext_b64: result.plaintext_b64, // local outbox cache
+                        mime: result.mime,
+                        size: file.size,
+                        name: file.name,
+                        _uploading: false,
+                        _progress: 1,
+                    });
+                    pendingAttachmentsMeta[idx] = Object.assign({}, pendingAttachments[idx]);
+                    delete pendingAttachmentsMeta[idx]._progress;
+                    delete pendingAttachmentsMeta[idx]._uploading;
+                    delete pendingAttachmentsMeta[idx]._tempId;
+                    renderAttachmentsPreview();
+                }
+            } catch (err) {
+                console.error("attachEncryptAndUpload failed:", err);
+                const idx = pendingAttachments.findIndex((a) => a._tempId === tempId);
+                if (idx >= 0) {
+                    pendingAttachments.splice(idx, 1);
+                    pendingAttachmentsMeta.splice(idx, 1);
+                }
+                pushRejectedChip(file, `Ошибка загрузки: ${err.message}`);
+                renderAttachmentsPreview();
+            }
         }
         fileInput.value = ""; // reset для повторного выбора того же файла
-        renderAttachmentsPreview();
     });
 }
 
@@ -1552,8 +1932,15 @@ function renderAttachmentsPreview() {
     for (let i = 0; i < pendingAttachments.length; i++) {
         const a = pendingAttachments[i];
         const chip = document.createElement("span");
-        chip.className = "attach-chip";
-        chip.innerHTML = `📎 ${escapeHtml(a.name)} (${formatSize(a.size)}) <span class="x" data-idx="${i}">✕</span>`;
+        chip.className = "attach-chip" + (a._uploading ? " uploading" : "");
+        let label = `📎 ${escapeHtml(a.name)} (${formatSize(a.size)})`;
+        if (a._uploading && typeof a._progress === "number") {
+            label += ` ⏳ ${Math.floor(a._progress * 100)}%`;
+        } else if (!a._uploading && a.blob_id) {
+            label += ` ✓`;
+        }
+        label += ` <span class="x" data-idx="${i}">✕</span>`;
+        chip.innerHTML = label;
         chip.querySelector(".x").addEventListener("click", () => {
             pendingAttachments.splice(i, 1);
             pendingAttachmentsMeta.splice(i, 1);
@@ -1731,7 +2118,7 @@ function handleIncomingEnvelope(env) {
         if (!contacts[peer]) {
             contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
         }
-        contacts[peer].lastMessagePreview = bodyText.slice(0, 80);
+        contacts[peer].lastMessagePreview = sanitizePreview(bodyText);
         contacts[peer].lastTs = env.ts;
 
         // Lesson #127: при reload WS присылает старые envelopes. Если ts <= maxTs,
@@ -1797,6 +2184,7 @@ async function pollInbox() {
 
 async function pollHistoryForPeer(peer) {
     if (!myNpub || !peer) return;
+    console.log("[pollHist] peer=", peer.slice(0,12), "myNpub=", myNpub.slice(0,12));
     try {
         const r = await fetch(RELAY + "/api/history?npub=" + encodeURIComponent(myNpub) + "&peer=" + encodeURIComponent(peer) + "&limit=" + HISTORY_LIMIT + "&_t=" + Date.now(), { cache: "no-store", credentials: "omit" });
         if (!r.ok) return;
@@ -1878,6 +2266,10 @@ async function pollHistoryForPeer(peer) {
                 sig: msg.sig || "", _sig: sigKey, _hash: hash,
                 isBinary: isBinary,
                 status: fromNpub === myNpub ? "sent" : null,
+                // Phase 3: keep server fields for async decrypt (loadHistory decrypts
+                // via raw `m` with body_base64; here we need it on envelope too).
+                _server_msg: msg,
+                attachments_meta: msg.attachments || [],
             };
             messages[peer].push(envelope);
             added = true;
@@ -1891,7 +2283,7 @@ async function pollHistoryForPeer(peer) {
             if (!contacts[peer]) {
                 contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
             }
-            contacts[peer].lastMessagePreview = bodyText.slice(0, 80);
+            contacts[peer].lastMessagePreview = sanitizePreview(bodyText);
             contacts[peer].lastTs = msg.ts;
             // Lesson #131 + #132.1: при ЛЮБОМ новом сообщении для этого
             // peer (входящем ИЛИ self-sender с другого устройства)
@@ -1914,11 +2306,46 @@ async function pollHistoryForPeer(peer) {
             }
             updateMaxTs(peer, msg.ts);
         }
+        console.log("[pollHist] after loop: added=", added, "msgs in array=", msgs.length, "first _sig=", msgs[0] ? (msgs[0].from_npub || msgs[0].from) + msgs[0].ts : "none");
         if (added) {
             renderChatList();
             if (activePeer === peer) {
                 renderMessages();
                 scrollToBottom();
+            }
+            // Phase 3: async decrypt new envelopes to replace placeholder
+            // body "🔒 шифрованное сообщение" with real text (and attach meta).
+            // Mirrors loadHistory pDecrypt pattern (Олег 2026-08-25 16:25 MSK).
+            const allMsgs = messages[peer];
+            const encMsgs = allMsgs.filter(m => m.body === "🔒 шифрованное сообщение" && m._server_msg);
+            console.log("[pollHist] total in peer:", allMsgs.length, "encMsgs:", encMsgs.length, "first body:", allMsgs[0]?.body?.slice(0, 30), "first has server_msg:", !!allMsgs[0]?._server_msg);
+            if (encMsgs.length > 0) {
+                Promise.all(encMsgs.map(m => decryptWithTimeout(m._server_msg).catch(() => null)))
+                    .then(results => {
+                        let changed = false;
+                        for (let i = 0; i < encMsgs.length; i++) {
+                            const r = results[i];
+                            const m = encMsgs[i];
+                            // Phase 3: server's attachment_refs (blob_id, wrapped_key, iv, mime)
+                            // come from _server_msg.attachments, NOT from decrypted plaintext.
+                            if (m._server_msg && Array.isArray(m._server_msg.attachments)) {
+                                m.attachments_meta = m._server_msg.attachments;
+                            }
+                            if (r && r.text && r.text !== "__DECRYPT_FAILED__") {
+                                m.body = r.text;
+                                if (r.attachments) m.attachments = r.attachments;
+                                changed = true;
+                            } else if (r && r.text === "__DECRYPT_FAILED__") {
+                                m.body = "[не удалось расшифровать]";
+                                changed = true;
+                            }
+                        }
+                        if (changed && activePeer === peer) {
+                            renderMessages();
+                            scrollToBottom();
+                        }
+                    })
+                    .catch(e => console.warn("[pollHist] async decrypt chain failed:", e));
             }
         }
     } catch (e) {
