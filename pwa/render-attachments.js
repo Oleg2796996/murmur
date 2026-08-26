@@ -119,8 +119,11 @@ async function renderAttachment(att, containerEl, abortSignal) {
             console.log("[attach-cache] MISS", att.blob_id.slice(0, 8));
         }
 
-        // a. Fetch ciphertext
-        const ct = await withTimeout(fetchBlob(att.blob_id, abortSignal), 30000, "fetchBlob");
+        // Lesson #237 (Олег 2026-08-26 21:42 MSK): 45s для blob fetch (было 30s).
+        // CF tunnel cold-start на медленном инете может быть 30-40s.
+        // Плюс — уже cache HIT выше (строка 95-105), если blob в IndexedDB,
+        // fetch не вызывается ВООБЩЕ. Это решает "3+ фото + reload не видны".
+        const ct = await withTimeout(fetchBlob(att.blob_id, abortSignal), 45000, "fetchBlob");
         if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
         // b. Unwrap AES key (ECIES)
         const key = await withTimeout(eciesUnwrapKey(att.wrapped_key), 15000, "eciesUnwrap");
