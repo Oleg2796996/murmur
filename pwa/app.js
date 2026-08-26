@@ -1452,6 +1452,12 @@ function renderMessages() {
         // decrypt via WASM (incoming) — both async, no inline data: URLs.
         const outboxAttachments = (m.direction === "out" && m._sig) ? null : null; // placeholder — populated below
         // For outgoing: m.attachments_meta from outbox cache (with plaintext_b64)
+        // For outgoing with attachments_meta (own outbox or remote view):
+        // render attachments inline. Then fall through to bubble append.
+        // NOTE: do NOT use `return` here — we are inside `for (const m of msgs)`
+        // and an early return would stop rendering all subsequent messages!
+        // (Lesson #205, Олег 2026-08-26 11:45: на Mac после message с фото не
+        // отображалась остальная переписка.)
         if (m.direction === "out" && m.attachments_meta && Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0) {
             const placeholderEl = document.createElement("div");
             placeholderEl.className = "msg-attach-list";
@@ -1484,7 +1490,7 @@ function renderMessages() {
                     placeholderEl.appendChild(chip);
                 }
             }
-            return;
+            // fall through — bubble `div` is appended below
         }
         // For incoming ONLY: server returned attachments_meta only (no plaintext).
         // Outgoing messages with attachments_meta but without plaintext_b64 are
