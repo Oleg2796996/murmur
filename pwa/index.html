@@ -56,8 +56,9 @@
                      Один клик = gesture → permission → subscribe → UI on.
                      Если браузер уже granted + есть подписка, клик отписывает. -->
                 <button id="btn-notifications" class="notif-btn" title="Включить уведомления">🔔</button>
-                <!-- Lesson #211 (Олег 2026-08-26 14:14): manual cache control -->
-                <button id="btn-cache-stats" class="notif-btn" title="Статистика кэша вложений (клик → очистить)">💾</button>
+                <!-- Lesson #211+215: cache stats — скрыт по умолчанию, виден только
+                 если IndexedDB уже имеет > 0 записей (через app.js JS) -->
+                <button id="btn-cache-stats" class="notif-btn" title="Статистика кэша вложений" style="display:none;">💾</button>
                 <div class="me">
                     <div class="me-npub">
                         <code id="my-npub" title="клик — копировать полный npub">…</code>
