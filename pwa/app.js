@@ -661,7 +661,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v102. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v103. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -1723,13 +1723,19 @@ function renderMessages() {
             // повторные вызовы (от pollHist) — DOM reset терял предыдущие fetches
             // → blob URLs никогда не возвращались → loading spinner вечный.
             const renderAbort = new AbortController();
-            // Register this controller for this render call — previous render's
-            // controllers are aborted when renderMessages fires again.
+            // Lesson #245 (Олег 2026-08-26 23:09): только abort при изменении
+            // activePeer. НЕ abort при append новых сообщений в этом же peer —
+            // это вызывало исчезновение уже отображаемых фотографий при отправке
+            // следующего сообщения. (Lesson #210 aborter всё, даже НЕ мою
+            // очередь attachments — фото которое уже было показано, через 50ms
+            // теряло свой img при следующем renderMessages call.)
             if (typeof window.__murmurRenderAbort === "undefined") window.__murmurRenderAbort = null;
-            if (window.__murmurRenderAbort) {
-                try { window.__murmurRenderAbort.abort("newer render starting"); } catch (e) { /* ignore */ }
+            if (typeof window.__murmurRenderAbortPeer === "undefined") window.__murmurRenderAbortPeer = null;
+            if (window.__murmurRenderAbortPeer !== activePeer && window.__murmurRenderAbort) {
+                try { window.__murmurRenderAbort.abort("peer changed"); } catch (e) { /* ignore */ }
             }
             window.__murmurRenderAbort = renderAbort;
+            window.__murmurRenderAbortPeer = activePeer;
             // Lesson #229 (Олег 2026-08-26 16:50): собираем Promise всех
             // attach renders в window.__murmurAttachTasks. renderMessages вызовет
             // await на них ПЕРЕД возвратом. Без этого IIFE fire-and-forget
