@@ -382,13 +382,24 @@ async function decryptEnvelopeForRender(env) {
 // Вынесен в module scope — loadHistory и pollHistoryForPeer используют.
 const DECRYPT_TIMEOUT_MS = 8000;
 function decryptWithTimeout(m) {
-    return Promise.race([
+    // Lesson #228 (Олег 2026-08-26 16:42): MEMOIZE per server message.
+    // Без этого каждый renderMessages() call → новый decryptWithTimeout → новый
+    // fetch+decrypt → 2-4 MISS подряд на cache → photo A bubble рендерится
+    // только как chip (plaintext не успел), фото исчезает при следующем render.
+    // Диагностика v89: 4 renderMessages() calls для 1 message, 2 attach-cache MISS подряд.
+    // Memoization: первый вызов создаёт Promise, все последующие возвращают тот же.
+    if (m && m._decrypt_promise) return m._decrypt_promise;
+    const p = Promise.race([
         decryptEnvelopeForRender(m),
         new Promise((_, rej) => setTimeout(() => rej(new Error("decrypt timeout " + DECRYPT_TIMEOUT_MS + "ms")), DECRYPT_TIMEOUT_MS)),
     ]).catch((e) => {
         console.warn("[murmur] decrypt failed/timed out:", e.message);
+        // Lesson #228: на failure очищаем cache чтобы retry мог сработать
+        if (m) m._decrypt_promise = null;
         return { text: "__DECRYPT_FAILED__", isBinary: false, attachments: [] };
     });
+    if (m) m._decrypt_promise = p;
+    return p;
 }
 
 /// Format byte size for UI ("4.5 MB", "123 KB")
@@ -650,7 +661,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v89. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v90. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
