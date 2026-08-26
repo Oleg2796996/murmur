@@ -661,7 +661,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v92. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v93. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -1617,6 +1617,9 @@ function renderMessages() {
         } else {
             div.className = "bubble " + m.direction;
         }
+        // Lesson #232 (Олег 2026-08-26 17:08): data-sig для точечных обновлений
+        // body после async decrypt. Не стирать, иначе нечем искать bubble.
+        div.setAttribute("data-sig", sig);
         let statusGlyph = "";
         if (isOut) {
             statusGlyph = m.status === "delivered" ? "✓✓" : (m.status === "sent" ? "✓" : "");
@@ -2711,6 +2714,23 @@ async function pollHistoryForPeer(peer) {
                             }
                         }
                         if (changed && activePeer === peer) {
+                            // Lesson #232 (Олег 2026-08-26 17:08): точечно обновляем
+                            // body в уже отрисованных bubbles вместо полного
+                            // renderMessages — Lesson #230 (skip rendered sigs)
+                            // оставляет bubble в DOM со СТАРЫМ body. Обновляем
+                            // text node in-place.
+                            for (let i = 0; i < encMsgs.length; i++) {
+                                const m = encMsgs[i];
+                                const sig = m._sig || (m.from_npub || m.from) + m.ts;
+                                const sigMatch = sig;
+                                if (window.__murmurRenderedSigs && window.__murmurRenderedSigs.has(sigMatch)) {
+                                    const bubbleEl = document.querySelector(`.msg-bubble[data-sig="${CSS.escape(sig)}"]`);
+                                    if (bubbleEl) {
+                                        const bodyEl = bubbleEl.querySelector('.msg-body');
+                                        if (bodyEl && m.body) bodyEl.textContent = m.body;
+                                    }
+                                }
+                            }
                             renderMessages();
                             scrollToBottom();
                         }
