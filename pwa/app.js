@@ -1293,7 +1293,7 @@ async function loadHistory(peer, beforeTs) {
                     // «шифровать+расшифровывать собственные исходящие».
                     let local = (messages[peer] || []).find(localMsg => {
                         if (hash && localMsg._hash === hash) return true;
-                        if (!hash && localMsg._sig === sigKey) return true;
+                        if (localMsg._sig === sigKey) return true;
                         return false;
                     });
                     if (!local) {
@@ -1301,7 +1301,9 @@ async function loadHistory(peer, beforeTs) {
                         const outbox = loadOutboxForPeer(peer);
                         local = outbox.find(o => {
                             if (hash && o._hash === hash) return true;
-                            if (!hash && o._sig === sigKey) return true;
+                            // Lesson #197: _sig fallback — если outbox был сохранён ДО
+                            // получения hash с сервера, _hash=null, но _sig совпадает.
+                            if (o._sig === sigKey) return true;
                             return false;
                         });
                     }
