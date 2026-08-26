@@ -661,7 +661,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v97. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v98. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -2753,18 +2753,20 @@ async function pollHistoryForPeer(peer) {
                                 try { messagesArea.scrollTop = messagesArea.scrollHeight; } catch (e) { /* ignore */ }
                             });
                         }
-                        // Lesson #238 (Олег 2026-08-26 21:42 MSK): sidebar preview
-                        // обновляется после async decrypt — даже если пользователь
-                        // сейчас в другом чате. sanitizePreview маскирует JSON,
-                        // нам нужен расшифрованный text.
-                        if (changed && m.direction === "in" && m.body && contacts && contacts.peers) {
-                            const cp = contacts.peers.find(p => (p.npub || p.id) === peer);
-                            if (cp) {
-                                const preview = m.body.slice(0, 80);
-                                if (cp.lastMessagePreview !== preview) {
-                                    cp.lastMessagePreview = preview;
-                                    renderChatList();
-                                }
+                        // Lesson #238 v2 (Олег 2026-08-26 21:56 MSK): исправлен
+                        // contacts.peers.find() → contacts[peer]. Оригинал падал
+                        // с undefined.find (contacts это hash-table {} не массив).
+                        // Ошибка ловилась в .catch ниже и игнорилась, sidebar не
+                        // обновлялся. Outgoing работали потому что они из outbox +
+                        // отдельный path Lesson #2030 (contacts[activePeer].lastMessagePreview
+                        // = text.slice(0,80) + renderChatList()).
+                        if (changed && m.direction === "in" && m.body && contacts) {
+                            if (!contacts[peer]) contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
+                            const preview = m.body.slice(0, 80);
+                            if (contacts[peer].lastMessagePreview !== preview) {
+                                contacts[peer].lastMessagePreview = preview;
+                                contacts[peer].lastTs = m.ts || Date.now();
+                                renderChatList();
                             }
                         }
                     })
