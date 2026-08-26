@@ -661,7 +661,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v101. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v102. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -2822,10 +2822,23 @@ function resyncSidebarPreviews() {
         for (const m of arr) {
             if (!newest || (m.ts || 0) > (newest.ts || 0)) newest = m;
         }
-        if (!newest || newest.direction !== "in") continue;
-        if (!newest.body || String(newest.body).startsWith("{")) continue;
+        if (!newest) continue;
+        // Lesson #243 v2: incoming ИЛИ outgoing (own outbox с attachments может
+        // иметь пустой body, но текст мы достаем из resolvedBody / fallback).
+        // Если body пустой — смотрим resolvedBody из Lesson #201/214 fallback.
+        let body = newest.body;
+        if (!body && newest.direction === "out") {
+            body = newest.resolvedBody || newest.outbox_body || "";
+        }
+        if (!body) continue;
+        const bodyStr = String(body);
+        // Lesson #243 v2: пропускаем только если это raw ciphertext envelope.
+        // '[не удалось расшифровать]' начинается с '[' — пропускать НЕ надо
+        // (это валидное сообщение для UI).
+        // 'Это самолет' и т.п. plaintext — тоже не начинается с '{'.
+        if (bodyStr.startsWith("{")) continue;
         if (!contacts[peer]) contacts[peer] = { peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
-        const preview = String(newest.body).slice(0, 80);
+        const preview = bodyStr.slice(0, 80);
         if (contacts[peer].lastMessagePreview !== preview) {
             contacts[peer].lastMessagePreview = preview;
             contacts[peer].lastTs = newest.ts || Date.now();
