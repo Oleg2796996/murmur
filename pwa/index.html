@@ -22,7 +22,7 @@
      script. iOS Safari PWA cached HTML может не иметь inline-script (HTML cache
      pre-bump). Meta tag читается через document.querySelector + .content
      (работает даже если inline script не выполнился). -->
-    <meta name="app-version" content="v103">
+    <meta name="app-version" content="v126">
     <!-- Lesson #216: cache busting via ?v= query string. iOS Safari PWA
      caches app.js via HTTP cache independently of SW. Query string forces
      re-fetch on each version bump. SW CACHE_VERSION also bumps for SW
@@ -206,7 +206,7 @@
      Query string = guaranteed fresh load on each deploy. -->
     <script src="blob-cache.js?v=103" defer></script>
     <script src="render-attachments.js?v=103" defer></script>
-    <script src="app.js?v=103" defer></script>
+    <script src="app.js?v=126" defer></script>
     <script>
       // Register service worker for offline support & cache versioning.
       // Bump CACHE_VERSION in service-worker.js to invalidate client caches.

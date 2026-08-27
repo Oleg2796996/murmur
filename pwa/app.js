@@ -26,23 +26,50 @@
 // WASM boot via dynamic import() so this file can run as a CLASSIC script
 // (no <script type="module">). iOS PWA standalone has flaky module support,
 // and classic scripts with inline event handlers are 100% reliable.
-let _wasmModulePromise = null;
-let wasmReady = null;
-function loadWasmModule() {
-    if (!_wasmModulePromise) {
-        _wasmModulePromise = import("./pkg/murmur_id_wasm.js").then((mod) => {
-            window.__murmurModuleLoaded = true;
-            console.log('[murmur] WASM module loaded');
-            return mod;
-        });
-    }
-    return _wasmModulePromise;
+//
+// Lesson #308 (Олег 2026-08-27 22:10 MSK): WASM INIT RACE.
+// `pkg/murmur_id_wasm.js` (wasm-bindgen 0.2) exports `default = __wbg_init`.
+// The Rust functions (decrypt_envelope, encrypt_for_recipient, sign_envelope,
+// identity_new, identity_restore, npub_to_pubkey_hex) call into a module-level
+// `wasm` variable that is set ONLY when `__wbg_init` resolves.
+//
+// Раньше loadWasmModule() возвращал только импортированный module, а
+// `mod.default()` (init) вызывался БЕЗ await в decrypt/encrypt/sign path.
+// Это означало: WASM модуль загружен, instance ещё не initialized,
+// `mod.decrypt_envelope()` обращается к undefined `wasm` → мусор или
+// exception "ecies_decrypt: bad tag or wrong key".
+//
+// Реальный сценарий (iPhone PWA Safari, после reload):
+//   1. ServiceWorker activate → клиент reload
+//   2. <script> app.js грузится → loadWasmModule() стартует (suspend)
+//   3. renderMessages() стартует сразу после DOMContentLoaded
+//   4. pollHist() возвращает новое сообщение → decrypt
+//   5. decryptEnvelope() вызывает mod.decrypt_envelope() → WASM НЕ ready
+//   6. → "bad tag or wrong key" (wasm-bindgen вызывает undefined функцию)
+//
+// Fix: loadWasmModule() await'ит `mod.default()` (init) и возвращает
+// УЖЕ initialized module. Все call sites автоматически получают race-free
+// доступ. Дополнительно дедупликация через `_wasmInitPromise` promise.
+let _wasmInitPromise = null;
+let _wasmReady = false;
+async function loadWasmModule() {
+    if (_wasmInitPromise) return _wasmInitPromise;
+    _wasmInitPromise = (async () => {
+        const mod = await import("./pkg/murmur_id_wasm.js");
+        if (!_wasmReady) {
+            await mod.default();   // <-- KEY: await __wbg_init
+            _wasmReady = true;
+        }
+        window.__murmurModuleLoaded = true;
+        console.log('[murmur] WASM module initialized');
+        return mod;
+    })();
+    return _wasmInitPromise;
 }
 
+// Backwards-compat: ensureWasm остаётся, но теперь просто loadWasmModule().
 async function ensureWasm() {
-    const mod = await loadWasmModule();
-    if (!wasmReady) wasmReady = mod.default();
-    return wasmReady;
+    await loadWasmModule();
 }
 
 const RELAY = "https://murmur.senswifi.ru";
@@ -661,7 +688,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
-        banner.title = "Build murmur-v103. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
+        banner.title = "Build murmur-v126. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
