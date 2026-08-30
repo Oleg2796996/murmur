@@ -21,16 +21,6 @@
     };
     window.addEventListener("error", (e) => showErr(e.message || String(e.error), e.filename, e.lineno, e.colno));
     window.addEventListener("unhandledrejection", (e) => showErr("Promise rejected: " + (e.reason && (e.reason.stack || e.reason.message || e.reason) || "?")));
-
-// Lesson #340 (Олег 2026-08-28 16:08 MSK): при deploy SW меняется — браузер
-// активирует новый SW, но existing клиенты продолжают использовать
-// controller от старого SW. Без явного skipWaiting + reload клиент
-// застрянет на старом app.js. Принудительно обновляем регистрацию и
-// при смене controller делаем reload.
-// Lesson #345 (Олег 2026-08-30 14:20 MSK): SW reload — УСТАРЕЛО. SW теперь
-// push-only (нет fetch-хендлера), controllerchange reload НЕ НУЖЕН
-// и вызывал reload-лупы. Убрано полностью.
-
 })();
 
 // WASM boot via dynamic import() so this file can run as a CLASSIC script
@@ -101,58 +91,62 @@ const LS_MESSAGES_CACHE = "murmur.messages_cache";
 const LS_MESSAGES_MAX_TS = "murmur.messages_max_ts";
 const MESSAGES_CACHE_MAX_PER_PEER = 100;
 
-async function saveMessagesCacheForPeer(peer) {
+function saveMessagesCacheForPeer(peer) {
+    // Lesson #331 (Олег 2026-08-28 13:50 MSK): source of truth — IndexedDB msgCache.
+    // localStorage остаётся как migration fallback на случай если msgCache open
+    // упал (Safari Private Mode например). Fire-and-forget — UI не ждёт IDB.
     const arr = messages[peer] || [];
     if (arr.length === 0) return;
     const trimmed = arr.slice(-MESSAGES_CACHE_MAX_PER_PEER);
-    if (!window.appStore) {
-        try {
-            const cache = JSON.parse(localStorage.getItem(LS_MESSAGES_CACHE) || "{}");
-            cache[peer] = trimmed;
-            localStorage.setItem(LS_MESSAGES_CACHE, JSON.stringify(cache));
-            let maxTs = 0;
-            for (const m of trimmed) if ((m.ts || 0) > maxTs) maxTs = m.ts;
-            const maxTss = JSON.parse(localStorage.getItem(LS_MESSAGES_MAX_TS) || "{}");
-            maxTss[peer] = maxTs;
-            localStorage.setItem(LS_MESSAGES_MAX_TS, JSON.stringify(maxTss));
-        } catch (e) { /* QuotaExceeded */ }
-        return;
+    if (window.msgCache && window.msgCache.isAvailable()) {
+        window.msgCache.saveMessages(peer, trimmed).catch((e) => {
+            console.warn("[murmur] msgCache.saveMessages failed:", e);
+        });
     }
+    // Fallback localStorage (legacy)
     try {
-        await window.appStore.chats.saveMessages(peer, trimmed);
+        const cache = JSON.parse(localStorage.getItem(LS_MESSAGES_CACHE) || "{}");
+        cache[peer] = trimmed;
+        localStorage.setItem(LS_MESSAGES_CACHE, JSON.stringify(cache));
         let maxTs = 0;
         for (const m of trimmed) if ((m.ts || 0) > maxTs) maxTs = m.ts;
-        const existing = (await window.appStore.kv.get(LS_MESSAGES_MAX_TS)) || {};
-        existing[peer] = maxTs;
-        await window.appStore.kv.set(LS_MESSAGES_MAX_TS, existing);
-    } catch (e) {
-        console.warn("[murmur] appStore.chats.saveMessages failed:", e);
-    }
+        const maxTss = JSON.parse(localStorage.getItem(LS_MESSAGES_MAX_TS) || "{}");
+        maxTss[peer] = maxTs;
+        localStorage.setItem(LS_MESSAGES_MAX_TS, JSON.stringify(maxTss));
+    } catch (e) { /* QuotaExceeded — ignore */ }
 }
 
 async function loadMessagesCacheForPeer(peer) {
+    // Lesson #331: сначала msgCache (IDB) — быстрее + persistent, потом LS fallback.
     let arr = null;
-    if (window.appStore) {
+    if (window.msgCache && window.msgCache.isAvailable()) {
         try {
-            arr = await window.appStore.chats.getMessages(peer);
+            arr = await window.msgCache.getMessages(peer);
         } catch (e) {
-            console.warn("[murmur] appStore.chats.getMessages failed:", e);
+            console.warn("[murmur] msgCache.getMessages failed:", e);
         }
     }
     if (!arr || arr.length === 0) {
+        // Legacy localStorage fallback
         try {
             const cache = JSON.parse(localStorage.getItem(LS_MESSAGES_CACHE) || "{}");
             arr = cache[peer];
-            if (Array.isArray(arr) && arr.length > 0 && window.appStore) {
-                window.appStore.chats.saveMessages(peer, arr).catch(() => {});
+            // Мигрируем в msgCache для следующего раза
+            if (Array.isArray(arr) && arr.length > 0 && window.msgCache && window.msgCache.isAvailable()) {
+                window.msgCache.saveMessages(peer, arr).catch(() => {});
             }
         } catch (e) { /* ignore */ }
     }
     if (Array.isArray(arr) && arr.length > 0) {
+        // Lesson #330 (Олег 2026-08-28 13:40 MSK): для каждого outgoing msg в кэше
+        // подтягиваем attachments_meta с plaintext_b64 из outbox. Без этого
+        // loadHistory skip'нет сообщение по hash (existingHashSet), увидит msg
+        // с серверными attachments_meta (без plaintext_b64), и рендер покажет
+        // chip "IMG_xxx (4.0 MB) [шифрование нарушено]" вместо превью.
         let outbox = {};
         try {
-            if (window.appStore) {
-                outbox = (await window.appStore.kv.get(LS_OUTBOX)) || {};
+            if (window.msgCache && window.msgCache.isAvailable()) {
+                outbox = await window.msgCache.getAllOutbox();
             } else {
                 outbox = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
             }
@@ -162,17 +156,10 @@ async function loadMessagesCacheForPeer(peer) {
             const meta = m.attachments_meta || [];
             const hasPlaintext = meta.length > 0 && meta.every(a => !!a.plaintext_b64);
             if (hasPlaintext) continue; // уже хорошие
-            // Lesson #348: перебираем ВСЕ варианты ключа outbox (_sig может быть
-            // как from+ts, так и from+":"+ts в разных версиях; from может быть
-            // пуст в старых записях — тогда пробуем myNpub).
-            const keyCandidates = [
-                m._sig,
-                (m.from || "") + ":" + m.ts,
-                (m.from || "") + m.ts,
-                (myNpub || "") + m.ts,
-            ].filter(Boolean);
-            let local = null;
-            for (const kk of keyCandidates) { if (outbox[kk]) { local = outbox[kk]; break; } }
+            // Пробуем достать из outbox по _sig или (from + ts)
+            const localKey = m._sig || ((m.from || "") + ":" + m.ts);
+            const fallbackKey = (m.from || "") + ":" + m.ts;
+            const local = outbox[localKey] || outbox[fallbackKey];
             if (local && local.attachments_meta && local.attachments_meta.length) {
                 m.attachments_meta = local.attachments_meta;
             }
@@ -213,19 +200,12 @@ async function saveToOutbox(msg, plaintext, attachmentsPlaintext) {
         _hash: msg._hash,
         savedAt: Date.now(),
     };
-    if (window.appStore) {
+    // Lesson #331: source of truth — msgCache (IDB), LS fallback.
+    if (window.msgCache && window.msgCache.isAvailable()) {
         try {
-            const outbox = (await window.appStore.kv.get(LS_OUTBOX)) || {};
-            outbox[key] = entry;
-            const keys = Object.keys(outbox);
-            if (keys.length > 200) {
-                keys.sort((a, b) => (outbox[a].ts || 0) - (outbox[b].ts || 0));
-                keys.slice(0, keys.length - 200).forEach((k) => delete outbox[k]);
-            }
-            await window.appStore.kv.set(LS_OUTBOX, outbox);
-            _outboxKVCache = outbox; // Lesson #346: keep sync cache fresh
+            await window.msgCache.saveOutbox(key, entry);
         } catch (e) {
-            console.warn("[murmur] saveToOutbox appStore failed:", e);
+            console.warn("[murmur] msgCache.saveOutbox failed:", e);
         }
     }
     try {
@@ -238,66 +218,36 @@ async function saveToOutbox(msg, plaintext, attachmentsPlaintext) {
             toDelete.forEach(k => delete outbox[k]);
         }
         localStorage.setItem(LS_OUTBOX, JSON.stringify(outbox));
-    } catch (e) { /* QuotaExceeded — fallback fail OK */ }
+    } catch (e) {
+        console.warn("[murmur] saveToOutbox failed:", e);
+    }
 }
 
-// Lesson #347 (Олег 2026-08-30 15:40 MSK): ⚠️ ЛАТЕНТНАЯ РАССИНХРОНИЗАЦИЯ.
-// saveToOutbox пишет в _outboxKVCache при appStore ИЛИ в LS. НО:
-// - до v143 outbox _hash update после send писал ТОЛЬКО в LS (не в IDB);
-// - loadOutboxForPeer читает _outboxKVCache (IDB), а если он пуст — LS;
-// - поллистовый pollHist matchивает outbox entry по o._hash === serverHash.
-// Держать оба представления в согласии — теперь миграция = склейка IDB+LS
-// (mergeUnion: IDB побеждает для plaintext, потому что LS может быть урезан
-// квотой). См. _mergeOutboxStores().
-// История: loadOutboxForPeer была async, её переписывали в v139/140, а
-// вызовы в loadHistory (1717) и pollHistoryForPeer (2963) остались СИНКОВЫМИ
-// и получили Promise. Promise.find === undefined → «outbox.find is not a
-// function» → loadHistory падал ПОЛНОСТЬЮ → пустой чат/«No messages yet»
-// после reload. Это и был главный «reload ломает всё» баг.
-// Теперь функция синхронная: читает appStore cache (прогретый на init) или LS.
-let _outboxKVCache = null;
-async function warmOutboxCache() {
-    try {
-        if (window.appStore) {
-            _outboxKVCache = (await window.appStore.kv.get(LS_OUTBOX)) || {};
-        }
-    } catch (e) { _outboxKVCache = null; }
-}
-function loadOutboxForPeer(peerNpub) {
+async function loadOutboxForPeer(peerNpub) {
+    // Lesson #331: msgCache (IDB) — source of truth, LS fallback.
     let outbox = {};
-    if (window.appStore) {
+    if (window.msgCache && window.msgCache.isAvailable()) {
         try {
-            outbox = _outboxKVCache || {};
-        } catch (e) { outbox = {}; }
-    }
-    // Lesson #347: merge LS поверх IDB — LS может содержать записи, которых
-    // нет в IDB (например, _hash updating писало только в LS до v143), и
-    // наоборот. Merge: IDB базовый, LS заполняет пробелы, НЕ затирая plaintext.
-    try {
-        const ls = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
-        for (const [k, v] of Object.entries(ls || {})) {
-            if (!outbox[k]) { outbox[k] = v; continue; }
-            // оба есть: склейка — _hash может быть только в LS-версии, plaintext
-            // обычно в IDB-версии. Берём поле _hash из любого где он есть.
-            const merged = { ...outbox[k] };
-            if (!merged._hash && v._hash) merged._hash = v._hash;
-            if (!merged.attachments_meta?.length && v.attachments_meta?.length) merged.attachments_meta = v.attachments_meta;
-            if (!merged.attachments?.length && v.attachments?.length) merged.attachments = v.attachments;
-            if (merged.body === undefined && v.body !== undefined) merged.body = v.body;
-            outbox[k] = merged;
+            outbox = await window.msgCache.getAllOutbox();
+        } catch (e) {
+            console.warn("[murmur] loadOutboxForPeer msgCache failed:", e);
         }
-    } catch (e) { /* LS unavailable/garbage — idb only */ }
-    if (Object.keys(outbox).length === 0) return [];
+    }
+    if (Object.keys(outbox).length === 0) {
+        try {
+            outbox = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
+        } catch (e) {
+            console.warn("[murmur] loadOutboxForPeer failed:", e);
+            return [];
+        }
+    }
     const result = [];
     for (const [key, m] of Object.entries(outbox)) {
         if (m.from === peerNpub || m.to === peerNpub) {
             result.push({
                 ...m,
                 _sig: key,
-                // Lesson #343 (Олег 2026-08-30 13:29 MSK): было инвертировано
-                // (from === peerNpub ? "out" : "in") — исходящие от себя
-                // показывались слева как входящие.
-                direction: m.from === peerNpub ? "in" : "out",
+                direction: m.from === peerNpub ? "out" : "in",
             });
         }
     }
@@ -338,15 +288,6 @@ let activePeer = null;
 let oldestTsForPeer = {};
 // Expose for E2E test diagnostics (Олег 2026-08-26)
 window.__murmurState = () => ({ messages, activePeer, contacts });
-
-// E2E test hooks (Playwright WebKit, 2026-08-30). Только explicit evaluate.
-window.__murmurTestHooks = {
-    npub: () => myNpub,
-    messages: () => messages[activePeer] || [],
-    allMessages: () => messages,
-    activePeer: () => activePeer,
-    contacts: () => Object.keys(contacts || {}),
-};
 let pollTimer = null;
 // Attachments (Олег 2026-08-24 11:00 MSK) — файлы прикрепленные к текущему сообщению.
 let pendingAttachments = [];        // [{name, mime, size, data_b64}] — уйдут в зашифрованный body
@@ -867,8 +808,8 @@ function enterMessenger() {
             }
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
-        banner.textContent = `app?v${scriptVer} · sw:push-only`;
-        banner.title = "Build murmur-v146. SW=push-only, no static control.";
+        banner.textContent = `app?v${scriptVer} · sw?` + (navigator.serviceWorker?.controller ? "(live)" : "(wait)");
+        banner.title = "Build murmur-v126. SW controller=" + (navigator.serviceWorker?.controller ? "yes" : "no");
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -1451,63 +1392,6 @@ async function loadContacts() {
             renderChatList();
         }
     } catch (e) { console.warn("loadContacts failed:", e); }
-    // Lesson #342 (Олег 2026-08-30): восстановление чатов из локальных хранилищ.
-    // Если сервер не вернул контакты (alias race, network drop), чаты исчезают
-    // из сайдбара хотя никуда не девались. Merge peers из IDB chats + outbox.
-    try {
-        const localPeers = new Set();
-        if (window.appStore && window.appStore.chats.listPeers) {
-            // Lesson #344 (Олег 2026-08-30 14:20 MSK): ключ chats в IDB — это
-            // peer (npub БЕЗ владельца), old identities оставались в базе →
-            // «12 чатов-призраков». Берём из кэша только тех peers, у которых
-            // есть реальные сообщения и peer ≠ мой npub.
-            for (const p of (await window.appStore.chats.listPeers())) {
-                const np = normalizePeer(p);
-                if (!np || np === myNpub) continue;
-                const rec = await window.appStore.chats.getMessages(np);
-                if (Array.isArray(rec) && rec.length > 0) localPeers.add(np);
-            }
-        }
-        let outbox = {};
-        if (window.appStore) {
-            outbox = (await window.appStore.kv.get(LS_OUTBOX)) || {};
-        } else {
-            outbox = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
-        }
-        for (const [k, m] of Object.entries(outbox)) {
-            // Lesson #343 (Олег 2026-08-30 13:29 MSK): брать только чаты,
-            // относящиеся к ТЕКУЩЕЙ личности. Раньше брали from и to всех
-            // записей — в outbox оставались адресаты старых (пересозданных)
-            // личностей → в сайдбаре смешивались ключи и чаты.
-            if (!m || typeof m !== "object") continue;
-            if (m.from === myNpub && m.to && m.to.startsWith("npub1")) localPeers.add(normalizePeer(m.to));
-            if (m.to === myNpub && m.from && m.from.startsWith("npub1")) localPeers.add(normalizePeer(m.from));
-        }
-        let addedAny = false;
-        for (const peer of localPeers) {
-            if (!peer || isHiddenPeer(peer) || contacts[peer]) continue;
-            contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: getUnread(peer) };
-            addedAny = true;
-        }
-        if (addedAny) {
-            console.log("[murmur] restored", localPeers.size, "local peers into contacts");
-            renderChatList();
-        }
-    } catch (e) { console.warn("[murmur] local contact restore failed:", e); }
-    // Lesson #344b (Олег 2026-08-30 14:20 MSK): зачистка кэша старых личностей.
-    // IDB chats ключуется голым peer без владельца. Периодически вычищаем
-    // записи, не относящиеся к текущемуmyNpub (по outbox связке from==myNpub).
-    try {
-        if (window.appStore && window.appStore.chats.listPeers) {
-            const known = new Set(Object.keys(contacts).map(normalizePeer));
-            for (const p of (await window.appStore.chats.listPeers())) {
-                const np = normalizePeer(p);
-                if (np && np !== myNpub && !known.has(np)) {
-                    await window.appStore.chats.deleteMessages(np).catch(() => {});
-                }
-            }
-        }
-    } catch (e) { /* ignore */ }
 }
 
 function renderChatList() {
@@ -1697,49 +1581,17 @@ async function loadHistory(peer, beforeTs) {
                 // каждом loadHistory (msg без plaintext перезаписывается).
                 if (hash && existingHashSet.has(hash)) {
                     const cachedMsg = messages[peer].find(x => x._hash === hash);
-                    // Lesson #338 (Олег 2026-08-28 15:38 MSK): расширяем fix #333
-                    // на оба направления. Cached msg мог быть сохранён со СТАРЫМ
-                    // direction (in вместо out) из-за pre-v133 bug в loadOutboxForPeer.
-                    // Также cached outgoing с "шифрованное" body — это нерасшифрованный
-                    // legacy outbox без attachments_meta. Нужно либо обновить body,
-                    // либо подтянуть attachments_meta с plaintext_b64 из outbox.
-                    const isStaleBody = cachedMsg && cachedMsg.body &&
-                        (cachedMsg.body.includes("шифрованное") || cachedMsg.body.startsWith("🔒"));
-                    if (cachedMsg && isStaleBody) {
-                        const apiDir = m.direction || (fromNpub === myNpub ? "out" : "in");
-                        cachedMsg.direction = apiDir; // fix stale direction
-                        if (apiDir === "in") {
-                            // Для входящих — расшифровываем body
-                            pDecrypt.push(decryptWithTimeout(m).then(({ text: newBody, attachments: newAttArr }) => {
-                                if (newBody && newBody !== "__DECRYPT_FAILED__") {
-                                    cachedMsg.body = newBody;
-                                }
-                                if (newAttArr && newAttArr.length > 0) {
-                                    cachedMsg.attachments = newAttArr;
-                                }
-                            }).catch(() => {}));
-                        } else {
-                            // Для исходящих — подтягиваем attachments_meta с plaintext_b64 из outbox
-                            let outbox = {};
-                            try {
-                                if (window.appStore) {
-                                    outbox = (await window.appStore.kv.get(LS_OUTBOX)) || {};
-                                } else {
-                                    outbox = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
-                                }
-                            } catch (e) {}
-                            const outboxKey = cachedMsg._sig || sigKey;
-                            const outboxEntry = outbox[outboxKey] || outbox[(fromNpub || "") + ":" + m.ts];
-                            if (outboxEntry) {
-                                if (outboxEntry.body !== undefined) cachedMsg.body = outboxEntry.body;
-                                if (outboxEntry.attachments_meta && outboxEntry.attachments_meta.length) {
-                                    cachedMsg.attachments_meta = outboxEntry.attachments_meta;
-                                }
-                                if (outboxEntry.attachments && outboxEntry.attachments.length) {
-                                    cachedMsg.attachments = outboxEntry.attachments;
-                                }
+                    if (cachedMsg && cachedMsg.direction === "in" &&
+                        cachedMsg.body && cachedMsg.body.includes("шифрованное")) {
+                        // Запустить decrypt, обновим body и msg потом
+                        pDecrypt.push(decryptWithTimeout(m).then(({ text: newBody, attachments: newAttArr }) => {
+                            if (newBody && newBody !== "__DECRYPT_FAILED__") {
+                                cachedMsg.body = newBody;
                             }
-                        }
+                            if (newAttArr && newAttArr.length > 0) {
+                                cachedMsg.attachments = newAttArr;
+                            }
+                        }).catch(() => {}));
                     }
                     continue;
                 }
@@ -1842,13 +1694,13 @@ async function loadHistory(peer, beforeTs) {
                     // то первая ветка `if (local && local.body)` НЕ сработает и мы
                     // свалились бы сюда с attachments_meta без plaintext_b64 →
                     // рендер показал бы chip «IMG_xxx (4 MB) [шифрование нарушено]».
-                    // Lesson #334: appStore.kv (IDB) priority, LS fallback.
+                    // Lesson #331: msgCache (IDB) приоритет, LS fallback.
                     let outboxAttachmentsMeta = null;
                     if (isOutgoing) {
                         let outbox = {};
-                        if (window.appStore) {
+                        if (window.msgCache && window.msgCache.isAvailable()) {
                             try {
-                                outbox = (await window.appStore.kv.get(LS_OUTBOX)) || {};
+                                outbox = await window.msgCache.getAllOutbox();
                             } catch (e) { /* fallthrough */ }
                         }
                         if (Object.keys(outbox).length === 0) {
@@ -1865,11 +1717,6 @@ async function loadHistory(peer, beforeTs) {
                         sig: m.sig || "", _sig: sigKey, _hash: hash,
                         isBinary: false,
                         status: m.direction === "out" ? "sent" : null,
-                        // Lesson #341 (Олег 2026-08-30): keep raw server row for
-                        // async decrypt retry. Без этого pollHist фильтр
-                        // `_server_msg` не находил кэш-сообщения с body «🔒» и
-                        // они оставались зашифрованными навсегда.
-                        _server_msg: m,
                         attachments: attArr || [],
                         // Phase 3: relay's attachment_refs (blob_id, wrapped_key, iv, mime, name, size).
                         // Used by renderMessages to async decrypt + render incoming attachments.
@@ -1891,44 +1738,6 @@ async function loadHistory(peer, beforeTs) {
     ]);
             if (newMsgs.length > 0) {
                 messages[peer] = newMsgs.concat(messages[peer]);
-                // Lesson #339 (Олег 2026-08-28 16:18 MSK): safety net.
-                // Для каждого существующего кэш-сообщения сверяем direction с API.
-                // Если API даёт out, а кэш имеет in → исправляем. Закрывает баг
-                // когда кэш из v126-v132 содержал неправильный direction и
-                // existingHashSet.has(hash) → continue пропускал обновление.
-                for (const apiMsg of j.messages) {
-                    const apiDir = apiMsg.direction || (apiMsg.from_npub === myNpub ? "out" : "in");
-                    const apiHash = apiMsg.envelope_hash || apiMsg.envelope_hash_hex || null;
-                    if (!apiHash) continue;
-                    const cached = messages[peer].find(x => x._hash === apiHash);
-                    if (cached && cached.direction !== apiDir) {
-                        console.warn("[murmur] safety-net direction fix:", peer.slice(0, 12),
-                            "cached=" + cached.direction, "→ api=" + apiDir,
-                            "hash=" + apiHash.slice(0, 8));
-                        cached.direction = apiDir;
-                        if (apiDir === "out" && cached.body &&
-                            (cached.body.includes("шифрованное") || cached.body.startsWith("🔒"))) {
-                            // Подтянем attachments_meta из outbox
-                            try {
-                                const outbox = window.appStore
-                                    ? ((await window.appStore.kv.get(LS_OUTBOX)) || {})
-                                    : JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
-                                const outKey = cached._sig || (apiMsg.from_npub + apiMsg.ts);
-                                const entry = outbox[outKey] || outbox[(apiMsg.from_npub || "") + ":" + apiMsg.ts];
-                                if (entry) {
-                                    if (entry.body !== undefined) cached.body = entry.body;
-                                    if (entry.attachments_meta && entry.attachments_meta.length) {
-                                        cached.attachments_meta = entry.attachments_meta;
-                                    }
-                                    if (entry.attachments && entry.attachments.length) {
-                                        cached.attachments = entry.attachments;
-                                    }
-                                }
-                            } catch (e) { /* ignore */ }
-                        }
-                    }
-                }
-
                 // Lesson #241 (Олег 2026-08-26 22:15): брать САМОЕ НОВОЕ сообщение
                 // по max ts, не [0]. newMsgs идёт в начало массива, но если
                 // пользователь скроллит вверх (paginate) — newMsgs содержит СТАРЫЕ
@@ -2032,21 +1841,10 @@ function renderMessages() {
         let div;
         let _rerenderAttachments = false;
         if (renderedSigs.has(sig)) {
-            // Lesson #348 (Олег 2026-08-30 15:45 MSK): rerender-attachments
-            // ранее был ТОЛЬКО для direction "in". Исходящие, отрендеренные
-            // из cache ДО подклейки plaintext из outbox (loadMessagesCacheForPeer
-            // repair идёт после первого render) — навсегда оставались chip'ами:
-            // sig в Set → skip, а «дорисовать» проверялся только у входящих.
-            // Теперь: И 'out', и 'in' с attachments_meta — дорисовываем, если у
-            // bubble ещё нет НИ ОДНОГО img/figure в msg-attach-list.
-            const wantsAttachments = (m.direction === "in" || m.direction === "out") &&
-                m.attachments_meta && m.attachments_meta.length > 0;
-            if (wantsAttachments) {
+            if (m.direction === "in" && m.attachments_meta && m.attachments_meta.length > 0) {
                 const existingBubble = messagesArea.querySelector(`[data-sig="${CSS.escape(sig)}"]`);
-                const attachList = existingBubble && existingBubble.querySelector(".msg-attach-list");
-                const hasRendered = attachList && (attachList.querySelector("img, video, audio, figure, .attach-error, .msg-attach-remote"));
-                if (existingBubble && !hasRendered) {
-                    console.log("[murmur] rerendering attachments for sig", sig.slice(0, 12), "dir=", m.direction);
+                if (existingBubble && !existingBubble.querySelector(".msg-attach-list > *")) {
+                    console.log("[murmur] rerendering attachments for sig", sig.slice(0, 12));
                     // Reuse existing bubble — переиспользуем DOM, только дорисуем attachments.
                     div = existingBubble;
                     _rerenderAttachments = true;
@@ -2110,21 +1908,9 @@ function renderMessages() {
             //    Render a non-decrypting placeholder to avoid ECIES bad-tag error
             //    (Lesson #195).
             const hasPlaintext = m.attachments_meta.every(att => att.plaintext_b64);
-            // Lesson #348: рендерим img для тех att, где plaintext ЕСТЬ, даже если
-            // не у всех (PARTIAL). Chip'и (remote) — только для att без plaintext.
-            // Раньше: every() → один att без plaintext топил ВСЕ фото в chip'и,
-            // даже если у остальных plaintext был на месте.
-            const anyPlaintext = m.attachments_meta.some(att => att.plaintext_b64);
-            if (hasPlaintext || anyPlaintext) {
+            if (hasPlaintext) {
                 for (const att of m.attachments_meta) {
                     try {
-                        if (!att.plaintext_b64) {
-                            const chip = document.createElement("div");
-                            chip.className = "msg-attach-remote";
-                            chip.textContent = "\ud83d\udcf7 " + (att.name || "file") + " (" + formatSize(att.size || 0) + ")";
-                            placeholderEl.appendChild(chip);
-                            continue;
-                        }
                         const mime = att.mime || "application/octet-stream";
                         const blob = b64ToBlob(att.plaintext_b64, mime);
                         const url = URL.createObjectURL(blob);
@@ -2481,29 +2267,12 @@ async function sendMessage() {
                     // Lesson #197 (Олег 2026-08-26): обновить outbox с реальным _hash,
                     // иначе после reload loadHistory не найдёт локальный plaintext
                     // и попытается расшифровать зашифрованное-для-Bob (failed).
-                    // Lesson #347 (Олег 2026-08-30 15:40 MSK): обновляем ОБА хранилища
-                    // (IDB appStore + LS fallback). Раньше писали только LS, а
-                    // loadOutboxForPeer после reload читал только IDB → _hash терялся,
-                    // pollHist не matched outbox entry → outgoing photo превращался
-                    // в chip без plaintext (ф的单位 img пропадал после первого poll). Согласованность.
+                    const outbox = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
                     const outboxKey = renderedMsg._sig;
-                    if (window.appStore) {
-                        try {
-                            const ob = (await window.appStore.kv.get(LS_OUTBOX)) || {};
-                            if (ob[outboxKey]) {
-                                ob[outboxKey]._hash = respJson.hash;
-                                await window.appStore.kv.set(LS_OUTBOX, ob);
-                                if (_outboxKVCache) _outboxKVCache = ob;
-                            }
-                        } catch (e) { console.warn("[send] outbox _hash IDB update failed:", e); }
+                    if (outbox[outboxKey]) {
+                        outbox[outboxKey]._hash = respJson.hash;
+                        localStorage.setItem(LS_OUTBOX, JSON.stringify(outbox));
                     }
-                    try {
-                        const outbox = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
-                        if (outbox[outboxKey]) {
-                            outbox[outboxKey]._hash = respJson.hash;
-                            localStorage.setItem(LS_OUTBOX, JSON.stringify(outbox));
-                        }
-                    } catch (e) { /* LS quota — non-fatal */ }
                 }
             } catch (e) { /* /envelope может не вернуть JSON — fallback на ts */ }
             const last = messages[activePeer][messages[activePeer].length - 1];
@@ -3166,33 +2935,11 @@ async function pollHistoryForPeer(peer) {
             // Mirrors loadHistory pDecrypt pattern (Олег 2026-08-25 16:25 MSK).
             // Lesson #199 (Олег 2026-08-26): для исходящих (direction === "out")
             // НЕ пытаться расшифровать — у нас уже есть body/attachments_meta.
-            // Lesson #341 (Олег 2026-08-30): broaden filter — body starting with
-            // «🔒» (any variant) + incoming + has _server_msg (or raw body_base64).
-            // Было строгое равенство body === "🔒 шифрованное сообщение" &&
-            // `_server_msg` — кэш-сообщения (restore из IDB) имели body "🔒..." без
-            // _server_msg и оставались зашифрованными навсегда.
             const allMsgs = messages[peer];
-            const encMsgs = allMsgs.filter(m => m.direction === "in" &&
-                m.body && m.body.includes("🔒") &&
-                (m._server_msg || m.body_base64 || (m._hash && !m._decrypt_promise)));
-            // Ensure _server_msg exists: rebuild from cache via body_base64 if missing.
-            for (const m of encMsgs) {
-                if (!m._server_msg && m.body_base64) {
-                    try {
-                        m._server_msg = { body_base64: m.body_base64, from: m.from, to: m.to, ts: m.ts };
-                    } catch (e) { /* ignore */ }
-                }
-            }
+            const encMsgs = allMsgs.filter(m => m.body === "🔒 шифрованное сообщение" && m._server_msg && m.direction === "in");
             console.log("[pollHist] total in peer:", allMsgs.length, "encMsgs:", encMsgs.length, "first body:", allMsgs[0]?.body?.slice(0, 30), "first has server_msg:", !!allMsgs[0]?._server_msg);
             if (encMsgs.length > 0) {
-                // Lesson #341: decryptWithTimeout memoizes per _server_msg object.
-                // For cache-restored messages (no _server_msg), a fresh raw row is
-                // needed — retry with server body_base64 to avoid stuck memoized
-                // failures. Clear memoized failure so decrypt re-runs.
-                Promise.all(encMsgs.map(m => {
-                    if (m._server_msg) { m._server_msg._decrypt_promise = null; return decryptWithTimeout(m._server_msg).catch(() => null); }
-                    return Promise.resolve(null);
-                }))
+                Promise.all(encMsgs.map(m => decryptWithTimeout(m._server_msg).catch(() => null)))
                     .then(results => {
                         let changed = false;
                         for (let i = 0; i < encMsgs.length; i++) {
@@ -3422,8 +3169,7 @@ async function tryAutoRestore() {
 }
 
 if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => { warmOutboxCache(); tryAutoRestore(); });
+    document.addEventListener("DOMContentLoaded", tryAutoRestore);
 } else {
-    warmOutboxCache();
     tryAutoRestore();
 }
