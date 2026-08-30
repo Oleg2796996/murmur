@@ -48,6 +48,73 @@ async function sha256Hex(buf) {
         .join("");
 }
 
+// 1.5. compressImageIfLarge (Lesson #327, Олег 2026-08-28 12:15 MSK)
+// Сжимает фото > 1MB через canvas до 1024px JPEG q=0.7.
+// Типично: 4MB HEIC-like JPEG → 300-500KB. Уменьшает upload в 8-10x
+// и значительно ускоряет ECIES encrypt (CPU bound на bytes).
+// Не сжимает: PNG с прозрачностью (потеряем alpha), видео, аудио, уже мелкие файлы.
+async function compressImageIfLarge(file) {
+    if (!file || !file.type) return file;
+    if (!file.type.startsWith("image/")) return file;
+    if (file.type === "image/png" || file.type === "image/gif") return file; // сохраняем alpha
+    if (file.size <= 1 * 1024 * 1024) return file; // <= 1MB не трогаем
+    if (typeof createImageBitmap === "undefined" && typeof document === "undefined") return file;
+    try {
+        const ab = await file.arrayBuffer();
+        let bitmap;
+        if (typeof createImageBitmap !== "undefined") {
+            bitmap = await createImageBitmap(new Blob([ab], { type: file.type }));
+        } else {
+            // Fallback: img.decode()
+            const blob = new Blob([ab], { type: file.type });
+            const url = URL.createObjectURL(blob);
+            const im = new Image();
+            await new Promise((resolve, reject) => {
+                im.onload = resolve;
+                im.onerror = reject;
+                im.src = url;
+            });
+            bitmap = im;
+            URL.revokeObjectURL(url);
+        }
+        const MAX_DIM = 1024;
+        let w = bitmap.width || bitmap.naturalWidth;
+        let h = bitmap.height || bitmap.naturalHeight;
+        if (w > MAX_DIM || h > MAX_DIM) {
+            const ratio = Math.min(MAX_DIM / w, MAX_DIM / h);
+            w = Math.round(w * ratio);
+            h = Math.round(h * ratio);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(bitmap, 0, 0, w, h);
+        if (bitmap.close) bitmap.close();
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+        // dataUrl → Blob
+        const b64 = dataUrl.split(",")[1];
+        const bin = atob(b64);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        const compressedBlob = new Blob([out], { type: "image/jpeg" });
+        // Если сжатие не помогло (было уже оптимально) — возвращаем оригинал.
+        if (compressedBlob.size >= file.size) {
+            return file;
+        }
+        console.log("[attach-compress]", file.name, file.size, "→", compressedBlob.size,
+            "(" + Math.round(compressedBlob.size / file.size * 100) + "%)");
+        // Возвращаем File (чтобы сохранить .name)
+        return new File([compressedBlob], file.name.replace(/\.[^.]+$/, ".jpg"), {
+            type: "image/jpeg",
+            lastModified: file.lastModified || Date.now(),
+        });
+    } catch (e) {
+        console.warn("[attach-compress] failed, using original:", e);
+        return file;
+    }
+}
+
 // 2. AES-256-GCM encrypt → returns {ciphertext, iv, key} (all Uint8Array, key=32B, iv=12B)
 async function aesEncrypt(plaintext) {
     const key = crypto.getRandomValues(new Uint8Array(32));
@@ -118,8 +185,10 @@ function uploadCiphertext({ sha256Hex, mime, name, size, wrappedKey, ciphertext,
 //
 // On failure, throws. Caller decides UX (toast / retry / abort).
 async function attachEncryptAndUpload({ file, peerNpub, onProgress }) {
-    // a. Read file as ArrayBuffer
-    const ab = await file.arrayBuffer();
+    // a. Compress if large image (Lesson #327 — speed)
+    const compressedFile = await compressImageIfLarge(file);
+    // b. Read file as ArrayBuffer
+    const ab = await compressedFile.arrayBuffer();
     // b. SHA-256 (for integrity check before upload)
     const sha = await sha256Hex(ab);
     // c. AES-256-GCM encrypt
@@ -131,8 +200,8 @@ async function attachEncryptAndUpload({ file, peerNpub, onProgress }) {
     const ciphertextSha = await sha256Hex(ciphertext);
     const resp = await uploadCiphertext({
         sha256Hex: ciphertextSha,
-        mime: file.type || "application/octet-stream",
-        name: file.name,
+        mime: compressedFile.type || "application/octet-stream",
+        name: compressedFile.name,
         size: ciphertext.length,
         wrappedKey,
         ciphertext,
