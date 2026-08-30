@@ -868,7 +868,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw:push-only`;
-        banner.title = "Build murmur-v146. SW=push-only, no static control.";
+        banner.title = "Build murmur-v148. SW=push-only, no static control.";
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -2044,7 +2044,11 @@ function renderMessages() {
             if (wantsAttachments) {
                 const existingBubble = messagesArea.querySelector(`[data-sig="${CSS.escape(sig)}"]`);
                 const attachList = existingBubble && existingBubble.querySelector(".msg-attach-list");
-                const hasRendered = attachList && (attachList.querySelector("img, video, audio, figure, .attach-error, .msg-attach-remote"));
+                // Lesson #350: .attach-decrypting — спиннер ЕЩЁ крутится (async
+                // renderAttachment в работе). Считаем bubble «отрендеренным»,
+                // иначе повторный renderMessages создаст ВТОРОЙ список фото
+                // (задвоение картинок внутри одного bubble, Олег 18:21).
+                const hasRendered = attachList && (attachList.querySelector("img, video, audio, figure, .attach-error, .msg-attach-remote, .attach-decrypting"));
                 if (existingBubble && !hasRendered) {
                     console.log("[murmur] rerendering attachments for sig", sig.slice(0, 12), "dir=", m.direction);
                     // Reuse existing bubble — переиспользуем DOM, только дорисуем attachments.
@@ -2140,13 +2144,44 @@ function renderMessages() {
                     }
                 }
             } else {
-                // Remote-outgoing: show static chips without trying to decrypt.
-                for (const att of m.attachments_meta) {
-                    const chip = document.createElement("div");
-                    chip.className = "msg-attach-remote";
-                    chip.textContent = "\ud83d\udcf7 " + (att.name || "file") + " (" + formatSize(att.size || 0) + ")";
-                    placeholderEl.appendChild(chip);
+                // Lesson #349: у исходящих с双重-wrapped ключом ({r,s}) plaintext из
+                // outbox НЕ нужен — рендерим через remote-decrypt (fetch blob +
+                // ECIES unwrap s НАШИМ privkey + AES). Работает на любом устройстве
+                // с той же личностью и переживает чистый outbox. Legacy single-wrapped
+                // (без .s) тоже попробуем decrypt'ом — с нашей подписью это НАШЕ
+                // сообщение, но unwrap 'r' с нашим ключом упадёт → chip fallback.
+                const remoteList = document.createElement("div");
+                remoteList.className = "msg-attach-list";
+                placeholderEl.appendChild(remoteList);
+                // Те же гарантии, что у incoming (Lessons #210/#229/#245):
+                // abort только при смене peer, задачи в __murmurAttachTasks.
+                const renderAbort = new AbortController();
+                if (typeof window.__murmurRenderAbort === "undefined") window.__murmurRenderAbort = null;
+                if (typeof window.__murmurRenderAbortPeer === "undefined") window.__murmurRenderAbortPeer = null;
+                if (window.__murmurRenderAbortPeer !== activePeer && window.__murmurRenderAbort) {
+                    try { window.__murmurRenderAbort.abort("peer changed"); } catch (e) { /* ignore */ }
                 }
+                window.__murmurRenderAbort = renderAbort;
+                window.__murmurRenderAbortPeer = activePeer;
+                if (typeof window.__murmurAttachTasks === "undefined") window.__murmurAttachTasks = [];
+                const thisRenderTasks = [];
+                window.__murmurAttachTasks.push(thisRenderTasks);
+                (async () => {
+                    try {
+                        if (!window.MurmurRenderAttachments) {
+                            const mod = await import("./render-attachments.js");
+                            window.MurmurRenderAttachments = mod;
+                        }
+                        for (const att of m.attachments_meta) {
+                            const attEl = { ...att, _selfKey: true };
+                            thisRenderTasks.push(
+                                window.MurmurRenderAttachments.renderAttachment(attEl, remoteList, renderAbort.signal).catch(() => {})
+                            );
+                        }
+                    } catch (e) {
+                        console.error("[attach-out-remote] render setup failed:", e);
+                    }
+                })();
             }
             // fall through — bubble `div` is appended below
         }
@@ -2431,6 +2466,17 @@ async function sendMessage() {
         }
         msg.signed_payload = btoa(binStr);
 
+        // Lesson #350b (security): plaintext_b64 (расшифрованные фото!) НЕ должен
+        // уходить на релей. Релей валидирует sig по (from|to|ts|ct) — лишние поля
+        // sig не ломают, но хранятся в SQLite (envelopes.body + /api/history).
+        // Стрипаем перед POST; в outbox (saveToOutbox) plaintext остаётся.
+        const wireMsg = Object.assign({}, msg, {
+            attachments_meta: metaSnapshot.map((a) => {
+                const { plaintext_b64, ciphertext, _uploading, _progress, _tempId, ...wire } = a;
+                return wire;
+            }),
+        });
+
         // Lesson #159: собираем plaintext cache для outbox + optimistic render
         // (чтобы не делать encrypt→send→receive→decrypt round-trip для своих,
         //  Lesson #155 — анти-паттерн).
@@ -2447,17 +2493,25 @@ async function sendMessage() {
 
         // Optimistic render
         if (!messages[activePeer]) messages[activePeer] = [];
+        // Lesson #350 (Олег 2026-08-30 18:21 «фотки задваиваются»): гонка
+        // sendMessage × pollHistoryForPeer — пока POST /envelope в полёте,
+        // poll приносит серверный echo нашего исходящего. Дедуп по _hash
+        // не работает (оптимистичная копия ещё _hash:null) → вторая копия
+        // навсегда (до reload). Фикс: флаг _pendingServerAssign → pollHist
+        // ДЕРЖИТ echo до прихода hash из POST-ответа (см. pollHistoryForPeer).
         renderedMsg = {
             from: myNpub, to: activePeer, body: text, ts: msg.ts,
             direction: "out", sig: sig.data, _sig: myNpub + msg.ts,
             status: "sent", isBinary: false, _hash: null,
             attachments_meta: attachmentsWithPlaintext, // [{blob_id, mime, name, size, plaintext_b64}]
+            _pendingServerAssign: true,
         };
         messages[activePeer].push(renderedMsg);
         optimisticRendered = true;
         // Lesson #159: сохраняем в outbox localStorage, чтобы после reload можно было
         // отрисовать без decrypt (анти-паттерн шифровать/расшифровывать собственные).
         console.log("[send] attachmentsWithPlaintext count =", attachmentsWithPlaintext.length, "metaSnapshot =", metaSnapshot.length);
+        // Lesson #350: _sig стабилен (локальный ts не меняем) — outbox сразу под финальным ключом.
         saveToOutbox(renderedMsg, text, attachmentsWithPlaintext);
         renderMessages();
         scrollToBottom();
@@ -2469,7 +2523,7 @@ async function sendMessage() {
         const r = await fetch(RELAY + "/envelope?to=" + encodeURIComponent(activePeer), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(msg),
+            body: JSON.stringify(wireMsg), // Lesson #350b: без plaintext_b64
         });
         if (r.ok) {
             // Lesson #128: сохраняем envelope_hash из ответа для надёжного дедупа
@@ -2478,14 +2532,13 @@ async function sendMessage() {
                 const respJson = await r.json();
                 if (respJson && respJson.hash) {
                     renderedMsg._hash = respJson.hash;
-                    // Lesson #197 (Олег 2026-08-26): обновить outbox с реальным _hash,
-                    // иначе после reload loadHistory не найдёт локальный plaintext
-                    // и попытается расшифровать зашифрованное-для-Bob (failed).
-                    // Lesson #347 (Олег 2026-08-30 15:40 MSK): обновляем ОБА хранилища
-                    // (IDB appStore + LS fallback). Раньше писали только LS, а
-                    // loadOutboxForPeer после reload читал только IDB → _hash терялся,
-                    // pollHist не matched outbox entry → outgoing photo превращался
-                    // в chip без plaintext (ф的单位 img пропадал после первого poll). Согласованность.
+                    // Lesson #350: POST завершён — флаг снят, pollHist снова
+                    // обрабатывает echo (дедуп по _hash теперь сработает:
+                    // optimistic и echo имеют ОДИН hash = H(payload)).
+                    renderedMsg._pendingServerAssign = false;
+                    // Lesson #197/#347 (Олег 2026-08-26/30): обновить outbox с реальным
+                    // _hash в ОБОИХ хранилищах (IDB appStore + LS fallback), иначе после
+                    // reload plaintext теряется → outgoing photo становится failed-chip.
                     const outboxKey = renderedMsg._sig;
                     if (window.appStore) {
                         try {
@@ -2504,6 +2557,15 @@ async function sendMessage() {
                             localStorage.setItem(LS_OUTBOX, JSON.stringify(outbox));
                         }
                     } catch (e) { /* LS quota — non-fatal */ }
+                } else {
+                    // Lesson #350: редкий ответ без hash — не держим echo в deferred
+                    // вечно; через 15s отпускаем (худший случай — dup, но не пропуск).
+                    setTimeout(() => {
+                        if (renderedMsg._pendingServerAssign) {
+                            renderedMsg._pendingServerAssign = false;
+                            renderMessages();
+                        }
+                    }, 15000);
                 }
             } catch (e) { /* /envelope может не вернуть JSON — fallback на ts */ }
             const last = messages[activePeer][messages[activePeer].length - 1];
@@ -2516,7 +2578,12 @@ async function sendMessage() {
             renderChatList();
         } else {
             const last = messages[activePeer][messages[activePeer].length - 1];
-            if (last) { last.status = "failed"; renderMessages(); }
+            if (last) {
+                last.status = "failed";
+                // Lesson #350: POST завершился ошибкой — не задерживаем echo.
+                if (last._pendingServerAssign) last._pendingServerAssign = false;
+                renderMessages();
+            }
         }
     } catch (e) {
         // Lesson #152: ошибка (HEIC blob падает в WASM encrypt, network drop, итд)
@@ -2524,6 +2591,9 @@ async function sendMessage() {
         console.error("[murmur] sendMessage caught:", e.message);
         if (optimisticRendered && renderedMsg) {
             renderedMsg.status = "failed";
+            // Lesson #350: POST упал — снимаем pending-флаг, чтобы pollHist больше
+            // не задерживал серверный echo (hash-дедуп продолжит работать как раньше).
+            renderedMsg._pendingServerAssign = false;
             renderMessages();
         }
     } finally {
@@ -2618,6 +2688,14 @@ if (btnAttach && fileInput) {
             fileInput.value = "";
             return;
         }
+        // Lesson #349: WASM обязан быть готов ДО encrypt (Android: «ошибка
+        // шифрования» = гонка eciesWrapKey с init WASM при restored identity).
+        try { await ensureWasm(); } catch (wErr) {
+            console.error("ensureWasm (attach) failed:", wErr);
+            pushRejectedChip({ name: "—", size: 0 }, "Модуль шифрования не загрузился: " + (wErr.message || wErr));
+            fileInput.value = "";
+            return;
+        }
         let peerKey;
         try {
             peerKey = await resolvePeerKey(activePeer);
@@ -2665,6 +2743,7 @@ if (btnAttach && fileInput) {
                 const result = await window.MurmurAttachments.attachEncryptAndUpload({
                     file,
                     peerNpub: peerKey.npub,
+                    selfNpub: myNpub,
                     onProgress: (loaded, total) => {
                         const idx = pendingAttachments.findIndex((a) => a._tempId === tempId);
                         if (idx >= 0) {
@@ -2882,6 +2961,15 @@ function handleIncomingEnvelope(env) {
         return;
     }
 
+    // Lesson #350: WS-echo НАШЕГО исходящего в полёте POST (self-chat echo,
+    // second-device scenario): дедуп не сработает (optimistic._hash ещё null,
+    // sig-ключи разные — сервер переписал ts) → вторая копия навсегда. Держим
+    // echo до прихода hash из POST-ответа — тот же контракт, что в pollHist.
+    if (fromNpub === myNpub && messages[peer].some(m => m._pendingServerAssign)) {
+        console.log("[WS] outgoing echo deferred (POST in flight), hash=", (hash || "").slice(0, 12));
+        return;
+    }
+
     // E2E: если есть `ct` — расшифровываем async, иначе plaintext fallback.
     decryptEnvelopeForRender(env).then(({ text: bodyText, isBinary, attachments }) => {
         // Remember peer's display name if it came along with the envelope.
@@ -2989,6 +3077,17 @@ async function pollHistoryForPeer(peer) {
                 exists = messages[peer].some(m => m._sig === sigKey);
             }
             if (exists) continue;
+
+            // Lesson #350 (Олег 2026-08-30 18:21 «фотки задваиваются»): race
+            // sendMessage × poll — оптимистичная копия ждёт ответ POST /envelope
+            // (_hash: null, _pendingServerAssign: true). Серверный echo НАШЕГО
+            // исходящего (hash = H(payload) — тот же, что вернёт POST) не матчится
+            // по хэш-дедупу → вторая копия навсегда. Пока POST в полёте — скипаем
+            // echo; hash/финальный sig поставит POST-обработчик.
+            if (fromNpub === myNpub && messages[peer].some(m => m._pendingServerAssign)) {
+                console.log("[pollHist] outgoing echo deferred (POST in flight), hash=", (hash || "").slice(0, 12));
+                continue;
+            }
 
             // Парсим body как JSON, чтобы обнаружить _kind.
             let parsedBody = null;
