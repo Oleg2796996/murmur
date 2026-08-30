@@ -96,10 +96,39 @@ async function renderAttachment(att, containerEl, abortSignal) {
     placeholder.textContent = "🔓 расшифровка…";
     containerEl.appendChild(placeholder);
 
+    // Lesson #318 (Олег 2026-08-28 06:42 MSK): 12s safety net — если placeholder
+    // висит дольше 12s (fetch + decrypt через CF tunnel), заменить на
+    // "retry" вместо зависшего "🔓 расшифровка…". Это не убивает основной
+    // renderAttachment (тот продолжает до 45s+15s), но юзер видит retry.
+    const safetyNetId = setTimeout(() => {
+        if (!placeholder.isConnected) return; // уже заменили — ок
+        if (placeholder.parentNode) {
+            const errEl = document.createElement("div");
+            errEl.className = "attach-error";
+            errEl.innerHTML = `🔒 расшифровка идёт долго…<br><button class="link-btn" style="margin-top:6px;font-size:0.85em">↻ повторить</button>`;
+            placeholder.replaceWith(errEl);
+            errEl.querySelector("button").addEventListener("click", async () => {
+                errEl.remove();
+                const cache = window.MurmurBlobCache;
+                if (cache && cache.isAvailable && cache.isAvailable()) {
+                    await cache.del(att.blob_id).catch(() => {});
+                }
+                if (typeof window.__retryAttachment === "function") {
+                    window.__retryAttachment(att, containerEl, abortSignal);
+                } else {
+                    // Fallback: recursive call (свежий placeholder)
+                    try {
+                        await renderAttachment(att, containerEl, abortSignal);
+                    } catch (e) { /* ignore */ }
+                }
+            });
+        }
+    }, 12000);
+
     let blobUrl = null;
     try {
         // Lesson #210 (Олег 2026-08-26 13:38): AbortSignal support — abortable fetch
-        if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
+        if (abortSignal && abortSignal.aborted) { clearTimeout(safetyNetId); placeholder.remove(); return null; }
 
         // Lesson #211 (Олег 2026-08-26 14:14): CACHE-FIRST lookup.
         // Если blob уже расшифрован и сохранён в IndexedDB — просто показываем.
@@ -108,11 +137,12 @@ async function renderAttachment(att, containerEl, abortSignal) {
         if (cache && cache.isAvailable && cache.isAvailable()) {
             const cachedBlob = await cache.get(att.blob_id);
             if (cachedBlob) {
-                if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
+                if (abortSignal && abortSignal.aborted) { clearTimeout(safetyNetId); placeholder.remove(); return null; }
                 blobUrl = URL.createObjectURL(cachedBlob);
                 const mime = att.mime || cachedBlob.type || "application/octet-stream";
                 const el = renderByMime({ mime, name: att.name, blobUrl, size: cachedBlob.size });
                 placeholder.replaceWith(el);
+                clearTimeout(safetyNetId); // Lesson #319: safety net отработал — снимаем
                 console.log("[attach-cache] HIT", att.blob_id.slice(0, 8), "size=", cachedBlob.size);
                 return el;
             }
@@ -124,14 +154,14 @@ async function renderAttachment(att, containerEl, abortSignal) {
         // Плюс — уже cache HIT выше (строка 95-105), если blob в IndexedDB,
         // fetch не вызывается ВООБЩЕ. Это решает "3+ фото + reload не видны".
         const ct = await withTimeout(fetchBlob(att.blob_id, abortSignal), 45000, "fetchBlob");
-        if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
+        if (abortSignal && abortSignal.aborted) { clearTimeout(safetyNetId); placeholder.remove(); return null; }
         // b. Unwrap AES key (ECIES)
         const key = await withTimeout(eciesUnwrapKey(att.wrapped_key), 15000, "eciesUnwrap");
-        if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
+        if (abortSignal && abortSignal.aborted) { clearTimeout(safetyNetId); placeholder.remove(); return null; }
         // c. Decrypt
         const iv = b64decode(att.iv);
         const plain = await aesDecrypt({ ciphertext: ct, key, iv });
-        if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
+        if (abortSignal && abortSignal.aborted) { clearTimeout(safetyNetId); placeholder.remove(); return null; }
         // d. Blob + URL
         const mime = att.mime || "application/octet-stream";
         const blob = new Blob([plain], { type: mime });
@@ -143,10 +173,12 @@ async function renderAttachment(att, containerEl, abortSignal) {
         // e. Render based on mime
         const el = renderByMime({ mime, name: att.name, blobUrl, size: plain.length });
         placeholder.replaceWith(el);
+        clearTimeout(safetyNetId); // Lesson #319: safety net отработал — снимаем
         return el;
     } catch (err) {
         // Lesson #210: not a real error if we were aborted (normal cleanup).
         if (abortSignal && abortSignal.aborted) {
+            clearTimeout(safetyNetId);
             placeholder.remove();
             return null;
         }
@@ -159,6 +191,7 @@ async function renderAttachment(att, containerEl, abortSignal) {
         const errMsg = err.message || "не удалось расшифровать";
         errEl.innerHTML = `🔒 ${errMsg}<br><button class="link-btn" style="margin-top:6px;font-size:0.85em">↻ повторить</button>`;
         placeholder.replaceWith(errEl);
+        clearTimeout(safetyNetId); // Lesson #319: safety net отработал — снимаем
         // Retry handler: clear cache (in case stale), re-run renderAttachment.
         errEl.querySelector("button").addEventListener("click", async () => {
             errEl.remove();
