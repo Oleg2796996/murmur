@@ -93,27 +93,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     info!(count = expired.len(), "TTL cleanup: processing expired envelopes");
                     for e in &expired {
                         // Получатель так и не зашел в сеть за 24h.
-                        // Отправляем уведомление обратно отправителю.
-                        // Сначала находим алиас отправителя по его npub.
-                        let sender_alias = match store_for_ttl.aliases_for_npub(&e.from_npub) {
-                            Ok(mut aliases) if !aliases.is_empty() => aliases.remove(0),
-                            _ => {
-                                warn!(envelope_hash=%e.envelope_hash, from=%e.from_npub, "no alias for sender, skipping notification");
-                                // Все равно удаляем
-                                let _ = store_for_ttl.delete_envelope_by_hash(&e.envelope_hash);
-                                continue;
-                            }
-                        };
-                        // Создаём системный envelope «undelivered» в сторону отправителя.
+                        // v149: уведомление уходит отправителю напрямую по его
+                        // npub (from_npub) — alias-lookup удалён.
                         match store_for_ttl.create_undelivered_notification(
                             e,
-                            "system:relay",          // отправитель уведомления — relay
-                            &sender_alias,
+                            e.from_npub.as_str(), // получатель уведомления = отправитель оригинала
                         ) {
                             Ok(true) => {
                                 info!(
                                     envelope_hash = %e.envelope_hash,
-                                    recipient = %sender_alias,
+                                    recipient = %e.from_npub,
                                     "undelivered notification created"
                                 );
                             }
@@ -124,18 +113,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 warn!(err=%err, "failed to create undelivered notification");
                             }
                         }
-                        // Удаляем просроченный envelope.
+                        // Удаляем просроченный envelope (каскад: attachment_refs
+                        // + ref_count → blob файл+строка при 0).
                         if let Err(err) = store_for_ttl.delete_envelope_by_hash(&e.envelope_hash) {
                             warn!(err=%err, "failed to delete expired envelope");
                         }
-                        // Тоже удалить из pending-лога (если там было)
-                        if let Ok(entries) = pending_for_ttl.read_all(&e.to_alias) {
-                            // (не фильтруем — просто оставляем файл как есть; cleanup по retention не в этом PR)
-                            let _ = entries;
-                        }
-                        // Broadcast в WS для получателя, если онлайн (вдруг вернулся).
+                        // Broadcast в WS для отправителя, если онлайн (вдруг вернулся).
                         let fake_entry = murmur_relay::pending::PendingEntry {
-                            to_alias: sender_alias.clone(),
+                            to_npub: e.from_npub.clone(),
                             from_npub: "system:relay".into(),
                             ts: std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
@@ -153,6 +138,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(err) => {
                     warn!(err=%err, "TTL cleanup: list_expired_envelopes failed");
                 }
+            }
+            // v149 retention: pending backlog старше 24h — в мусор (файлы
+            // переписываются, пустые удаляются). Раньше .log-файлы росли
+            // вечно (27 MB мусора за месяц).
+            match pending_for_ttl.retain_recent(86_400) {
+                Ok((dropped, kept)) if dropped > 0 => {
+                    info!(dropped, kept, "pending retention: stale entries pruned");
+                }
+                Ok(_) => {}
+                Err(err) => warn!(err=%err, "pending retention failed"),
+            }
+            // v149: blob'ы без ссылок (например, пережитки до багфикса) — удалить.
+            match store_for_ttl.delete_orphan_blobs() {
+                Ok(files) if !files.is_empty() => {
+                    info!(count = files.len(), "orphan blobs deleted");
+                }
+                Ok(_) => {}
+                Err(err) => warn!(err=%err, "orphan blob cleanup failed"),
             }
         }
     });

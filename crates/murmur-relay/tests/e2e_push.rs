@@ -106,7 +106,8 @@ async fn deliver_posts_vapid_signed_payload_to_mock_endpoint() {
         from_npub: "npub1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqs9y7h7q".to_string(),
         ts: 1_700_000_000,
         envelope_hash_hex: "deadbeef".to_string(),
-        title: "murmur: alice".to_string(),
+        title: "Murmur".to_string(),
+        subtitle: "npub1qq…q".to_string(),
         body: "new encrypted message (42 bytes)".to_string(),
     };
     let delivered = push_server.deliver(&payload).await.unwrap();

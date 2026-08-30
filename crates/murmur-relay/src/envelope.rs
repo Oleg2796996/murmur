@@ -9,7 +9,7 @@
 //! ```json
 //! {
 //!   "from": "npub1...",
-//!   "to": "alias",
+//!   "to": "npub1... (recipient full npub, v149)",
 //!   "ct":   "<base64 sealed envelope [ephem32|nonce12|ct+tag]>",
 //!   "ts":   1234567,
 //!   "sig":  "<hex ed25519 sig over (from|to|ts|ct)>",
@@ -150,14 +150,14 @@ fn base64_decode_bytes(s: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// Process a raw envelope payload for a given recipient alias.
+/// Process a raw envelope payload for a given recipient (v149: npub-only).
 ///
 /// Validates signature, persists to file + SQLite, broadcasts to WS clients,
 /// and fires web-push delivery.
 ///
 /// Returns `(envelope_hash_hex, broadcast_count)` on success.
 pub fn accept_envelope(
-    alias: String,
+    recipient_npub: String,
     env_bytes: Vec<u8>,
     pending: &PendingStore,
     hub: &SubscriberHub,
@@ -197,7 +197,7 @@ pub fn accept_envelope(
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let entry = PendingEntry {
-        to_alias: alias.clone(),
+        to_npub: recipient_npub.clone(),
         from_npub: parsed.sender_npub.clone(),
         ts,
         envelope_bytes: env_bytes.clone(),
@@ -212,7 +212,7 @@ pub fn accept_envelope(
     if let Some(store) = store {
         let ts_ms = ts as i64;
         let expires_at_ms = ts_ms + 86400; // 24 hours TTL
-        let inserted = match store.upsert_envelope_with_attachments(&hash_hex, &parsed.sender_npub, &alias, &parsed.payload, &parsed.signature, ts_ms, expires_at_ms, &parsed.attachments_meta) {
+        let inserted = match store.upsert_envelope_with_attachments(&hash_hex, &parsed.sender_npub, &recipient_npub, &parsed.payload, &parsed.signature, ts_ms, expires_at_ms, &parsed.attachments_meta) {
             Ok(v) => v,
             Err(e) => {
                 warn!(err=%e, "sqlite upsert failed");
@@ -220,10 +220,7 @@ pub fn accept_envelope(
             }
         };
         if inserted {
-            // Increment unread count for the recipient alias.
-            if let Err(e) = store.increment_unread(&alias) {
-                warn!(err=%e, "increment_unread failed");
-            }
+            // v149: серверный unread удалён (клиент считает сам, lesson #125).
         } else {
             // Duplicate envelope — skip.
             let n = hub.broadcast(&entry, Some(store));
@@ -233,7 +230,7 @@ pub fn accept_envelope(
 
     // 6. Broadcast to WS subscribers.
     let n = hub.broadcast(&entry, store);
-    info!(alias=%alias, hash=%hash_hex, subs=n, "envelope accepted + fanout");
+    info!(to=%recipient_npub, hash=%hash_hex, subs=n, "envelope accepted + fanout");
 
     // Lesson #131: honest relay — после broadcast/envelope сокращаем TTL до 5 минут.
     // Peer через WS уже получил. Cron снесёт через 5 мин. Если peer был
@@ -257,10 +254,10 @@ pub fn accept_envelope(
     if let Some(push) = push {
         let push = push.clone();
         let payload = crate::push::PushPayload::from_entry(&entry, store);
-        let alias_for_log = alias.clone();
+        let npub_for_log = recipient_npub.clone();
         tokio::spawn(async move {
             match push.deliver(&payload).await {
-                Ok(n) if n > 0 => info!(alias=%alias_for_log, delivered=n, "push delivered"),
+                Ok(n) if n > 0 => info!(to=%npub_for_log, delivered=n, "push delivered"),
                 Ok(_) => {}
                 Err(e) => warn!(err=%e, "push deliver failed"),
             }

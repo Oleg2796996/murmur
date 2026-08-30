@@ -1,8 +1,8 @@
-//! SQLite persistence layer for murmur envelopes, contacts, and unread counts.
+//! SQLite persistence layer for murmur envelopes (v149: npub-only, no aliases).
 //!
 //! Schema:
-//!   envelopes(envelope_hash PK, from_npub, to_alias, body BLOB, sig BLOB, ts INTEGER)
-//!   user_aliases(alias PK, npub, unread INTEGER DEFAULT 0)
+//!   envelopes(envelope_hash PK, from_npub, to_npub, body BLOB, sig BLOB, ts INTEGER)
+//!   blobs + attachment_refs (ref_count cascaded on envelope delete)
 //!
 //! rusqlite + bundled: richer queries, BLOB support,
 //! UNIQUE constraint for idempotency, transactional safety.
@@ -12,7 +12,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use sha3::Digest;
 use std::path::Path;
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 #[derive(Clone)]
 pub struct MessageStore {
@@ -30,7 +30,7 @@ pub struct ContactRow {
 #[derive(Debug, Clone)]
 pub struct HistoryRow {
     pub from_npub: String,
-    pub to_alias: String,
+    pub to_npub: String,
     pub body: Vec<u8>,
     pub sig: Vec<u8>,
     pub ts: i64,
@@ -66,19 +66,12 @@ impl MessageStore {
             CREATE TABLE IF NOT EXISTS envelopes (
                 envelope_hash TEXT PRIMARY KEY,
                 from_npub     TEXT NOT NULL,
-                to_alias      TEXT NOT NULL,
+                to_npub       TEXT NOT NULL,
                 body          BLOB NOT NULL,
                 sig           BLOB NOT NULL DEFAULT X'',
                 ts            INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_envelopes_from ON envelopes(from_npub);
-            CREATE INDEX IF NOT EXISTS idx_envelopes_to_alias ON envelopes(to_alias);
-            CREATE INDEX IF NOT EXISTS idx_envelopes_to_alias_ts ON envelopes(to_alias, ts);
-            CREATE TABLE IF NOT EXISTS user_aliases (
-                alias  TEXT PRIMARY KEY,
-                npub   TEXT NOT NULL,
-                unread INTEGER NOT NULL DEFAULT 0
-            );
             -- Phase 1 attachments (Variant B): blobs table + attachment_refs table.
             -- Lesson #165: отдельный /upload endpoint, inline base64 anti-pattern.
             CREATE TABLE IF NOT EXISTS blobs (
@@ -132,9 +125,49 @@ impl MessageStore {
         if has_read_at == 0 {
             conn.execute_batch(
                 "ALTER TABLE envelopes ADD COLUMN read_at INTEGER NOT NULL DEFAULT 0;
-                 CREATE INDEX IF NOT EXISTS idx_envelopes_recipient_unread ON envelopes(to_alias, from_npub, read_at);",
+                 CREATE INDEX IF NOT EXISTS idx_envelopes_recipient_unread ON envelopes(to_npub, from_npub, read_at);",
             )?;
         }
+        // ── v149 npub-only migration ────────────────────────────────────────
+        // Alias concept removed (Олег 2026-08-30): сервер хранит только npub-маршрутизацию.
+        // 1) envelopes.to_alias → to_npub (RENAME COLUMN, SQLite >= 3.25).
+        // 2) user_aliases таблица удаляется полностью.
+        let has_to_npub: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('envelopes') WHERE name = 'to_npub'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if has_to_npub == 0 {
+            conn.execute_batch(
+                "DROP INDEX IF EXISTS idx_envelopes_recipient_unread;
+                 DROP INDEX IF EXISTS idx_envelopes_to_alias;
+                 DROP INDEX IF EXISTS idx_envelopes_to_alias_ts;
+                 ALTER TABLE envelopes RENAME COLUMN to_alias TO to_npub;
+                 CREATE INDEX IF NOT EXISTS idx_envelopes_recipient_unread ON envelopes(to_npub, from_npub, read_at);
+                 DROP TABLE IF EXISTS user_aliases;",
+            )?;
+            info!("v149 migration: envelopes.to_alias → to_npub, user_aliases dropped");
+        }
+        // На всякий случай: если БД старая, а to_npub уже был (не должно случиться)
+        let has_user_aliases: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='user_aliases'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if has_user_aliases > 0 {
+            conn.execute_batch("DROP TABLE IF EXISTS user_aliases;")?;
+            info!("v149 migration: user_aliases dropped");
+        }
+        // Индексы on to_npub — строго после миграции (на старой БД колонка
+        // появляется только через RENAME COLUMN).
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_envelopes_to_npub ON envelopes(to_npub);
+             CREATE INDEX IF NOT EXISTS idx_envelopes_to_npub_ts ON envelopes(to_npub, ts);",
+        )?;
         // Migration: original_size в attachment_refs (Phase 2 enhancement).
         let has_original_size: i64 = conn
             .query_row(
@@ -197,16 +230,16 @@ impl MessageStore {
         &self,
         hash: &str,
         from: &str,
-        to_alias: &str,
+        to_npub: &str,
         body: &[u8],
         sig: &[u8],
         ts: i64,
         expires_at: i64,
     ) -> rusqlite::Result<bool> {
         let n = self.exec_sql(
-            "INSERT OR IGNORE INTO envelopes (envelope_hash, from_npub, to_alias, body, sig, ts, expires_at)
+            "INSERT OR IGNORE INTO envelopes (envelope_hash, from_npub, to_npub, body, sig, ts, expires_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![hash, from, to_alias, body, sig, ts, expires_at],
+            params![hash, from, to_npub, body, sig, ts, expires_at],
         )?;
         Ok(n > 0)
     }
@@ -219,7 +252,7 @@ impl MessageStore {
         &self,
         hash: &str,
         from: &str,
-        to_alias: &str,
+        to_npub: &str,
         body: &[u8],
         sig: &[u8],
         ts: i64,
@@ -229,9 +262,9 @@ impl MessageStore {
         let mut c = self.conn.lock();
         let tx = c.transaction()?;
         let n = tx.execute(
-            "INSERT OR IGNORE INTO envelopes (envelope_hash, from_npub, to_alias, body, sig, ts, expires_at)
+            "INSERT OR IGNORE INTO envelopes (envelope_hash, from_npub, to_npub, body, sig, ts, expires_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![hash, from, to_alias, body, sig, ts, expires_at],
+            params![hash, from, to_npub, body, sig, ts, expires_at],
         )?;
         if n > 0 && !attachments_meta.is_empty() {
             // Increment ref_count for each blob referenced (only on first insert).
@@ -293,62 +326,21 @@ impl MessageStore {
         Ok(())
     }
 
-    pub fn register_alias(&self, alias: &str, npub: &str) -> rusqlite::Result<()> {
-        self.exec_sql(
-            "INSERT OR REPLACE INTO user_aliases (alias, npub, unread) VALUES (?1, ?2, 0)",
-            params![alias, npub],
-        )
-        .map(|_| ())
-    }
 
-    pub fn aliases_for_npub(&self, npub: &str) -> rusqlite::Result<Vec<String>> {
-        let c = self.conn.lock();
-        let mut s = c.prepare("SELECT alias FROM user_aliases WHERE npub = ?1")?;
-        let mut rows = Vec::new();
-        for r in s.query_map(params![npub], |r| r.get(0))? {
-            rows.push(r?);
-        }
-        Ok(rows)
-    }
-
-    pub fn npub_for_alias(&self, alias: &str) -> rusqlite::Result<Option<String>> {
-        self.conn.lock().query_row(
-            "SELECT npub FROM user_aliases WHERE alias = ?1",
-            params![alias],
-            |r| r.get(0),
-        )
-        .optional()
-    }
-
-    pub fn increment_unread(&self, alias: &str) -> rusqlite::Result<()> {
-        self.exec_sql(
-            "UPDATE user_aliases SET unread = unread + 1 WHERE alias = ?1",
-            params![alias],
-        )
-        .map(|_| ())
-    }
 
     pub fn get_contacts(&self, npub: &str) -> rusqlite::Result<Vec<ContactRow>> {
+        // v149: npub-only. Контакты = пиров из envelopes (живут в TTL-окне).
+        // unread считается клиентом (lesson #125) — серверный счётчик удалён
+        // вместе с user_aliases.
         let peers: Vec<(String, i64)> = {
             let c = self.conn.lock();
             let mut stmt = c.prepare(
                 "SELECT peer, MAX(last_ts) FROM (
-                    SELECT CASE
-                        WHEN e.from_npub LIKE 'npub1%' THEN e.from_npub
-                        ELSE COALESCE(
-                            (SELECT ua2.npub FROM user_aliases ua2 WHERE ua2.alias = e.from_npub),
-                            e.from_npub
-                        )
-                     END as peer, MAX(e.ts) as last_ts
+                    SELECT e.from_npub as peer, MAX(e.ts) as last_ts
                     FROM envelopes e
-                    JOIN user_aliases ua ON ua.alias = e.to_alias
-                    WHERE ua.npub = ?1 AND e.from_npub != ?1
+                    WHERE e.to_npub = ?1 AND e.from_npub != ?1 AND e.from_npub != 'system:relay'
                     UNION
-                    SELECT COALESCE(
-                        (SELECT ua2.npub FROM user_aliases ua2 WHERE ua2.alias = e.to_alias),
-                        e.to_alias
-                    ) as peer,
-                        MAX(e.ts) as last_ts
+                    SELECT e.to_npub as peer, MAX(e.ts) as last_ts
                     FROM envelopes e
                     WHERE e.from_npub = ?1
                 ) GROUP BY peer ORDER BY MAX(last_ts) DESC",
@@ -363,36 +355,22 @@ impl MessageStore {
         let mut rows = Vec::new();
         for (peer, last_ts) in peers {
             let preview = self.preview_for_peer(&peer, npub)?;
-            let unread: i64 = self.get_unread_for_peer(npub, &peer)?;
             rows.push(ContactRow {
                 peer,
                 last_message_preview: preview,
                 last_ts,
-                unread_count: unread,
+                unread_count: 0,
             });
         }
         Ok(rows)
     }
 
-    fn get_unread_for_peer(&self, npub: &str, peer: &str) -> rusqlite::Result<i64> {
-        let c = self.conn.lock();
-        let val: i64 = c.query_row(
-            "SELECT COALESCE(SUM(ua.unread), 0) FROM envelopes e \
-             JOIN user_aliases ua ON ua.alias = e.to_alias \
-             WHERE ua.npub = ?1 AND e.from_npub = ?2",
-            params![npub, peer],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-        Ok(val)
-    }
-
-    fn preview_for_peer(&self, peer: &str, self_npub: &str) -> rusqlite::Result<String> {
+    pub(crate) fn preview_for_peer(&self, peer: &str, self_npub: &str) -> rusqlite::Result<String> {
         let c = self.conn.lock();
         let body: Option<Vec<u8>> = c.query_row(
             "SELECT body FROM envelopes \
-             WHERE (from_npub = ?1 AND to_alias = ?2) \
-                OR (to_alias = ?1 AND from_npub = ?2) \
+             WHERE (from_npub = ?1 AND to_npub = ?2) \
+                OR (to_npub = ?1 AND from_npub = ?2) \
              ORDER BY ts DESC LIMIT 1",
             params![peer, self_npub],
             |r| r.get(0),
@@ -441,36 +419,16 @@ impl MessageStore {
         before_ts: Option<i64>,
     ) -> rusqlite::Result<HistoryResponse> {
         let c = self.conn.lock();
-        // `to_alias` in envelopes is either a user_alias (from older clients
-        // that resolved npub → alias before send) OR the recipient's full npub
-        // (from PWA clients that POST `/envelope?to=<npub>` directly). Both
-        // forms must match, hence the OR-clauses comparing to_alias against
-        // the literal npub and peer parameters in addition to the alias set.
-        // Bracket every AND inside the ORs — otherwise SQL precedence binds
-        // AND first and the GROUP incorrectly drops the peer-filter on half
-        // the side (the bug that hid messages from `/api/history`).
+        // v149: npub-only. `to_npub` — всегда полный npub получателя
+        // (PWA POST /envelope?to=<npub>). Простая симметричная пара.
         let sql = if before_ts.is_some() {
-            "SELECT from_npub, to_alias, body, sig, ts, envelope_hash FROM envelopes \
-             WHERE \
-             ((from_npub = ?1 \
-                AND (to_alias IN (SELECT alias FROM user_aliases WHERE npub = ?2) \
-                  OR to_alias = ?2)) \
-              OR \
-              (from_npub = ?2 \
-                AND (to_alias IN (SELECT alias FROM user_aliases WHERE npub = ?1) \
-                  OR to_alias = ?1))) \
+            "SELECT from_npub, to_npub, body, sig, ts, envelope_hash FROM envelopes \
+             WHERE ((from_npub = ?1 AND to_npub = ?2) OR (from_npub = ?2 AND to_npub = ?1)) \
               AND ts < ?3 \
              ORDER BY ts DESC LIMIT ?4".to_string()
         } else {
-            "SELECT from_npub, to_alias, body, sig, ts, envelope_hash FROM envelopes \
-             WHERE \
-             ((from_npub = ?1 \
-                AND (to_alias IN (SELECT alias FROM user_aliases WHERE npub = ?2) \
-                  OR to_alias = ?2)) \
-              OR \
-              (from_npub = ?2 \
-                AND (to_alias IN (SELECT alias FROM user_aliases WHERE npub = ?1) \
-                  OR to_alias = ?1))) \
+            "SELECT from_npub, to_npub, body, sig, ts, envelope_hash FROM envelopes \
+             WHERE ((from_npub = ?1 AND to_npub = ?2) OR (from_npub = ?2 AND to_npub = ?1)) \
              ORDER BY ts DESC LIMIT ?3".to_string()
         };
 
@@ -480,7 +438,7 @@ impl MessageStore {
                 .query_map(params![npub, peer, bt, limit], |r| {
                     Ok(HistoryRow {
                         from_npub: r.get(0)?,
-                        to_alias: r.get(1)?,
+                        to_npub: r.get(1)?,
                         body: r.get(2)?,
                         sig: r.get(3)?,
                         ts: r.get(4)?,
@@ -497,7 +455,7 @@ impl MessageStore {
                 .query_map(params![npub, peer, limit], |r| {
                     Ok(HistoryRow {
                         from_npub: r.get(0)?,
-                        to_alias: r.get(1)?,
+                        to_npub: r.get(1)?,
                         body: r.get(2)?,
                         sig: r.get(3)?,
                         ts: r.get(4)?,
@@ -557,21 +515,12 @@ impl MessageStore {
         })
     }
 
-    pub fn reset_unread_for_peer(&self, npub: &str, peer: &str) -> rusqlite::Result<()> {
-        self.exec_sql(
-            "UPDATE user_aliases SET unread = 0 WHERE npub = ?1 \
-             AND alias IN (SELECT DISTINCT to_alias FROM envelopes WHERE from_npub = ?2)",
-            params![npub, peer],
-        )
-        .map(|_| ())
-    }
-
     /// Возвращает список envelope'ов, у которых истёк TTL и которые ещё
     /// не были помечены как возвращённые отправителю.
     pub fn list_expired_envelopes(&self) -> rusqlite::Result<Vec<ExpiredEnvelope>> {
         let c = self.conn.lock();
         let mut s = c.prepare(
-            "SELECT envelope_hash, from_npub, to_alias, body, sig, ts, expires_at \
+            "SELECT envelope_hash, from_npub, to_npub, body, sig, ts, expires_at \
              FROM envelopes \
              WHERE expires_at > 0 AND expires_at < CAST(strftime('%s','now') AS INTEGER)",
         )?;
@@ -580,7 +529,7 @@ impl MessageStore {
                 Ok(ExpiredEnvelope {
                     envelope_hash: r.get(0)?,
                     from_npub: r.get(1)?,
-                    to_alias: r.get(2)?,
+                    to_npub: r.get(2)?,
                     body: r.get(3)?,
                     sig: r.get(4)?,
                     ts: r.get(5)?,
@@ -598,14 +547,13 @@ impl MessageStore {
     pub fn create_undelivered_notification(
         &self,
         original: &ExpiredEnvelope,
-        sender_npub: &str,
-        sender_alias: &str,
+        recipient_npub: &str,
     ) -> rusqlite::Result<bool> {
         // Формируем новый envelope как JSON, чтобы PWA могла его прочитать.
         let body = serde_json::json!({
             "_kind": "undelivered",
             "original_envelope_hash": original.envelope_hash,
-            "original_recipient": original.to_alias,
+            "original_recipient": original.to_npub,
             "original_ts": original.ts,
             "reason": "expired",
             "message": "Адресат не заходил в сеть 24 часа. Попробуйте позже.",
@@ -623,12 +571,12 @@ impl MessageStore {
             .unwrap_or(0) as i64;
 
         let n = self.exec_sql(
-            "INSERT OR IGNORE INTO envelopes (envelope_hash, from_npub, to_alias, body, sig, ts, expires_at)
+            "INSERT OR IGNORE INTO envelopes (envelope_hash, from_npub, to_npub, body, sig, ts, expires_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 new_hash,
-                sender_npub,         // теперь «сервер» отправитель
-                sender_alias,        // алиас отправителя (получатель уведомления)
+                "system:relay",      // отправитель — сам релей
+                recipient_npub,      // уведомление уходит ОТПРАВИТЕСЮ оригинала
                 body_bytes,
                 b"",                 // без подписи
                 now,
@@ -638,10 +586,103 @@ impl MessageStore {
         Ok(n > 0)
     }
 
-    /// Удаляет envelope по hash.
-    pub fn delete_envelope_by_hash(&self, hash: &str) -> rusqlite::Result<()> {
-        self.exec_sql("DELETE FROM envelopes WHERE envelope_hash = ?1", params![hash])
-            .map(|_| ())
+    /// Удаляет envelope по hash + каскад вложений (v149, минимальное хранение):
+    /// attachment_refs по hash сносятся, blob'ы декрементируются; blob с
+    /// ref_count 0 удаляется физически (строка + файл). Вызывается из TTL-cron
+    /// И из пути доставки после успешной broadcast — данные живут ровно столько,
+    /// сколько нужно для маршрутизации.
+    pub fn delete_envelope_by_hash(&self, hash: &str) -> rusqlite::Result<Vec<String>> {
+        let mut deleted_files: Vec<String> = Vec::new();
+        let c = self.conn.lock();
+        // 1) Какие blob'ы привязаны к этому envelope?
+        let blob_ids: Vec<(String, String)> = {
+            let mut s = c.prepare(
+                "SELECT ar.blob_id, COALESCE(b.storage_path, '') FROM attachment_refs ar \
+                 LEFT JOIN blobs b ON b.id = ar.blob_id \
+                 WHERE ar.envelope_hash = ?1",
+            )?;
+            let rows = s
+                .query_map(params![hash], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .filter_map(|r| r.ok())
+                .collect();
+            rows
+        };
+        // 2) В одной транзакции: refs → декремент → удаление при ref_count <= 0.
+        let tx = c.unchecked_transaction()?;
+        tx.execute("DELETE FROM attachment_refs WHERE envelope_hash = ?1", params![hash])?;
+        for (blob_id, storage_path) in &blob_ids {
+            tx.execute(
+                "UPDATE blobs SET ref_count = ref_count - 1 WHERE id = ?1",
+                params![blob_id],
+            )?;
+            let remaining: i64 = tx.query_row(
+                "SELECT ref_count FROM blobs WHERE id = ?1",
+                params![blob_id],
+                |r| r.get(0),
+            ).unwrap_or(0);
+            if remaining <= 0 {
+                tx.execute("DELETE FROM blobs WHERE id = ?1", params![blob_id])?;
+                if !storage_path.is_empty() {
+                    deleted_files.push(storage_path.clone());
+                }
+            }
+        }
+        tx.commit()?;
+        drop(c);
+        // 3) Сам envelope.
+        self.exec_sql("DELETE FROM envelopes WHERE envelope_hash = ?1", params![hash])?;
+        // 4) Файлы — после коммита (I/O вне блокировки).
+        for p in &deleted_files {
+            let path = std::path::Path::new(p);
+            if path.exists() {
+                match std::fs::remove_file(path) {
+                    Ok(_) => info!(blob = %p, "v149: blob file deleted (ref_count=0)"),
+                    Err(e) => warn!(blob = %p, error = %e, "v149: failed to delete blob file"),
+                }
+            }
+        }
+        Ok(deleted_files)
+    }
+
+    /// v149: blob'ы без ссылок (orphan) — удалить. Вызывается из TTL-cron.
+    pub fn delete_orphan_blobs(&self) -> rusqlite::Result<Vec<String>> {
+        let mut deleted_files: Vec<String> = Vec::new();
+        let blob_ids: Vec<(String, String)> = {
+            let c = self.conn.lock();
+            let mut s = c.prepare(
+                "SELECT b.id, b.storage_path FROM blobs b \
+                 WHERE NOT EXISTS (SELECT 1 FROM attachment_refs ar WHERE ar.blob_id = b.id)",
+            )?;
+            let rows = s
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .filter_map(|r| r.ok())
+                .collect();
+            rows
+        };
+        if blob_ids.is_empty() {
+            return Ok(deleted_files);
+        }
+        {
+            let c = self.conn.lock();
+            let tx = c.unchecked_transaction()?;
+            for (blob_id, storage_path) in &blob_ids {
+                tx.execute("DELETE FROM blobs WHERE id = ?1", params![blob_id])?;
+                if !storage_path.is_empty() {
+                    deleted_files.push(storage_path.clone());
+                }
+            }
+            tx.commit()?;
+        }
+        for p in &deleted_files {
+            let path = std::path::Path::new(p);
+            if path.exists() {
+                match std::fs::remove_file(path) {
+                    Ok(_) => info!(blob = %p, "v149: orphan blob deleted"),
+                    Err(e) => warn!(blob = %p, error = %e, "v149: failed to delete orphan blob file"),
+                }
+            }
+        }
+        Ok(deleted_files)
     }
 
     // Раньше здесь были unread_by_peer и mark_incoming_read — но клиент
@@ -653,7 +694,7 @@ impl MessageStore {
 pub struct ExpiredEnvelope {
     pub envelope_hash: String,
     pub from_npub: String,
-    pub to_alias: String,
+    pub to_npub: String,
     pub body: Vec<u8>,
     pub sig: Vec<u8>,
     pub ts: i64,
@@ -700,46 +741,34 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 2);
+        // v149: envelopes + blobs (+attachment_refs). user_aliases удалена.
+        assert_eq!(n, 3);
     }
 
     #[test]
     fn upsert_idempotent() {
         let db = MessageStore::new(&tmp().join("idem.db")).unwrap();
         assert!(db
-            .upsert_envelope("h1", "npub_alice", "alias_bob", b"Hello", b"sig1", 1000, 1000 + 86400)
+            .upsert_envelope("h1", "npub_alice", "npub_bob", b"Hello", b"sig1", 1000, 1000 + 86400)
             .unwrap());
         assert!(!db
-            .upsert_envelope("h1", "npub_alice", "alias_bob", b"Hello", b"sig1", 1000, 1000 + 86400)
+            .upsert_envelope("h1", "npub_alice", "npub_bob", b"Hello", b"sig1", 1000, 1000 + 86400)
             .unwrap());
-    }
-
-    #[test]
-    fn register_alias() {
-        let db = MessageStore::new(&tmp().join("alias.db")).unwrap();
-        db.register_alias("oleg-hp", "npub_oleg").unwrap();
-        let aliases = db.aliases_for_npub("npub_oleg").unwrap();
-        assert_eq!(aliases, vec!["oleg-hp"]);
-        let npub = db.npub_for_alias("oleg-hp").unwrap().unwrap();
-        assert_eq!(npub, "npub_oleg");
     }
 
     #[test]
     fn full_roundtrip() {
         let db = MessageStore::new(&tmp().join("rt.db")).unwrap();
-        db.register_alias("oleg-hp", "npub_oleg").unwrap();
-        db.register_alias("alice-hp", "npub_alice").unwrap();
-        db.upsert_envelope("h1", "npub_alice", "oleg-hp", b"Hello!", b"sig1", 1000, 1000 + 86400)
+        db.upsert_envelope("h1", "npub_alice", "npub_oleg", b"Hello!", b"sig1", 1000, 1000 + 86400)
             .unwrap();
-        db.increment_unread("oleg-hp").unwrap();
-        db.upsert_envelope("h2", "npub_oleg", "alice-hp", b"Hi Alice!", b"sig2", 1100, 1100 + 86400)
+        db.upsert_envelope("h2", "npub_oleg", "npub_alice", b"Hi Alice!", b"sig2", 1100, 1100 + 86400)
             .unwrap();
 
         let contacts = db.get_contacts("npub_oleg").unwrap();
         assert_eq!(contacts.len(), 1);
         assert_eq!(contacts[0].peer, "npub_alice");
         assert_eq!(contacts[0].last_ts, 1100);
-        assert_eq!(contacts[0].unread_count, 1);
+        assert_eq!(contacts[0].unread_count, 0);
 
         let hist = db
             .get_history("npub_oleg", "npub_alice", 100, None)
@@ -755,8 +784,45 @@ mod tests {
         assert_eq!(pag.messages[0].ts, 1000);
         assert_eq!(pag.next_before_ts, Some(1000));
 
-        db.reset_unread_for_peer("npub_oleg", "npub_alice").unwrap();
-        let contacts2 = db.get_contacts("npub_oleg").unwrap();
-        assert_eq!(contacts2[0].unread_count, 0);
+        // v149: удаление envelope с каскадом blob'ов.
+        db.delete_envelope_by_hash("h1").unwrap();
+        let hist2 = db
+            .get_history("npub_oleg", "npub_alice", 100, None)
+            .unwrap();
+        assert_eq!(hist2.messages.len(), 1);
+    }
+
+    #[test]
+    fn blob_cascade_delete() {
+        let db = MessageStore::new(&tmp().join("blobcasc.db")).unwrap();
+        // 2 blob'а, один шарится между двумя envelope'ами.
+        db.with_conn(|c| {
+            c.execute_batch(
+                "INSERT INTO blobs (id, sha256, mime, size, storage_path, created_at, ref_count) VALUES
+                 ('b1', 's1', 'image/png', 10, '/tmp/b1', 0, 0),
+                 ('b2', 's2', 'image/png', 10, '/tmp/b2', 0, 0);",
+            )
+        })
+        .unwrap();
+        let meta = serde_json::json!([
+            {"blob_id": "b1", "wrapped_key": "k", "name": "a.png", "position": 0},
+            {"blob_id": "b2", "wrapped_key": "k", "name": "b.png", "position": 1}
+        ]);
+        let meta2 = serde_json::json!([
+            {"blob_id": "b1", "wrapped_key": "k", "name": "a.png", "position": 0}
+        ]);
+        db.upsert_envelope_with_attachments("e1", "npub_a", "npub_b", b"x", b"", 1000, 2000,
+            meta.as_array().unwrap()).unwrap();
+        db.upsert_envelope_with_attachments("e2", "npub_a", "npub_c", b"x", b"", 1001, 2001,
+            meta2.as_array().unwrap()).unwrap();
+        // b1: ref_count=2, b2: ref_count=1.
+        db.delete_envelope_by_hash("e1").unwrap();
+        let b1: i64 = db.with_conn(|c| c.query_row("SELECT ref_count FROM blobs WHERE id='b1'", [], |r| r.get(0))).unwrap();
+        let b2: Option<i64> = db.with_conn(|c| c.query_row("SELECT ref_count FROM blobs WHERE id='b2'", [], |r| r.get(0)).optional()).map(|o| o.flatten()).unwrap_or(None);
+        assert_eq!(b1, 1);
+        assert!(b2.is_none(), "b2 must be deleted at ref_count=0");
+        db.delete_envelope_by_hash("e2").unwrap();
+        let left: i64 = db.with_conn(|c| c.query_row("SELECT COUNT(*) FROM blobs", [], |r| r.get(0))).unwrap();
+        assert_eq!(left, 0, "all blobs gone after both envelopes deleted");
     }
 }
