@@ -37,7 +37,7 @@ self.addEventListener("message", (event) => {
 });
 
 self.addEventListener("push", (event) => {
-  let payload = { alias: "unknown", title: "Murmur", subtitle: "Кто-то", body: "Новое сообщение" };
+  let payload = { alias: "unknown", title: "Murmur", subtitle: "", body: "Новое сообщение" };
   try {
     if (event.data) {
       payload = event.data.json();
@@ -47,9 +47,9 @@ self.addEventListener("push", (event) => {
   }
   const title = payload.title || "Murmur";
   const options = {
-    // iOS Web Push uses `subtitle` slot for the sender alias; supplying it
+    // iOS Web Push uses `subtitle` slot for the sender; supplying it
     // suppresses iOS's auto-injected "from <app name>" line. Other platforms
-    // ignore the field.
+    // ignore the field. v149: subtitle = short npub (имена — на клиенте).
     subtitle: payload.subtitle || "",
     body: payload.body || "Откройте murmur, чтобы прочитать сообщение",
     icon: "/icon-192.png",

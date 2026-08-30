@@ -1,6 +1,6 @@
 //! WebSocket subscriber hub: broadcast pending entries to all subscribed clients.
 //!
-//! Each WebSocket connection subscribes to one or more recipient aliases.
+//! v149: each WebSocket connection subscribes to a recipient npub.
 //! When a new envelope lands in `PendingStore`, it is broadcast to all matching
 //! subscribers.
 
@@ -17,11 +17,12 @@ pub enum WsMessage {
     /// Server → client: a pending entry arrived for this subscriber.
     Push(PendingEntry),
     /// Server → client: subscribe confirmation with current backlog count.
-    Subscribed { alias: String, backlog: usize },
+    Subscribed { npub: String, backlog: usize },
     /// Server → client: pong.
     Pong,
-    /// Client → server: subscribe to alias.
-    Subscribe { alias: String },
+    /// Client → server: subscribe to npub. (legacy `alias` key accepted at
+    /// the WS-handshake layer for one release and treated as npub.)
+    Subscribe { npub: String },
     /// Client → server: ping.
     Ping,
     /// Server → client: error.
@@ -43,10 +44,10 @@ pub struct SubscriberHub {
 }
 
 struct Inner {
-    /// alias → list of subscribers. Each subscriber has a Sender<WsMessage>.
+    /// npub → list of subscribers. Each subscriber has a Sender<WsMessage>.
     /// On drop of the WebSocket task, the Receiver is dropped, which closes the channel.
     subs: HashMap<String, Vec<SubscriberHandle>>,
-    /// alias → list of payload subscribers (browser WebSocket path).
+    /// npub → list of payload subscribers (browser WebSocket path).
     payload_subs: HashMap<String, Vec<SubscriberHandlePayload>>,
 }
 
@@ -87,12 +88,12 @@ impl SubscriberHub {
         }
     }
 
-    /// Register a subscriber for one alias. Returns a Receiver that yields
+    /// Register a subscriber for one npub. Returns a Receiver that yields
     /// `WsMessage::Push` items until the WebSocket task drops the receiver.
-    pub fn subscribe(&self, alias: &str, label: &str, capacity: usize) -> Receiver<WsMessage> {
+    pub fn subscribe(&self, npub: &str, label: &str, capacity: usize) -> Receiver<WsMessage> {
         let (tx, rx) = bounded::<WsMessage>(capacity);
         let handle = SubscriberHandle { tx, label: label.to_string() };
-        self.inner.lock().subs.entry(alias.to_string()).or_default().push(handle);
+        self.inner.lock().subs.entry(npub.to_string()).or_default().push(handle);
         rx
     }
 
@@ -100,25 +101,25 @@ impl SubscriberHub {
     /// the postcard `WsMessage`. Used by the browser WebSocket path.
     pub fn subscribe_payload(
         &self,
-        alias: &str,
+        npub: &str,
         label: &str,
         capacity: usize,
     ) -> Receiver<PushPayload> {
         let (tx, rx) = bounded::<PushPayload>(capacity);
         let handle = SubscriberHandlePayload { tx, label: label.to_string() };
-        self.inner.lock().payload_subs.entry(alias.to_string()).or_default().push(handle);
+        self.inner.lock().payload_subs.entry(npub.to_string()).or_default().push(handle);
         // Also keep a placeholder in `subs` so `count()` reflects the connection.
         rx
     }
 
-    /// Broadcast a pending entry to all subscribers of `to_alias`.
+    /// Broadcast a pending entry to all subscribers of `to_npub`.
     /// Returns number of subscribers reached.
     pub fn broadcast(&self, entry: &PendingEntry, store: Option<&crate::storage::MessageStore>) -> usize {
         let msg = WsMessage::Push(entry.clone());
         let payload = PushPayload::from_entry(entry, store);
         let mut inner = self.inner.lock();
         let mut n = 0usize;
-        if let Some(list) = inner.subs.get_mut(&entry.to_alias) {
+        if let Some(list) = inner.subs.get_mut(&entry.to_npub) {
             // Drop closed senders.
             list.retain(|h| {
                 let ok = h.try_send(msg.clone()).is_ok();
@@ -126,7 +127,7 @@ impl SubscriberHub {
                 ok
             });
         }
-        if let Some(list) = inner.payload_subs.get_mut(&entry.to_alias) {
+        if let Some(list) = inner.payload_subs.get_mut(&entry.to_npub) {
             list.retain(|h| {
                 let ok = h.try_send(payload.clone()).is_ok();
                 if ok { n += 1; }
@@ -136,7 +137,7 @@ impl SubscriberHub {
         n
     }
 
-    /// Number of unique subscribers across all aliases.
+    /// Number of unique subscribers across all npubs.
     pub fn count(&self) -> usize {
         let inner = self.inner.lock();
         let mut n = 0;
@@ -161,7 +162,7 @@ mod tests {
         let hub = SubscriberHub::new();
         let rx = hub.subscribe("oleg-hp", "cli-1", 4);
         let entry = PendingEntry {
-            to_alias: "oleg-hp".into(),
+            to_npub: "oleg-hp".into(),
             from_npub: "npub1bob".into(),
             ts: 1,
             envelope_bytes: vec![0xaa; 8],
@@ -178,11 +179,11 @@ mod tests {
 
     #[test]
     fn ws_message_roundtrip() {
-        let msg = WsMessage::Subscribe { alias: "x".into() };
+        let msg = WsMessage::Subscribe { npub: "x".into() };
         let bytes = msg.encode().unwrap();
         let back = WsMessage::decode(&bytes).unwrap();
         match back {
-            WsMessage::Subscribe { alias } => assert_eq!(alias, "x"),
+            WsMessage::Subscribe { npub } => assert_eq!(npub, "x"),
             _ => panic!("wrong variant"),
         }
     }

@@ -1,7 +1,7 @@
 //! Per-contact pending envelope store.
 //!
 //! When an iroh-direct envelope arrives, the relay appends it to
-//! `<home>/pending/<recipient_alias>.log` (binary, postcard-encoded entry).
+//! `<home>/pending/<recipient_npub>.log` (binary, postcard-encoded entry).
 //! Subscribed WebSocket clients also get a copy via broadcast, but the
 //! persistent log is the source of truth (so re-connecting clients can
 //! fetch missed messages).
@@ -9,14 +9,14 @@
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PendingEntry {
-    /// Recipient alias (e.g. "oleg-hp").
-    pub to_alias: String,
+    /// Recipient npub (v149: full npub, no aliases).
+    pub to_npub: String,
     /// Sender npub (string form, for logging).
     pub from_npub: String,
     /// Timestamp (Unix seconds, sender's clock).
@@ -35,7 +35,7 @@ pub struct PendingStore {
 struct Inner {
     /// `<home>/pending`
     pending_dir: PathBuf,
-    /// In-memory index: alias → bytes written (to dedupe per-write).
+    /// In-memory index: npub → bytes written (to dedupe per-write).
     /// Persistence is the file; this is just a write-offset cache.
     offsets: HashMap<String, u64>,
 }
@@ -55,8 +55,8 @@ impl PendingStore {
             for e in rd.flatten() {
                 if let Ok(meta) = e.metadata() {
                     if meta.is_file() {
-                        let alias = e.file_name().to_string_lossy().trim_end_matches(".log").to_string();
-                        offsets.insert(alias, meta.len());
+                        let npub = e.file_name().to_string_lossy().trim_end_matches(".log").to_string();
+                        offsets.insert(npub, meta.len());
                     }
                 }
             }
@@ -66,10 +66,10 @@ impl PendingStore {
         })
     }
 
-    /// Append a pending entry for `to_alias`.
+    /// Append a pending entry for `to_npub`.
     pub fn append(&self, entry: &PendingEntry) -> std::io::Result<()> {
         let mut inner = self.inner.lock();
-        let path = inner.pending_dir.join(format!("{}.log", entry.to_alias));
+        let path = inner.pending_dir.join(format!("{}.log", entry.to_npub));
         let mut f = OpenOptions::new()
             .create(true)
             .append(true)
@@ -80,14 +80,14 @@ impl PendingStore {
         f.write_all(&len.to_be_bytes())?;
         f.write_all(&bytes)?;
         f.sync_all()?;
-        *inner.offsets.entry(entry.to_alias.clone()).or_insert(0) += 4 + bytes.len() as u64;
+        *inner.offsets.entry(entry.to_npub.clone()).or_insert(0) += 4 + bytes.len() as u64;
         Ok(())
     }
 
-    /// Read all entries for `alias` (for replay on reconnect).
-    pub fn read_all(&self, alias: &str) -> std::io::Result<Vec<PendingEntry>> {
+    /// Read all entries for `npub` (for replay on reconnect).
+    pub fn read_all(&self, npub: &str) -> std::io::Result<Vec<PendingEntry>> {
         let inner = self.inner.lock();
-        let path = inner.pending_dir.join(format!("{}.log", alias));
+        let path = inner.pending_dir.join(format!("{}.log", npub));
         if !path.exists() {
             return Ok(vec![]);
         }
@@ -111,9 +111,9 @@ impl PendingStore {
     }
 
     /// Read entries starting at byte offset `from_offset`.
-    pub fn read_from(&self, alias: &str, from_offset: u64) -> std::io::Result<Vec<PendingEntry>> {
+    pub fn read_from(&self, npub: &str, from_offset: u64) -> std::io::Result<Vec<PendingEntry>> {
         let inner = self.inner.lock();
-        let path = inner.pending_dir.join(format!("{}.log", alias));
+        let path = inner.pending_dir.join(format!("{}.log", npub));
         if !path.exists() {
             return Ok(vec![]);
         }
@@ -136,7 +136,97 @@ impl PendingStore {
         }
         Ok(out)
     }
+
+    /// v149 retention: keep only entries newer than `max_age_secs` for every
+    /// pending log; rewrite each file with the survivors. Removes stale
+    /// undelivered backlog for npubs that never return (the old bug: 27 MB of
+    /// garbage .log files accumulating forever). Called from TTL cron.
+    pub fn retain_recent(&self, max_age_secs: u64) -> std::io::Result<(usize, usize)> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let mut dropped = 0usize;
+        let mut kept = 0usize;
+        // Collect file list first (no lock held during I/O parse).
+        let files: Vec<std::path::PathBuf> = {
+            let inner = self.inner.lock();
+            let dir = inner.pending_dir.clone();
+            std::fs::read_dir(&dir)?
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().map(|x| x == "log").unwrap_or(false))
+                .collect()
+        };
+        for path in files {
+            // Parse all entries.
+            let mut survivors: Vec<PendingEntry> = Vec::new();
+            {
+                let mut f = match File::open(&path) {
+                    Ok(f) => f,
+                    Err(_) => continue,
+                };
+                loop {
+                    let mut len_buf = [0u8; 4];
+                    match f.read_exact(&mut len_buf) {
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                    let len = u32::from_be_bytes(len_buf) as usize;
+                    if len > 64 * 1024 * 1024 { break; } // corrupt guard
+                    let mut buf = vec![0u8; len];
+                    if f.read_exact(&mut buf).is_err() { break; }
+                    match postcard::from_bytes::<PendingEntry>(&buf) {
+                        Ok(entry) => {
+                            if now.saturating_sub(entry.ts) <= max_age_secs {
+                                survivors.push(entry);
+                            } else {
+                                dropped += 1;
+                            }
+                        }
+                        Err(_) => { dropped += 1; } // corrupt entry dropped
+                    }
+                }
+            }
+            // Rewrite file with survivors (or delete if empty).
+            {
+                let mut inner = self.inner.lock();
+                if survivors.is_empty() {
+                    let _ = std::fs::remove_file(&path);
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        inner.offsets.remove(stem);
+                    }
+                } else {
+                    // Encode all first so offsets reflect exact bytes written.
+                    let mut encoded: Vec<Vec<u8>> = Vec::with_capacity(survivors.len());
+                    let mut total: u64 = 0;
+                    for e in &survivors {
+                        let bytes = postcard::to_allocvec(e)
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                        total += 4 + bytes.len() as u64;
+                        encoded.push(bytes);
+                    }
+                    let tmp = path.with_extension("log.tmp");
+                    {
+                        let mut out = BufWriter::new(File::create(&tmp)?);
+                        for bytes in &encoded {
+                            out.write_all(&(bytes.len() as u32).to_be_bytes())?;
+                            out.write_all(bytes)?;
+                        }
+                        out.flush()?;
+                    }
+                    std::fs::rename(&tmp, &path)?;
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        inner.offsets.insert(stem.to_string(), total);
+                    }
+                }
+                kept += survivors.len();
+            }
+        }
+        Ok((dropped, kept))
+    }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -155,7 +245,7 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
         let store = PendingStore::new(&home).unwrap();
         let entry = PendingEntry {
-            to_alias: "oleg-hp".into(),
+            to_npub: "oleg-hp".into(),
             from_npub: "npub1alice".into(),
             ts: 1700000000,
             envelope_bytes: vec![1, 2, 3, 4],
@@ -175,7 +265,7 @@ mod tests {
         let store = PendingStore::new(&home).unwrap();
         for i in 0..3 {
             store.append(&PendingEntry {
-                to_alias: "bob".into(),
+                to_npub: "bob".into(),
                 from_npub: "npub1alice".into(),
                 ts: 1700000000 + i,
                 envelope_bytes: vec![i as u8],
@@ -191,5 +281,42 @@ mod tests {
         let after = store.read_from("bob", 1).unwrap_or_default();
         // offset=1 reads garbage len, returns err or empty
         assert!(after.is_empty() || after.len() < 3);
+    }
+
+    #[test]
+    fn retain_recent_drops_old() {
+        let home = tmp().join("home3");
+        std::fs::create_dir_all(&home).unwrap();
+        let store = PendingStore::new(&home).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        // Old + new entries for npub "bob".
+        for (ts, tag) in [(now - 100_000, "old"), (now, "new")] {
+            store.append(&PendingEntry {
+                to_npub: "npub1bob".into(),
+                from_npub: "npub1alice".into(),
+                ts,
+                envelope_bytes: tag.as_bytes().to_vec(),
+                envelope_hash_hex: format!("h-{tag}"),
+            }).unwrap();
+        }
+        // Orphan file for an npub that never returned: old entry only.
+        store.append(&PendingEntry {
+            to_npub: "npub1ghost".into(),
+            from_npub: "npub1alice".into(),
+            ts: now - 100_000,
+            envelope_bytes: b"ghost".to_vec(),
+            envelope_hash_hex: "h-ghost".into(),
+        }).unwrap();
+
+        let (dropped, kept) = store.retain_recent(86_400).unwrap();
+        assert_eq!(dropped, 2, "old + ghost dropped, got {dropped}");
+        assert_eq!(kept, 1);
+        assert!(!home.join("pending/npub1ghost.log").exists(), "ghost log removed");
+        let left = store.read_all("npub1bob").unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].envelope_hash_hex, "h-new");
     }
 }

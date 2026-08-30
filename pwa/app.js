@@ -799,7 +799,7 @@ async function _handleCreate() {
         myAlias = myNpub;
         localStorage.setItem(LS_NPUB, myNpub);
         localStorage.setItem(LS_KEY, signKeyHex);
-        localStorage.setItem(LS_NAME, myAlias);
+        localStorage.removeItem(LS_NAME); // v149: alias=name концепция удалена
         await invalidateCacheIfKeyChanged();
         enterMessenger();
     } catch (e) {
@@ -823,10 +823,10 @@ window._handleRestore = async function() {
         if (!res.ok) { $("identity-error").textContent = "restore error: " + res.error; return; }
         myNpub = res.data.npub;
         signKeyHex = hex;
-        myAlias = res.data.npub;
+        myAlias = myNpub; // v149: alias ≡ npub
         localStorage.setItem(LS_NPUB, myNpub);
         localStorage.setItem(LS_KEY, signKeyHex);
-        localStorage.setItem(LS_NAME, myAlias);
+        localStorage.removeItem(LS_NAME); // v149
         await invalidateCacheIfKeyChanged();
         enterMessenger();
     } catch (e) { $("identity-error").textContent = "Error: " + e.message; }
@@ -843,9 +843,10 @@ $("btn-restore")?.addEventListener("click", async () => {
         if (!res.ok) { $("identity-error").textContent = "restore error: " + res.error; return; }
         myNpub = res.data.npub;
         signKeyHex = hex;
-        myAlias = localStorage.getItem(LS_NAME) || myNpub;
+        myAlias = myNpub; // v149: legacy LS_NAME игнорируем — имена теперь локальные per-chat
         localStorage.setItem(LS_NPUB, myNpub);
         localStorage.setItem(LS_KEY, signKeyHex);
+        localStorage.removeItem(LS_NAME);
         enterMessenger();
     } catch (e) { $("identity-error").textContent = "Error: " + e.message; }
 });
@@ -868,23 +869,12 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw:push-only`;
-        banner.title = "Build murmur-v148. SW=push-only, no static control.";
+        banner.title = "Build murmur-v149. npub-only relay, minimal retention.";
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
     if (fullEl) fullEl.textContent = myNpub;
-    // CRITICAL: Register alias immediately so history queries find us on either side.
-    // Use the user-chosen alias if available (LS_NAME key holds the chosen
-    // display name), otherwise fall back to npub for first-run. We then
-    // upsert the canonical alias under both names so the relay can find us
-    // regardless of whether the sender typed our display name or our npub.
-    const preferredAlias = myAlias || myNpub;
-    fetch(RELAY + "/api/register_alias", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ alias: preferredAlias, npub: myNpub })
-    }).then(r => r.json().then(j => console.log("register_alias on enter:", j)))
-      .catch(e => console.warn("register_alias on enter failed:", e));
+    // v149: register_alias удалён — релей знает нас по npub в envelope'ах.
     const copyBtn = $("btn-copy-npub");
     if (copyBtn && !copyBtn.dataset.bound) {
         copyBtn.dataset.bound = "1";
@@ -986,20 +976,14 @@ async function updateNotifBtnState() {
         } catch (e) { /* ignore — SW ещё не готов, считаем как нет подписки */ }
     }
 
-    if (perm === "granted" && (myAlias || myNpub)) {
+    if (perm === "granted" && myNpub) {
         try {
-            // Try the user-chosen alias first (e.g. "Oleg"); fall back to npub
-            // if the user never set a display name.
-            const tried = [];
-            for (const candidate of [myAlias, myNpub].filter(Boolean)) {
-                const r = await fetch(RELAY + "/push/status?alias=" + encodeURIComponent(candidate), { cache: "no-store" });
-                const j = await r.json();
-                tried.push(candidate);
-                if (j && j.subscribed) {
-                    serverHasSub = true;
-                    serverCount = j.count;
-                    break;
-                }
+            // v149: npub-only — серверный статус проверяем по myNpub.
+            const r = await fetch(RELAY + "/push/status?npub=" + encodeURIComponent(myNpub), { cache: "no-store" });
+            const j = await r.json();
+            if (j && j.subscribed) {
+                serverHasSub = true;
+                serverCount = j.count;
             }
             if (serverCount > 1) {
                 serverEndNote = " · " + serverCount + " дубликатов на сервере";
@@ -1114,11 +1098,11 @@ if (notifBtn && !notifBtn.dataset.bound) {
                     }
                 } catch (e) { /* ignore */ }
                 // Also clear server-side records for this alias.
-                if (myAlias) {
+                if (myNpub) {
                     fetch(RELAY + "/push/unsubscribe", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ alias: myAlias }),
+                        body: JSON.stringify({ npub: myNpub, alias: myNpub }),
                     }).catch(() => {});
                 }
             } else {
@@ -1358,25 +1342,21 @@ async function setupPushSubscription() {
             console.log("[push] re-using existing browser subscription, endpoint=", sub.endpoint.slice(0, 60));
         }
         const subJson = sub.toJSON();
-        // Use the user-chosen alias (e.g. "Oleg", "Ирина") so the relay can
-        // match incoming envelopes whose `to_alias` is the human-readable name.
-        // Fall back to npub only if no alias has been chosen yet — this keeps
-        // pushes working through onboarding but breaks as soon as the user picks
-        // a real alias (the old npub subscription stops matching).
+        // v149: npub-only — подписка всегда регистрируется на myNpub.
+        // (Push-имена отправителей больше не резолвятся на ролее.)
         //
         // CRITICAL (Lesson #131.10): always re-register on the server, even
-        // when reusing the existing browser subscription. Otherwise the server
-        // keeps the old `alias = npub1...` and never matches new envelopes.
-        const subAlias = myAlias || myNpub;
+        // when reusing the existing browser subscription.
+        const subAlias = myNpub;
         const r = await fetch(RELAY + "/push/register_subscribe", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ alias: subAlias, subscription: subJson }),
+            body: JSON.stringify({ npub: subAlias, subscription: subJson }),
         });
         if (!r.ok) {
             console.warn("[push] register_subscribe HTTP", r.status, await r.text());
         } else {
-            console.log("[push] registered on server as alias=", subAlias);
+            console.log("[push] registered on server as npub=", subAlias.slice(0, 16) + "…");
         }
     } catch (e) {
         console.warn("[push] setup failed:", e && e.message);
@@ -2447,8 +2427,8 @@ async function sendMessage() {
             attachments_meta: metaSnapshot, // [{blob_id, sha256, wrapped_key, name, mime, size}]
             ts: Math.floor(Date.now() / 1000),
         };
-        const myName = (localStorage.getItem(LS_NAME) || "").trim();
-        if (myName && myName !== myNpub) msg.from_name = myName;
+        // v149: from_name больше не отправляем — имя отправителя живёт
+        // локально у получателя (LS_CONTACT_NAMES), на ролее минимум данных.
         const mod = await loadWasmModule();
         // Signature covers (from|to|ts|ct) via canonical envelope hash, same as
         // relay's `Envelope::verify`. sig input = SHA3(npub || payload).
@@ -2888,19 +2868,8 @@ function connectWS() {
         wsConnected = true;
         wsReconnectDelay = WS_RECONNECT_BASE;
         console.log("WS connected");
-        ws.send(JSON.stringify({ type: "subscribe", alias: myAlias, npub: myNpub }));
+        ws.send(JSON.stringify({ type: "subscribe", npub: myNpub })); // v149: npub-only
     };
-
-    // Register alias→npub mapping via HTTP (works even if WS tunnel is down).
-    // This is what allows /api/history and /api/inbox to find messages for us.
-    if (myNpub && myAlias) {
-        fetch(RELAY + "/api/register_alias", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ alias: myAlias, npub: myNpub })
-        }).then(r => r.json().then(j => console.log("register_alias:", j)))
-          .catch(e => console.warn("register_alias failed:", e));
-    }
 
     ws.onmessage = (evt) => {
         try {
@@ -3507,7 +3476,7 @@ async function tryAutoRestore() {
         if (res && res.ok && res.data && res.data.npub === savedNpub) {
             myNpub = res.data.npub;
             signKeyHex = res.data.signing_sk_hex;
-            myAlias = localStorage.getItem(LS_NAME) || ("murmur-" + (res.data.npub || "").slice(4, 10));
+            myAlias = myNpub; // v149: alias ≡ npub
             await invalidateCacheIfKeyChanged();
             enterMessenger();
         } else {

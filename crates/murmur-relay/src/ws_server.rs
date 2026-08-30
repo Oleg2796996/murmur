@@ -77,26 +77,28 @@ impl WsServer {
                             let ty = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
                             match ty {
                                 "subscribe" => {
-                                    let alias = match parsed.get("alias").and_then(|v| v.as_str()) {
-                                        Some(a) => a.to_string(),
+                                    // v149: npub-only. Prefer `npub` key; accept
+                                    // legacy `alias` key for one release (PWA
+                                    // sends alias = npub anyway). No DB write —
+                                    // aliases no longer registered.
+                                    let npub = parsed
+                                        .get("npub")
+                                        .and_then(|v| v.as_str())
+                                        .or_else(|| parsed.get("alias").and_then(|v| v.as_str()))
+                                        .map(|s| s.to_string());
+                                    let npub = match npub {
+                                        Some(n) => n,
                                         None => {
-                                            send_err(&mut ws_tx, "missing alias").await?;
+                                            send_err(&mut ws_tx, "missing npub").await?;
                                             continue;
                                         }
                                     };
-                                    // Register the alias in the message store.
-                                    let npub = parsed.get("npub").and_then(|v| v.as_str()).map(|s| s.to_string());
-                                    if let Some(ref n) = npub {
-                                        if let Err(e) = self.store_db.register_alias(&alias, n) {
-                                            warn!(err=%e, alias=%alias, "failed to register alias in store");
-                                        }
-                                    }
-                                    let backlog = self.pending.read_all(&alias).map(|v| v.len()).unwrap_or(0);
-                                    let rx = self.hub.subscribe_payload(&alias, &label, 16);
-                                    rx_list.push((alias.clone(), rx));
+                                    let backlog = self.pending.read_all(&npub).map(|v| v.len()).unwrap_or(0);
+                                    let rx = self.hub.subscribe_payload(&npub, &label, 16);
+                                    rx_list.push((npub.clone(), rx));
                                     let resp = serde_json::json!({
                                         "type": "subscribed",
-                                        "alias": alias,
+                                        "npub": npub,
                                         "backlog": backlog,
                                     });
                                     ws_tx.send(Message::Text(resp.to_string())).await?;
@@ -173,7 +175,7 @@ async fn poll_receivers_payload(
             return None;
         }
         let mut futs = Vec::with_capacity(rx_list.len());
-        for (_alias, rx) in rx_list.iter() {
+        for (_npub, rx) in rx_list.iter() {
             let rx = rx.clone();
             futs.push(Box::pin(async move { rx.recv().await.ok() }));
         }
@@ -230,21 +232,21 @@ mod tests {
         let (mut client_tx, mut client_rx) = tokio_tungstenite::connect_async(&url).await.unwrap().0.split();
 
         // Send a JSON subscribe over Text frame (browser-style).
-        client_tx.send(Message::Text(r#"{"type":"subscribe","alias":"oleg-hp"}"#.into())).await.unwrap();
+        client_tx.send(Message::Text(r#"{"type":"subscribe","npub":"oleg-hp"}"#.into())).await.unwrap();
 
         let ack = client_rx.next().await.unwrap().unwrap();
         match ack {
             Message::Text(txt) => {
                 let v: serde_json::Value = serde_json::from_str(&txt).unwrap();
                 assert_eq!(v["type"], "subscribed");
-                assert_eq!(v["alias"], "oleg-hp");
+                assert_eq!(v["npub"], "oleg-hp");
                 assert_eq!(v["backlog"], 0);
             }
             _ => panic!("not text"),
         }
 
         let entry = PendingEntry {
-            to_alias: "oleg-hp".into(),
+            to_npub: "oleg-hp".into(),
             from_npub: "npub1alice".into(),
             ts: 1,
             envelope_bytes: vec![1, 2, 3],

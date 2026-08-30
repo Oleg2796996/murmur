@@ -3,14 +3,14 @@
 //! ## Routing
 //!
 //! The `murmur::send-iroh` CLI prepends a length-prefixed UTF-8 **recipient
-//! alias** to the envelope payload before sending. The relay splits this
-//! prefix, uses the alias for routing (PendingStore, SubscriberHub), and
+//! npub** to the envelope payload before sending. The relay splits this
+//! prefix, uses the npub for routing (PendingStore, SubscriberHub), and
 //! stores the raw envelope bytes for the subscriber.
 //!
 //! Layout on the wire (over iroh ALPN):
 //! ``text
-//! 4 bytes BE: alias_len
-//! alias_len bytes UTF-8
+//! 4 bytes BE: npub_len
+//! npub_len bytes UTF-8 (recipient npub, v149)
 //! N bytes: postcard(Envelope)
 //! ``
 //!
@@ -47,7 +47,7 @@ pub async fn spawn(
         let push = push.clone();
         let store = store.clone();
 
-        // Parse frame: alias_len(4 BE) || alias || envelope
+        // Parse frame: npub_len(4 BE) || npub || envelope
         if bytes.len() < 4 {
             warn!("dropping: frame too short");
             return;
@@ -60,14 +60,14 @@ pub async fn spawn(
         let alias = match std::str::from_utf8(&bytes[4..4 + alias_len]) {
             Ok(s) => s.to_string(),
             Err(e) => {
-                warn!(err=%e, "dropping: alias not utf-8");
+                warn!(err=%e, "dropping: npub not utf-8");
                 return;
             }
         };
         let env_bytes = bytes[4 + alias_len..].to_vec();
 
         if let Err(e) = crate::envelope::accept_envelope(alias.clone(), env_bytes, &pending, &hub, Some(&push), Some(&store)) {
-            warn!(alias=%alias, err=%e, "dropping envelope");
+            warn!(to=%alias, err=%e, "dropping envelope");
         }
     };
 

@@ -21,7 +21,7 @@
 //!
 //! ## Privacy
 //!
-//! - VPS sees: envelope bytes (signed ciphertext), sender pubkey, recipient alias.
+//! - VPS sees: envelope bytes (signed ciphertext), sender pubkey, recipient npub.
 //! - VPS does NOT see: message plaintext (it's inside the envelope payload).
 //! - VPS does NOT need to be trusted for metadata privacy — see README.
 
