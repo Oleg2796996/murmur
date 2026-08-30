@@ -162,10 +162,17 @@ async function loadMessagesCacheForPeer(peer) {
             const meta = m.attachments_meta || [];
             const hasPlaintext = meta.length > 0 && meta.every(a => !!a.plaintext_b64);
             if (hasPlaintext) continue; // уже хорошие
-            // Пробуем достать из outbox по _sig или (from + ts)
-            const localKey = m._sig || ((m.from || "") + ":" + m.ts);
-            const fallbackKey = (m.from || "") + ":" + m.ts;
-            const local = outbox[localKey] || outbox[fallbackKey];
+            // Lesson #348: перебираем ВСЕ варианты ключа outbox (_sig может быть
+            // как from+ts, так и from+":"+ts в разных версиях; from может быть
+            // пуст в старых записях — тогда пробуем myNpub).
+            const keyCandidates = [
+                m._sig,
+                (m.from || "") + ":" + m.ts,
+                (m.from || "") + m.ts,
+                (myNpub || "") + m.ts,
+            ].filter(Boolean);
+            let local = null;
+            for (const kk of keyCandidates) { if (outbox[kk]) { local = outbox[kk]; break; } }
             if (local && local.attachments_meta && local.attachments_meta.length) {
                 m.attachments_meta = local.attachments_meta;
             }
@@ -234,7 +241,14 @@ async function saveToOutbox(msg, plaintext, attachmentsPlaintext) {
     } catch (e) { /* QuotaExceeded — fallback fail OK */ }
 }
 
-// Lesson #346 (Олег 2026-08-30 14:55 MSK): СОГЛАСОВАННОСТЬ.
+// Lesson #347 (Олег 2026-08-30 15:40 MSK): ⚠️ ЛАТЕНТНАЯ РАССИНХРОНИЗАЦИЯ.
+// saveToOutbox пишет в _outboxKVCache при appStore ИЛИ в LS. НО:
+// - до v143 outbox _hash update после send писал ТОЛЬКО в LS (не в IDB);
+// - loadOutboxForPeer читает _outboxKVCache (IDB), а если он пуст — LS;
+// - поллистовый pollHist matchивает outbox entry по o._hash === serverHash.
+// Держать оба представления в согласии — теперь миграция = склейка IDB+LS
+// (mergeUnion: IDB побеждает для plaintext, потому что LS может быть урезан
+// квотой). См. _mergeOutboxStores().
 // История: loadOutboxForPeer была async, её переписывали в v139/140, а
 // вызовы в loadHistory (1717) и pollHistoryForPeer (2963) остались СИНКОВЫМИ
 // и получили Promise. Promise.find === undefined → «outbox.find is not a
@@ -256,13 +270,24 @@ function loadOutboxForPeer(peerNpub) {
             outbox = _outboxKVCache || {};
         } catch (e) { outbox = {}; }
     }
-    if (Object.keys(outbox).length === 0) {
-        try {
-            outbox = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
-        } catch (e) {
-            return [];
+    // Lesson #347: merge LS поверх IDB — LS может содержать записи, которых
+    // нет в IDB (например, _hash updating писало только в LS до v143), и
+    // наоборот. Merge: IDB базовый, LS заполняет пробелы, НЕ затирая plaintext.
+    try {
+        const ls = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
+        for (const [k, v] of Object.entries(ls || {})) {
+            if (!outbox[k]) { outbox[k] = v; continue; }
+            // оба есть: склейка — _hash может быть только в LS-версии, plaintext
+            // обычно в IDB-версии. Берём поле _hash из любого где он есть.
+            const merged = { ...outbox[k] };
+            if (!merged._hash && v._hash) merged._hash = v._hash;
+            if (!merged.attachments_meta?.length && v.attachments_meta?.length) merged.attachments_meta = v.attachments_meta;
+            if (!merged.attachments?.length && v.attachments?.length) merged.attachments = v.attachments;
+            if (merged.body === undefined && v.body !== undefined) merged.body = v.body;
+            outbox[k] = merged;
         }
-    }
+    } catch (e) { /* LS unavailable/garbage — idb only */ }
+    if (Object.keys(outbox).length === 0) return [];
     const result = [];
     for (const [key, m] of Object.entries(outbox)) {
         if (m.from === peerNpub || m.to === peerNpub) {
@@ -843,7 +868,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw:push-only`;
-        banner.title = "Build murmur-v143. SW=push-only, no static control.";
+        banner.title = "Build murmur-v146. SW=push-only, no static control.";
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -2007,10 +2032,21 @@ function renderMessages() {
         let div;
         let _rerenderAttachments = false;
         if (renderedSigs.has(sig)) {
-            if (m.direction === "in" && m.attachments_meta && m.attachments_meta.length > 0) {
+            // Lesson #348 (Олег 2026-08-30 15:45 MSK): rerender-attachments
+            // ранее был ТОЛЬКО для direction "in". Исходящие, отрендеренные
+            // из cache ДО подклейки plaintext из outbox (loadMessagesCacheForPeer
+            // repair идёт после первого render) — навсегда оставались chip'ами:
+            // sig в Set → skip, а «дорисовать» проверялся только у входящих.
+            // Теперь: И 'out', и 'in' с attachments_meta — дорисовываем, если у
+            // bubble ещё нет НИ ОДНОГО img/figure в msg-attach-list.
+            const wantsAttachments = (m.direction === "in" || m.direction === "out") &&
+                m.attachments_meta && m.attachments_meta.length > 0;
+            if (wantsAttachments) {
                 const existingBubble = messagesArea.querySelector(`[data-sig="${CSS.escape(sig)}"]`);
-                if (existingBubble && !existingBubble.querySelector(".msg-attach-list > *")) {
-                    console.log("[murmur] rerendering attachments for sig", sig.slice(0, 12));
+                const attachList = existingBubble && existingBubble.querySelector(".msg-attach-list");
+                const hasRendered = attachList && (attachList.querySelector("img, video, audio, figure, .attach-error, .msg-attach-remote"));
+                if (existingBubble && !hasRendered) {
+                    console.log("[murmur] rerendering attachments for sig", sig.slice(0, 12), "dir=", m.direction);
                     // Reuse existing bubble — переиспользуем DOM, только дорисуем attachments.
                     div = existingBubble;
                     _rerenderAttachments = true;
@@ -2074,9 +2110,21 @@ function renderMessages() {
             //    Render a non-decrypting placeholder to avoid ECIES bad-tag error
             //    (Lesson #195).
             const hasPlaintext = m.attachments_meta.every(att => att.plaintext_b64);
-            if (hasPlaintext) {
+            // Lesson #348: рендерим img для тех att, где plaintext ЕСТЬ, даже если
+            // не у всех (PARTIAL). Chip'и (remote) — только для att без plaintext.
+            // Раньше: every() → один att без plaintext топил ВСЕ фото в chip'и,
+            // даже если у остальных plaintext был на месте.
+            const anyPlaintext = m.attachments_meta.some(att => att.plaintext_b64);
+            if (hasPlaintext || anyPlaintext) {
                 for (const att of m.attachments_meta) {
                     try {
+                        if (!att.plaintext_b64) {
+                            const chip = document.createElement("div");
+                            chip.className = "msg-attach-remote";
+                            chip.textContent = "\ud83d\udcf7 " + (att.name || "file") + " (" + formatSize(att.size || 0) + ")";
+                            placeholderEl.appendChild(chip);
+                            continue;
+                        }
                         const mime = att.mime || "application/octet-stream";
                         const blob = b64ToBlob(att.plaintext_b64, mime);
                         const url = URL.createObjectURL(blob);
@@ -2433,12 +2481,29 @@ async function sendMessage() {
                     // Lesson #197 (Олег 2026-08-26): обновить outbox с реальным _hash,
                     // иначе после reload loadHistory не найдёт локальный plaintext
                     // и попытается расшифровать зашифрованное-для-Bob (failed).
-                    const outbox = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
+                    // Lesson #347 (Олег 2026-08-30 15:40 MSK): обновляем ОБА хранилища
+                    // (IDB appStore + LS fallback). Раньше писали только LS, а
+                    // loadOutboxForPeer после reload читал только IDB → _hash терялся,
+                    // pollHist не matched outbox entry → outgoing photo превращался
+                    // в chip без plaintext (ф的单位 img пропадал после первого poll). Согласованность.
                     const outboxKey = renderedMsg._sig;
-                    if (outbox[outboxKey]) {
-                        outbox[outboxKey]._hash = respJson.hash;
-                        localStorage.setItem(LS_OUTBOX, JSON.stringify(outbox));
+                    if (window.appStore) {
+                        try {
+                            const ob = (await window.appStore.kv.get(LS_OUTBOX)) || {};
+                            if (ob[outboxKey]) {
+                                ob[outboxKey]._hash = respJson.hash;
+                                await window.appStore.kv.set(LS_OUTBOX, ob);
+                                if (_outboxKVCache) _outboxKVCache = ob;
+                            }
+                        } catch (e) { console.warn("[send] outbox _hash IDB update failed:", e); }
                     }
+                    try {
+                        const outbox = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
+                        if (outbox[outboxKey]) {
+                            outbox[outboxKey]._hash = respJson.hash;
+                            localStorage.setItem(LS_OUTBOX, JSON.stringify(outbox));
+                        }
+                    } catch (e) { /* LS quota — non-fatal */ }
                 }
             } catch (e) { /* /envelope может не вернуть JSON — fallback на ts */ }
             const last = messages[activePeer][messages[activePeer].length - 1];
