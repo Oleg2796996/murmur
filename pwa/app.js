@@ -313,6 +313,15 @@ let activePeer = null;
 let oldestTsForPeer = {};
 // Expose for E2E test diagnostics (Олег 2026-08-26)
 window.__murmurState = () => ({ messages, activePeer, contacts });
+
+// E2E test hooks (Playwright WebKit, 2026-08-30). Только explicit evaluate.
+window.__murmurTestHooks = {
+    npub: () => myNpub,
+    messages: () => messages[activePeer] || [],
+    allMessages: () => messages,
+    activePeer: () => activePeer,
+    contacts: () => Object.keys(contacts || {}),
+};
 let pollTimer = null;
 // Attachments (Олег 2026-08-24 11:00 MSK) — файлы прикрепленные к текущему сообщению.
 let pendingAttachments = [];        // [{name, mime, size, data_b64}] — уйдут в зашифрованный body
@@ -834,7 +843,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw:push-only`;
-        banner.title = "Build murmur-v142. SW=push-only, no static control.";
+        banner.title = "Build murmur-v143. SW=push-only, no static control.";
     }
     myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
