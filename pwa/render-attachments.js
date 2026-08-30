@@ -46,8 +46,22 @@ async function fetchBlob(blobId, abortSignal) {
 // 2. ECIES unwrap AES key using recipient's own privkey via WASM.
 // window.decryptEnvelope (from app.js) handles the WASM call and unwraps the
 // {ok, data} envelope, returning base64 plaintext string.
-async function eciesUnwrapKey(wrappedKeyB64) {
-    const unwrapped = await window.decryptEnvelope(wrappedKeyB64);
+async function eciesUnwrapKey(wrappedKeyB64, opts) {
+    // Lesson #349: wrapped_key может быть (а) чистый base64 sealed (legacy v146 и
+    // ранее), (б) base64(JSON {r:<sealed для получателя>, s:<sealed для себя>}).
+    // opts.self=true (рендер ИСХОДЯЩИХ) → берём s; иначе (входящие) → r.
+    // JSON-парс всегда: incoming тоже получает двойной формат от v147+ клиентов.
+    let target = wrappedKeyB64;
+    try {
+        const bin = atob(wrappedKeyB64);
+        const json = new TextDecoder().decode(new Uint8Array(bin.split("").map(c => c.charCodeAt(0))));
+        if (json.charAt(0) === "{") {
+            const parsed = JSON.parse(json);
+            const pick = (opts && opts.self) ? (parsed.s || parsed.r) : (parsed.r || parsed.s);
+            if (pick) target = pick;
+        }
+    } catch (_e) { /* legacy чистый sealed — используем как есть */ }
+    const unwrapped = await window.decryptEnvelope(target);
     if (typeof unwrapped !== "string" || !unwrapped.length) {
         throw new Error("ECIES unwrap failed: empty result");
     }
@@ -156,7 +170,7 @@ async function renderAttachment(att, containerEl, abortSignal) {
         const ct = await withTimeout(fetchBlob(att.blob_id, abortSignal), 45000, "fetchBlob");
         if (abortSignal && abortSignal.aborted) { clearTimeout(safetyNetId); placeholder.remove(); return null; }
         // b. Unwrap AES key (ECIES)
-        const key = await withTimeout(eciesUnwrapKey(att.wrapped_key), 15000, "eciesUnwrap");
+        const key = await withTimeout(eciesUnwrapKey(att.wrapped_key, { self: !!(att && att._selfKey) }), 15000, "eciesUnwrap");
         if (abortSignal && abortSignal.aborted) { clearTimeout(safetyNetId); placeholder.remove(); return null; }
         // c. Decrypt
         const iv = b64decode(att.iv);

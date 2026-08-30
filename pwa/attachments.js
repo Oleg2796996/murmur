@@ -137,12 +137,34 @@ async function aesEncrypt(plaintext) {
 // 3. ECIES wrap key via WASM (murmur_id_wasm).
 // Note: window.encryptForRecipient (from app.js) returns the wrapped-key
 // base64 string directly, NOT a {ok, data} envelope.
-async function eciesWrapKey(recipientNpub, key) {
-    const wrapped = await window.encryptForRecipient(recipientNpub, b64encode(key));
-    if (typeof wrapped !== "string" || !wrapped.length) {
-        throw new Error("ECIES wrap failed: empty result");
+async function eciesWrapKey(recipientNpub, key, selfNpub) {
+    // Lesson #349 (Олег 2026-08-30 16:20 MSK): AES-ключ файла заворачивается
+    // ДВАЖДЫ — для получателя (r) И для себя (s). Без self-wrap исходящее фото
+    // живёт ТОЛЬКО в локальном plaintext-кэше (outbox): второе устройство с тем
+    // же npub (Mac↔iPhone), WS-push своего сообщения и любой сбой кэша дают
+    // вечные чипы «📎 ...» вместо фото. С self-wrap исходящие рендерятся тем же
+    // remote-decrypt путём, что и входящие.
+    const wrapOne = async (npub, tag) => {
+        const sealed = await window.encryptForRecipient(npub, b64encode(key));
+        if (typeof sealed !== "string" || !sealed.length) {
+            throw new Error("ECIES wrap failed (" + tag + "): empty result");
+        }
+        return sealed;
+    };
+    const r = await wrapOne(recipientNpub, "recipient");
+    let result;
+    if (selfNpub && selfNpub === recipientNpub) {
+        // Отправка самому себе — один и тот же wrapped key.
+        result = { r, s: r };
+    } else if (selfNpub) {
+        const s = await wrapOne(selfNpub, "self");
+        result = { r, s };
+    } else {
+        // Fallback: нет myNpub (не должно случаться) — legacy single wrap.
+        result = { r };
     }
-    return wrapped;
+    // Формат: base64(JSON {r, s}) — render-attachments разворачивает по роли.
+    return b64encode(new TextEncoder().encode(JSON.stringify(result)));
 }
 
 // 4. POST /api/upload with binary body + query params.
@@ -184,7 +206,7 @@ function uploadCiphertext({ sha256Hex, mime, name, size, wrappedKey, ciphertext,
 // Returns: { blob_id, sha256, mime, size, name, wrapped_key }
 //
 // On failure, throws. Caller decides UX (toast / retry / abort).
-async function attachEncryptAndUpload({ file, peerNpub, onProgress }) {
+async function attachEncryptAndUpload({ file, peerNpub, selfNpub, onProgress }) {
     // a. Compress if large image (Lesson #327 — speed)
     const compressedFile = await compressImageIfLarge(file);
     // b. Read file as ArrayBuffer
@@ -194,7 +216,7 @@ async function attachEncryptAndUpload({ file, peerNpub, onProgress }) {
     // c. AES-256-GCM encrypt
     const { ciphertext, key, iv } = await aesEncrypt(ab);
     // d. ECIES wrap key (recipient-bound)
-    const wrappedKey = await eciesWrapKey(peerNpub, key);
+    const wrappedKey = await eciesWrapKey(peerNpub, key, selfNpub);
     // e. Upload ciphertext + wrapped_key + meta
     // Note: server checks SHA-256 against uploaded body, so pass ciphertext's SHA.
     const ciphertextSha = await sha256Hex(ciphertext);
