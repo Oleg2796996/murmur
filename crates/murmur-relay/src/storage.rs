@@ -81,7 +81,7 @@ impl MessageStore {
                 size         INTEGER NOT NULL CHECK (size > 0 AND size <= 52428800),
                 storage_path TEXT NOT NULL,
                 created_at   INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS INTEGER)),
-                ref_count    INTEGER NOT NULL DEFAULT 1
+                ref_count    INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_blobs_sha256 ON blobs(sha256);
             CREATE INDEX IF NOT EXISTS idx_blobs_created_at ON blobs(created_at);
@@ -815,7 +815,14 @@ mod tests {
             meta.as_array().unwrap()).unwrap();
         db.upsert_envelope_with_attachments("e2", "npub_a", "npub_c", b"x", b"", 1001, 2001,
             meta2.as_array().unwrap()).unwrap();
-        // b1: ref_count=2, b2: ref_count=1.
+        // b1: ref_count=2, b2: ref_count=1 (v149 Lesson #352: 0-start + increment
+        // per ref — счётчик всегда равен числу живых attachment_refs).
+        let (c1, c2): (i64, i64) = db.with_conn(|c| {
+            let a: i64 = c.query_row("SELECT ref_count FROM blobs WHERE id='b1'", [], |r| r.get(0)).unwrap();
+            let b: i64 = c.query_row("SELECT ref_count FROM blobs WHERE id='b2'", [], |r| r.get(0)).unwrap();
+            Ok((a, b))
+        }).unwrap();
+        assert_eq!((c1, c2), (2, 1), "ref_count must equal live ref rows");
         db.delete_envelope_by_hash("e1").unwrap();
         let b1: i64 = db.with_conn(|c| c.query_row("SELECT ref_count FROM blobs WHERE id='b1'", [], |r| r.get(0))).unwrap();
         let b2: Option<i64> = db.with_conn(|c| c.query_row("SELECT ref_count FROM blobs WHERE id='b2'", [], |r| r.get(0)).optional()).map(|o| o.flatten()).unwrap_or(None);

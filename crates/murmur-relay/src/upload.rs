@@ -219,7 +219,12 @@ impl MessageStore {
         })
     }
 
-    /// Insert new blob.
+    /// Insert new blob. v149: ref_count starts at 0 — it is incremented
+    /// once per actual reference in `upsert_envelope_with_attachments`, so
+    /// ref_count always equals the number of live attachment_refs rows.
+    /// (DEFAULT 1 + link increment double-counted; harmless for the
+    /// rows-based cascade, but lied in metadata and left zombie blobs for
+    /// the orphan sweep to collect — Lesson #352.)
     pub fn insert_blob(
         &self,
         id: &str,
@@ -230,7 +235,7 @@ impl MessageStore {
     ) -> rusqlite::Result<()> {
         self.with_conn(|c| {
             c.execute(
-                "INSERT INTO blobs (id, sha256, mime, size, storage_path) VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO blobs (id, sha256, mime, size, storage_path, ref_count) VALUES (?1, ?2, ?3, ?4, ?5, 0)",
                 params![id, sha256, mime, size as i64, storage_path],
             )?;
             Ok(())
