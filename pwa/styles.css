@@ -301,13 +301,11 @@ button.small { padding: 8px 12px; font-size: 13px; }
 }
 .copy-btn:hover { color: var(--accent); border-color: var(--accent); }
 
-.chat-search-wrap,
-.new-chat-wrap {
+.chat-search-wrap {
     padding: 8px 12px;
     border-bottom: 1px solid var(--border);
 }
-.chat-search-wrap input,
-.new-chat-wrap input {
+.chat-search-wrap input {
     width: 100%;
     background: var(--bg);
     color: var(--text);
@@ -317,16 +315,9 @@ button.small { padding: 8px 12px; font-size: 13px; }
     font-size: 13px;
     font-family: inherit;
 }
-.chat-search-wrap input:focus,
-.new-chat-wrap input:focus { outline: none; border-color: var(--accent); }
+.chat-search-wrap input:focus { outline: none; border-color: var(--accent); }
 
-.new-chat-wrap {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-}
-.new-chat-wrap input { flex: 1; }
-.new-chat-wrap .primary.small { width: 36px; flex-shrink: 0; }
+/* (.new-chat-wrap стили удалены 2026-08-31 вместе с полем) */
 
 .chat-list {
     flex: 1;
