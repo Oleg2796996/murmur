@@ -3451,6 +3451,24 @@ async function pollHistoryForPeer(peer) {
                                     // из расшифровки (иначе чипы навсегда f-…bin).
                                     if (r.attachmentsMeta && r.attachmentsMeta.length) {
                                         m.attachments_meta = r.attachmentsMeta;
+                                        // Privacy v156 (Олег 16:41 «PDF приходят как *.bin»):
+                                        // чип мог отрисоваться ДО расшифровки тела (гонка:
+                                        // рендер чипа ∥ decrypt тела) и остался с нейтральным
+                                        // f-…bin. Сбрасываем DOM attach-списка — следующий
+                                        // renderMessages() ниже дорисует чип по пути
+                                        // Lesson #320/#348 уже с настоящим именем.
+                                        if (activePeer === peer) {
+                                            try {
+                                                const escFn2 = window.CSS && CSS.escape ? CSS.escape : (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+                                                const sig2 = m._sig || ((m.from_npub || m.from) + m.ts);
+                                                const bubbleEl2 = document.querySelector(`.bubble[data-sig="${escFn2(sig2)}"]`);
+                                                const staleList = bubbleEl2 && bubbleEl2.querySelector(".msg-attach-list");
+                                                // remove() а не innerHTML="": in-flight таск Lesson #229
+                                                // дописал бы чип со СТАРЫМ именем в очищенный список
+                                                // (дубль). В отсоединённый узел — невидимо.
+                                                if (staleList) staleList.remove();
+                                            } catch (e) { /* ignore */ }
+                                        }
                                     }
                                 }
                                 changed = true;
