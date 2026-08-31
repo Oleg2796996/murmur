@@ -20,7 +20,7 @@
         div.textContent += "\n" + text;
     };
     window.addEventListener("error", (e) => showErr(e.message || String(e.error), e.filename, e.lineno, e.colno));
-    window.addEventListener("unhandledrejection", (e) => showErr("Promise rejected: " + (e.reason && (e.reason.stack || e.reason.message || e.reason) || "?")));
+    window.addEventListener("unhandledrejection", (e) => showErr("Ошибка промиса: " + (e.reason && (e.reason.stack || e.reason.message || e.reason) || "?"))); // v157b
 
 // Lesson #340 (Олег 2026-08-28 16:08 MSK): при deploy SW меняется — браузер
 // активирует новый SW, но existing клиенты продолжают использовать
@@ -689,7 +689,7 @@ function formatDate(ts) {
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
     if (d.toDateString() === today.toDateString()) return formatTime(ts);
-    if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+    if (d.toDateString() === yesterday.toDateString()) return "Вчера"; // v157b
     return d.toLocaleDateString([], { day: "numeric", month: "short" });
 }
 
@@ -815,7 +815,7 @@ async function _handleCreate() {
         // WASM returns JSON-encoded string (avoids externref shim pitfalls).
         if (!res.ok) { 
             const errEl = $("identity-error");
-            if (errEl) { errEl.textContent = "identity_new error: " + res.error; errEl.hidden = false; }
+            if (errEl) { errEl.textContent = "Ошибка создания аккаунта: " + res.error; errEl.hidden = false; } // v157b
             return; 
         }
         myNpub = res.data.npub;
@@ -830,7 +830,7 @@ async function _handleCreate() {
         console.error("[murmur] _handleCreate error:", e);
         const errEl = $("identity-error");
         if (errEl) {
-            errEl.textContent = "Error: " + (e.message || String(e));
+            errEl.textContent = "Ошибка: " + (e.message || String(e)); // v157b
             errEl.hidden = false;
         }
     } finally {
@@ -843,12 +843,12 @@ window.__murmurCreate = _handleCreate;
 window._handleCreate = _handleCreate;
 window._handleRestore = async function() {
     const hex = $("restore-hex").value.trim();
-    if (!hex || hex.length < 60) { $("identity-error").textContent = "Enter 64-char hex key"; return; }
+    if (!hex || hex.length < 60) { $("identity-error").textContent = "Введите ключ: 64 символа"; return; } // v157b
     try {
         await ensureWasm();
         const mod = await loadWasmModule();
         const res = unwrap(mod.identity_restore(hex));
-        if (!res.ok) { $("identity-error").textContent = "restore error: " + res.error; return; }
+        if (!res.ok) { $("identity-error").textContent = "Ошибка восстановления: " + res.error; return; } // v157b
         myNpub = res.data.npub;
         signKeyHex = hex;
         myAlias = res.data.npub;
@@ -863,12 +863,12 @@ $("btn-create")?.addEventListener("click", _handleCreate);
 
 $("btn-restore")?.addEventListener("click", async () => {
     const hex = $("restore-hex").value.trim();
-    if (!hex || hex.length < 60) { $("identity-error").textContent = "Enter 64-char hex key"; return; }
+    if (!hex || hex.length < 60) { $("identity-error").textContent = "Введите ключ: 64 символа"; return; } // v157b
     try {
         await ensureWasm();
         const mod = await loadWasmModule();
         const res = unwrap(mod.identity_restore(hex));
-        if (!res.ok) { $("identity-error").textContent = "restore error: " + res.error; return; }
+        if (!res.ok) { $("identity-error").textContent = "Ошибка восстановления: " + res.error; return; } // v157b
         myNpub = res.data.npub;
         signKeyHex = hex;
         myAlias = localStorage.getItem(LS_NAME) || myNpub;
@@ -896,7 +896,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw:push-only`;
-        banner.title = "Build murmur-v153. SW=push-only, no static control.";
+        banner.title = `Build murmur-v${window.__APP_VERSION__ || "?"}. SW=push-only, no static control.`; // v157b
     }
     if (myNpubEl) { /* v157: элемент удалён из HTML, npub не показываем */ }
     const fullEl = $("my-npub-full");
@@ -1537,12 +1537,11 @@ function renderChatList() {
         empty.className = "chat-empty";
         empty.innerHTML =
             "<div class='chat-empty-title'>" +
-                (filter ? "No chats match «" + escapeHtml(filter) + "»" : "No chats yet") +
+                (filter ? "Ничего не найдено по запросу «" + escapeHtml(filter) + "»" : "Пока нет чатов") +
             "</div>" +
             "<div class='chat-empty-hint'>" +
-                "Нажмите <b>+</b>, чтобы начать новый чат.<br>" +
-                "Поделитесь ссылкой-приглашением: кнопка «Пригласить друга»." +
-            "</div>";
+                "Нажмите «Пригласить друга», чтобы отправить ссылку-приглашение." +
+            "</div>"; // v157b: «+» убран (кнопки нет с v153), только «Пригласить друга»
         chatList.appendChild(empty);
         return;
     }
@@ -1552,7 +1551,7 @@ function renderChatList() {
         div.className = "chat-item" + (activePeer === c.peer ? " active" : "");
         const preview = c.lastMessagePreview
             ? (c.lastMessagePreview.length > 60 ? c.lastMessagePreview.slice(0, 60) + "…" : c.lastMessagePreview)
-            : "No messages yet";
+            : "Нет сообщений"; // v157b: без английского
         const name = nameMap[c.peer];
         // Privacy v157: npub не показываем в списке чатов. Без имени — «Без имени».
         const displayName = name || "Без имени";
@@ -1806,7 +1805,7 @@ async function loadHistory(peer, beforeTs) {
     const area = messagesArea;
     const loadingEl = document.createElement("div");
     loadingEl.className = "loading-spinner";
-    loadingEl.textContent = "Loading...";
+    loadingEl.textContent = "Загрузка…"; // v157b
     // Lesson #158: чистим ВСЕ предыдущие spinners, чтобы они не копились
     // при повторных openChat.
     area.querySelectorAll(".loading-spinner").forEach(el => el.remove());
