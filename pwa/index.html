@@ -22,19 +22,19 @@
      script. iOS Safari PWA cached HTML может не иметь inline-script (HTML cache
      pre-bump). Meta tag читается через document.querySelector + .content
      (работает даже если inline script не выполнился). -->
-    <meta name="app-version" content="v150">
+    <meta name="app-version" content="v152">
     <!-- Lesson #216: cache busting via ?v= query string. iOS Safari PWA
      caches app.js via HTTP cache independently of SW. Query string forces
      re-fetch on each version bump. SW CACHE_VERSION also bumps for SW
      activation, but the app.js itself needs explicit URL change. -->
-    <link rel="stylesheet" href="styles.css?v=150">
+    <link rel="stylesheet" href="styles.css?v=152">
 </head>
 <body>
     <!-- ================= IDENTITY SCREEN (create/restore) ================= -->
     <div id="identity-screen" class="screen">
         <!-- DEBUG indicator: shows JS load status. Visible only if JS fails to load. -->
         <noscript>
-            <div style="position:fixed;top:0;left:0;right:0;background:#ff3355;color:#fff;padding:12px;text-align:center;z-index:99999;">
+            <div style="position:fixed;top:0;left:0;right:0;background:#17212b;color:#888;padding:12px;text-align:center;z-index:99999;border-bottom:1px solid #333;font-family:sans-serif;font-size:13px;">
                 murmur требует JavaScript. Включи JS в настройках Safari.
             </div>
         </noscript>
@@ -48,14 +48,7 @@
                 <h2>Новый аккаунт</h2>
                 <button id="btn-create" class="primary">Создать</button>
             </div>
-
-            <div class="identity-divider"><span>или</span></div>
-
-            <div class="identity-section">
-                <h2>Восстановить</h2>
-                <input id="restore-hex" type="text" placeholder="secret key (hex, 64 символа)" autocomplete="off" spellcheck="false">
-                <button id="btn-restore" class="secondary">Восстановить</button>
-            </div>
+            <!-- Restore section removed for cleaner onboarding -->
         </div>
     </div>
 
@@ -66,33 +59,22 @@
         <!-- SIDEBAR: chat list -->
         <aside id="sidebar" class="sidebar">
             <header class="sidebar-header">
-                <button id="btn-logout" class="logout-btn" title="Выйти">Выйти</button>
-                <!-- Lesson #154: колокольчик возвращён. На iOS Notification.requestPermission()
-                     ТРЕБУЕТ user gesture (был причиной, почему мы его убрали).
-                     Один клик = gesture → permission → subscribe → UI on.
-                     Если браузер уже granted + есть подписка, клик отписывает. -->
                 <button id="btn-notifications" class="notif-btn" title="Включить уведомления">🔔</button>
-                <!-- Lesson #211+215: cache stats — скрыт по умолчанию, виден только
-                 если IndexedDB уже имеет > 0 записей (через app.js JS) -->
                 <button id="btn-cache-stats" class="notif-btn" title="Статистика кэша вложений" style="display:none;">💾</button>
                 <button id="btn-diag" class="notif-btn" title="Diagnostic dump">📊</button>
-                <!-- v150: приглашение — ссылка #invite=<npub> → TG/WA/копия -->
-                <button id="btn-invite" class="invite-btn" title="Пригласить — отправить ссылку в Telegram/WhatsApp">✉</button>
-                <div class="me">
-                    <div class="me-npub">
-                        <code id="my-npub" title="клик — копировать полный npub">…</code>
-                        <button id="btn-copy-npub" class="copy-btn" title="копировать npub">copy</button>
-                        <span id="my-npub-full" class="npub-full" hidden></span>
-                    </div>
-                </div>
             </header>
+
+            <div class="sidebar-footer">
+                <button id="btn-invite" class="invite-btn-green">Пригласить друга ✉</button>
+                <button id="btn-logout" class="logout-btn-danger" title="Удалить все данные">Удалить все данные</button>
+            </div>
 
             <div class="chat-search-wrap">
                 <input id="chat-search" type="search" placeholder="поиск чатов…" autocomplete="off">
             </div>
 
             <div class="new-chat-wrap">
-                <input id="new-chat-input" type="text" placeholder="новый чат: вставь npub…" autocomplete="off" spellcheck="false">
+                <input id="new-chat-input" type="text" placeholder="новый чат: alias или npub…" autocomplete="off" spellcheck="false">
                 <button id="btn-new-chat" class="primary small" title="создать чат">+</button>
             </div>
 
@@ -133,21 +115,6 @@
                 </div>
             </footer>
         </main>
-    </div>
-
-    <!-- v150: модалка приглашения (deep-link #invite=<npub>) -->
-    <div id="invite-modal" class="invite-modal" hidden>
-        <div class="invite-card">
-            <button id="invite-close" class="invite-close" title="закрыть">✕</button>
-            <div class="invite-title">Пригласить в murmur</div>
-            <p class="invite-hint">Открой ссылку — мессенджер сам добавит тебя в мой чат. Отправь её в Telegram или WhatsApp:</p>
-            <div class="invite-link-row"><code id="invite-link"></code></div>
-            <div class="invite-actions">
-                <button id="invite-tg" class="invite-tg">Telegram</button>
-                <button id="invite-wa" class="invite-wa">WhatsApp</button>
-                <button id="invite-copy" class="invite-copy">Копировать</button>
-            </div>
-        </div>
     </div>
 
     <script>
@@ -221,10 +188,10 @@
     <!-- Lesson #216 (Олег 2026-08-26 15:18): ?v= cache busting — iOS Safari
      HTTP cache не обновляет app.js по CACHE_VERSION bump alone.
      Query string = guaranteed fresh load on each deploy. -->
-    <script src="blob-cache.js?v=150" defer></script>
-    <script src="app-store.js?v=150" defer></script>
-    <script src="render-attachments.js?v=150" defer></script>
-    <script src="app.js?v=150" defer></script>
+    <script src="blob-cache.js?v=152" defer></script>
+    <script src="app-store.js?v=152" defer></script>
+    <script src="render-attachments.js?v=152" defer></script>
+    <script src="app.js?v=152" defer></script>
     <script>
       // Register service worker (push notifications only — Lesson #345).
       // Статикой SW не управляет (fetch-хендлера нет), так что

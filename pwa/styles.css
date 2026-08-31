@@ -182,31 +182,50 @@ button.small { padding: 8px 12px; font-size: 13px; }
     border-bottom: 1px solid var(--border);
 }
 
-.icon-btn {
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
-    font-size: 20px;
-    cursor: pointer;
-    padding: 6px 10px;
-    border-radius: 6px;
-    font-family: inherit;
+.sidebar-footer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 12px calc(var(--safe-bottom) + 16px) 12px;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
 }
-.icon-btn:hover { color: var(--text); background: var(--border); }
 
-.logout-btn {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-size: 13px;
+.invite-btn-green {
+    width: 100%;
+    max-width: 240px;
+    padding: 14px 16px;
+    background: #28a745;
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
     cursor: pointer;
-    padding: 8px 14px;
-    border-radius: 8px;
     font-family: inherit;
-    white-space: nowrap;
-    transition: background 0.15s ease;
+    transition: background 0.2s;
+    text-align: center;
 }
-.logout-btn:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
+.invite-btn-green:hover { background: #218838; }
+
+.logout-btn-danger {
+    width: 100%;
+    max-width: 240px;
+    padding: 10px 16px;
+    background: transparent;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s;
+    text-align: center;
+}
+.logout-btn-danger:hover { background: var(--danger); color: #fff; }
+
 .notif-btn {
     /* Lesson #242 (Олег 2026-08-26 22:15): скрыть кнопку уведомлений.
        Олег попросил убрать из UI. Логика (pushManager.subscribe) сохранена
@@ -823,66 +842,3 @@ button.small { padding: 8px 12px; font-size: 13px; }
     max-height: 96vh;
     border-radius: 6px;
 }
-
-/* ── v150: Invite (deep-link #invite=<npub>) ── */
-.invite-btn {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-size: 14px;
-    cursor: pointer;
-    padding: 6px 10px;
-    border-radius: 8px;
-    margin-left: 6px;
-    transition: background 0.15s ease;
-}
-.invite-btn:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
-
-.invite-modal {
-    position: fixed; inset: 0; z-index: 100001;
-    background: rgba(0,0,0,0.6);
-    display: flex; align-items: center; justify-content: center;
-    padding: 16px;
-}
-.invite-card {
-    position: relative;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 18px;
-    max-width: 420px; width: 100%;
-    box-shadow: 0 8px 40px rgba(0,0,0,0.5);
-}
-.invite-close {
-    position: absolute; top: 8px; right: 8px;
-    background: transparent; border: none; color: var(--text-muted);
-    font-size: 16px; cursor: pointer; padding: 4px 8px;
-}
-.invite-close:hover { color: var(--text); }
-.invite-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
-.invite-hint { font-size: 13px; color: var(--text-muted); margin: 0 0 12px 0; line-height: 1.45; }
-.invite-link-row {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 8px 10px;
-    margin-bottom: 12px;
-    overflow-x: auto;
-}
-.invite-link-row code {
-    font-size: 11px; color: var(--text);
-    white-space: nowrap; word-break: break-all;
-}
-.invite-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.invite-actions button {
-    flex: 1; min-width: 100px;
-    padding: 10px 12px; border-radius: 8px;
-    border: 1px solid var(--border);
-    cursor: pointer; font-size: 13px; font-family: inherit;
-    background: var(--surface-2); color: var(--text);
-    transition: filter 0.15s ease;
-}
-.invite-actions button:hover { filter: brightness(1.2); }
-.invite-tg { background: #2AABEE !important; border-color: #2AABEE !important; color: #fff !important; }
-.invite-wa { background: #25D366 !important; border-color: #25D366 !important; color: #fff !important; }
-.invite-copy { background: var(--accent) !important; border-color: var(--accent) !important; color: #fff !important; }
