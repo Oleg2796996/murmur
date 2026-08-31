@@ -22,12 +22,12 @@
      script. iOS Safari PWA cached HTML может не иметь inline-script (HTML cache
      pre-bump). Meta tag читается через document.querySelector + .content
      (работает даже если inline script не выполнился). -->
-    <meta name="app-version" content="v149">
+    <meta name="app-version" content="v150">
     <!-- Lesson #216: cache busting via ?v= query string. iOS Safari PWA
      caches app.js via HTTP cache independently of SW. Query string forces
      re-fetch on each version bump. SW CACHE_VERSION also bumps for SW
      activation, but the app.js itself needs explicit URL change. -->
-    <link rel="stylesheet" href="styles.css?v=149">
+    <link rel="stylesheet" href="styles.css?v=150">
 </head>
 <body>
     <!-- ================= IDENTITY SCREEN (create/restore) ================= -->
@@ -76,6 +76,8 @@
                  если IndexedDB уже имеет > 0 записей (через app.js JS) -->
                 <button id="btn-cache-stats" class="notif-btn" title="Статистика кэша вложений" style="display:none;">💾</button>
                 <button id="btn-diag" class="notif-btn" title="Diagnostic dump">📊</button>
+                <!-- v150: приглашение — ссылка #invite=<npub> → TG/WA/копия -->
+                <button id="btn-invite" class="invite-btn" title="Пригласить — отправить ссылку в Telegram/WhatsApp">✉</button>
                 <div class="me">
                     <div class="me-npub">
                         <code id="my-npub" title="клик — копировать полный npub">…</code>
@@ -131,6 +133,21 @@
                 </div>
             </footer>
         </main>
+    </div>
+
+    <!-- v150: модалка приглашения (deep-link #invite=<npub>) -->
+    <div id="invite-modal" class="invite-modal" hidden>
+        <div class="invite-card">
+            <button id="invite-close" class="invite-close" title="закрыть">✕</button>
+            <div class="invite-title">Пригласить в murmur</div>
+            <p class="invite-hint">Открой ссылку — мессенджер сам добавит тебя в мой чат. Отправь её в Telegram или WhatsApp:</p>
+            <div class="invite-link-row"><code id="invite-link"></code></div>
+            <div class="invite-actions">
+                <button id="invite-tg" class="invite-tg">Telegram</button>
+                <button id="invite-wa" class="invite-wa">WhatsApp</button>
+                <button id="invite-copy" class="invite-copy">Копировать</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -204,10 +221,10 @@
     <!-- Lesson #216 (Олег 2026-08-26 15:18): ?v= cache busting — iOS Safari
      HTTP cache не обновляет app.js по CACHE_VERSION bump alone.
      Query string = guaranteed fresh load on each deploy. -->
-    <script src="blob-cache.js?v=149" defer></script>
-    <script src="app-store.js?v=149" defer></script>
-    <script src="render-attachments.js?v=149" defer></script>
-    <script src="app.js?v=149" defer></script>
+    <script src="blob-cache.js?v=150" defer></script>
+    <script src="app-store.js?v=150" defer></script>
+    <script src="render-attachments.js?v=150" defer></script>
+    <script src="app.js?v=150" defer></script>
     <script>
       // Register service worker (push notifications only — Lesson #345).
       // Статикой SW не управляет (fetch-хендлера нет), так что
