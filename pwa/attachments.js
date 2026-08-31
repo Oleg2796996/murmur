@@ -169,11 +169,16 @@ async function eciesWrapKey(recipientNpub, key, selfNpub) {
 
 // 4. POST /api/upload with binary body + query params.
 // Uses XHR (not fetch) to get upload progress events.
+// Privacy (Олег 2026-08-31): в query ушдет ТОЛЬКО нейтральное имя f-XXXXXXXX.bin.
+// Настоящее filename не покидает устройство: оно внутри sealed envelope
+// (encryptForRecipient → attachments[].name) — релей его не видит.
 function uploadCiphertext({ sha256Hex, mime, name, size, wrappedKey, ciphertext, onProgress }) {
     return new Promise((resolve, reject) => {
         const url = new URL(ATTACH_API_BASE + "/api/upload");
         url.searchParams.set("sha256", sha256Hex);
         url.searchParams.set("mime", mime || "application/octet-stream");
+        // Privacy v154: сюда приходит уже сгенерированное нейтральное имя
+        // (f-XXXXXXXX.bin) из attachEncryptAndUpload. Никаких настоящих filename.
         url.searchParams.set("name", name);
         url.searchParams.set("size", String(size));
         url.searchParams.set("wrapped_key", wrappedKey);
@@ -219,11 +224,17 @@ async function attachEncryptAndUpload({ file, peerNpub, selfNpub, onProgress }) 
     const wrappedKey = await eciesWrapKey(peerNpub, key, selfNpub);
     // e. Upload ciphertext + wrapped_key + meta
     // Note: server checks SHA-256 against uploaded body, so pass ciphertext's SHA.
+    // Privacy v154: сервер видит ТОЛЬКО нейтральное имя f-XXXXXXXX.bin — random
+    // 4 байта, никак не связанное с настоящим filename. Реальное имя едет внутри
+    // sealed envelope (encryptForRecipient → attachments[].name) и подставляется
+    // в UI получателя после расшифровки (decryptEnvelopeForRender merge).
+    const rnd = new Uint8Array(4); crypto.getRandomValues(rnd);
+    const publicName = "f-" + Array.from(rnd).map(b => b.toString(16).padStart(2, "0")).join("") + ".bin";
     const ciphertextSha = await sha256Hex(ciphertext);
     const resp = await uploadCiphertext({
         sha256Hex: ciphertextSha,
         mime: compressedFile.type || "application/octet-stream",
-        name: compressedFile.name,
+        name: publicName,
         size: ciphertext.length,
         wrappedKey,
         ciphertext,
@@ -236,12 +247,18 @@ async function attachEncryptAndUpload({ file, peerNpub, selfNpub, onProgress }) 
     //
     // plaintext_b64 is for local outbox cache only — used to render outgoing
     // message without WASM decrypt round-trip (Lesson #155). NOT sent to server.
+    // publicName — нейтральное имя, под которым блоб зарегистрирован на сервере
+    // (вырезано из uploadCiphertext); идёт в attachments_meta, видимую релею.
+    // NOTE: resp.name — это то, что сервер записал у себя (нейтральное f-…bin).
+    // Настоящее имя файла НИКОГДА не уходит на сервер: оно едет внутри sealed ct
+    // (encryptForRecipient), sender отдаёт его получателю через attachments[].name.
     return {
         blob_id: resp.blob_id,
         sha256: resp.sha256,
         mime: resp.mime,
         size: resp.size,
         name: file.name,
+        publicName: publicName, // neutral f-…bin (тот же, что зарегистрирован на сервере)
         wrapped_key: wrappedKey, // for recipient to unwrap with own privkey
         iv: b64encode(iv), // base64 — recipient decodes to 12-byte IV
         plaintext_b64: b64encode(new Uint8Array(ab)), // local cache for outgoing render

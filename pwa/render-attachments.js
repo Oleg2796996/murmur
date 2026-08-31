@@ -153,8 +153,11 @@ async function renderAttachment(att, containerEl, abortSignal) {
             if (cachedBlob) {
                 if (abortSignal && abortSignal.aborted) { clearTimeout(safetyNetId); placeholder.remove(); return null; }
                 blobUrl = URL.createObjectURL(cachedBlob);
-                const mime = att.mime || cachedBlob.type || "application/octet-stream";
-                const el = renderByMime({ mime, name: att.name, blobUrl, size: cachedBlob.size });
+                // Privacy v154: real filename from decrypted ct (merged by app.js),
+                // neutral f-…bin otherwise.
+                const displayName = att._plainName || att.name;
+                const mime = att._plainMime || att.mime || cachedBlob.type || "application/octet-stream";
+                const el = renderByMime({ mime, name: displayName, blobUrl, size: cachedBlob.size });
                 placeholder.replaceWith(el);
                 clearTimeout(safetyNetId); // Lesson #319: safety net отработал — снимаем
                 console.log("[attach-cache] HIT", att.blob_id.slice(0, 8), "size=", cachedBlob.size);
@@ -177,7 +180,7 @@ async function renderAttachment(att, containerEl, abortSignal) {
         const plain = await aesDecrypt({ ciphertext: ct, key, iv });
         if (abortSignal && abortSignal.aborted) { clearTimeout(safetyNetId); placeholder.remove(); return null; }
         // d. Blob + URL
-        const mime = att.mime || "application/octet-stream";
+        const mime = att._plainMime || att.mime || "application/octet-stream";
         const blob = new Blob([plain], { type: mime });
         // Lesson #211: save to cache for next render (fire-and-forget)
         if (cache && cache.isAvailable && cache.isAvailable()) {
@@ -185,7 +188,7 @@ async function renderAttachment(att, containerEl, abortSignal) {
         }
         blobUrl = URL.createObjectURL(blob);
         // e. Render based on mime
-        const el = renderByMime({ mime, name: att.name, blobUrl, size: plain.length });
+        const el = renderByMime({ mime, name: att._plainName || att.name, blobUrl, size: plain.length });
         placeholder.replaceWith(el);
         clearTimeout(safetyNetId); // Lesson #319: safety net отработал — снимаем
         return el;
