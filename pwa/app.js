@@ -655,6 +655,7 @@ function receiptLsWrite(key, obj) {
 
 // Алиса: ✓✓-статусы. { hash: ts }
 function loadAcks() { return receiptLsRead(LS_ACKS, RECEIPT_ACKS_CAP); }
+function isAcked(hash) { return !!hash && !!receiptLsRead(LS_ACKS, RECEIPT_ACKS_CAP)[hash]; }
 function markAcked(hash, ts) {
     if (!hash) return false;
     const acks = loadAcks();
@@ -792,13 +793,13 @@ async function consumeReceiptRow(m, hash, fromPeer) {
 
 function applyReceipts(peer, hashes) {
     if (!hashes || !hashes.length) return;
-    const acks = loadAcks();
     let changed = false;
     for (const h of hashes) {
         if (!h) continue;
         if (markAcked(h)) changed = true;
     }
     if (!changed) return;
+    const acks = loadAcks(); // СВЕЖИЙ снапшот ПОСЛЕ markAcked (иначе stale → патч не сработает)
     console.log("[receipt] applied ✓✓ to", hashes.length, "msg(s) from", peer.slice(0, 12));
     // In-place tick patch (Lesson #230/#232): renderMessages скипает отрендеренные sig'и —
     // глиф запечён в bubble-time. Патчим DOM напрямую по data-sig.
