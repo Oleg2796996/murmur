@@ -895,7 +895,7 @@ function enterMessenger() {
             }
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
-        banner.textContent = `app?v${scriptVer} · sw:push-only`;
+        banner.textContent = `v${scriptVer}`; // v157b: только версия — Олегу достаточно
         banner.title = `Build murmur-v${window.__APP_VERSION__ || "?"}. SW=push-only, no static control.`; // v157b
     }
     if (myNpubEl) { /* v157: элемент удалён из HTML, npub не показываем */ }
