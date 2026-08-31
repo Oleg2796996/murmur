@@ -767,7 +767,8 @@ function saveContactName(peer, name) {
 }
 
 function contactDisplay(peer) {
-    return loadContactNames()[peer] || truncateNpub(peer);
+    // Privacy v157: npub-fallback убран — без имени показываем «Без имени».
+    return loadContactNames()[peer] || "Без имени";
 }
 
 function bytesToBase64(bytes) {
@@ -897,7 +898,7 @@ function enterMessenger() {
         banner.textContent = `app?v${scriptVer} · sw:push-only`;
         banner.title = "Build murmur-v153. SW=push-only, no static control.";
     }
-    if (myNpubEl) myNpubEl.textContent = truncateNpub(myNpub);
+    if (myNpubEl) { /* v157: элемент удалён из HTML, npub не показываем */ }
     const fullEl = $("my-npub-full");
     if (fullEl) fullEl.textContent = myNpub;
     // CRITICAL: Register alias immediately so history queries find us on either side.
@@ -1539,8 +1540,8 @@ function renderChatList() {
                 (filter ? "No chats match «" + escapeHtml(filter) + "»" : "No chats yet") +
             "</div>" +
             "<div class='chat-empty-hint'>" +
-                "Tap <b>+</b> to start a new conversation.<br>" +
-                "Enter the recipient's <code>npub1...</code> address." +
+                "Нажмите <b>+</b>, чтобы начать новый чат.<br>" +
+                "Поделитесь ссылкой-приглашением: кнопка «Пригласить друга»." +
             "</div>";
         chatList.appendChild(empty);
         return;
@@ -1553,15 +1554,18 @@ function renderChatList() {
             ? (c.lastMessagePreview.length > 60 ? c.lastMessagePreview.slice(0, 60) + "…" : c.lastMessagePreview)
             : "No messages yet";
         const name = nameMap[c.peer];
-        const displayName = name || truncateNpub(c.peer);
-        const avatarInitial = (name || c.peer).slice(0, 1).toUpperCase();
+        // Privacy v157: npub не показываем в списке чатов. Без имени — «Без имени».
+        const displayName = name || "Без имени";
+        const avatarInitial = (name || "?").slice(0, 1).toUpperCase();
         const avatarColor = avatarColorFor(c.peer);
-        const peerDisplay = name
-            ? escapeHtml(name) + "<span class='chat-item-peer-sub'>" + escapeHtml(truncateNpub(c.peer)) + "</span>"
-            : escapeHtml(truncateNpub(c.peer));
+        // Lesson #v157: active-highlight работал через textContent-сравнение
+        // с несуществующим классом .chat-item-peer — никогда не срабатывал.
+        // Теперь: data-peer атрибут + dataset-сравнение в openChat.
+        const peerDisplay = escapeHtml(displayName);
         const timeDisplay = formatChatTime(c.lastTs);
         const badge = c.unreadCount > 0 ? "<span class='chat-item-badge'>" + c.unreadCount + "</span>" : "";
         const previewEsc = escapeHtml(preview);
+        div.setAttribute("data-peer", c.peer);
         div.innerHTML =
             "<div class='chat-item-avatar' style='background:" + avatarColor + "'>" + avatarInitial + "</div>" +
             "<div class='chat-item-body'>" +
@@ -1726,8 +1730,9 @@ function openChat(peer) {
     const m = document.querySelector(".messenger");
     if (m) m.classList.add("chat-open");
     chatList.querySelectorAll(".chat-item").forEach(el => {
-        const peerEl = el.querySelector(".chat-item-peer");
-        el.classList.toggle("active", peerEl && peerEl.textContent === truncateNpub(peer));
+        // v157: было сравнение textContent с несуществующим .chat-item-peer
+        // (всегда false → active никогда не подсвечивался). Теперь data-peer.
+        el.classList.toggle("active", el.dataset && el.dataset.peer === peer);
     });
     if (contacts[peer]) contacts[peer].unreadCount = 0;
     clearUnread(peer);
@@ -1742,17 +1747,20 @@ function openChat(peer) {
     inputArea.classList.add("visible");
     const nameMap = loadContactNames();
     const savedName = nameMap[peer];
+    // Privacy v157 (Олег 31.08 «npub явно лишний, убрать везде»): npub больше
+    // не показываем в UI. Без заданного имени — «Без имени», клик открывает
+    // диалог задания имени. Полный npub остаётся только в title-тултипе
+    // (не часть visual UI; полезно на десктопе для отладки).
     if (savedName) {
         chatPeerName.innerHTML =
-            "<span class='peer-name-main'>" + escapeHtml(savedName) + "</span>" +
-            "<span class='peer-name-sub'>" + truncateNpub(peer) + "</span>";
+            "<span class='peer-name-main'>" + escapeHtml(savedName) + "</span>";
     } else {
-        chatPeerName.innerHTML = "<span class='peer-name-main'>" + truncateNpub(peer) + "</span>";
+        chatPeerName.innerHTML = "<span class='peer-name-main peer-name-unnamed'>Без имени</span>";
     }
-    chatPeerName.title = peer + "\nНажмите, чтобы задать имя";
+    chatPeerName.title = "Нажмите, чтобы задать имя";
     chatPeerName.onclick = () => {
         const current = loadContactNames()[peer] || "";
-        const v = prompt("Display name for " + truncateNpub(peer) + ":", current);
+        const v = prompt("Название чата:", current);
         if (v === null) return;
         const trimmed = v.trim().slice(0, 24);
         saveContactName(peer, trimmed);
@@ -2995,7 +3003,7 @@ btnDeleteChat?.addEventListener("click", () => {
     if (!activePeer) return;
     const peer = normalizePeer(activePeer);
     const nameMap = JSON.parse(localStorage.getItem(LS_CONTACT_NAMES) || "{}");
-    const displayName = nameMap[peer] || truncateNpub(peer);
+    const displayName = nameMap[peer] || "Без имени"; // v157: npub не светим
     const ok = confirm(
         "Удалить чат с «" + displayName + "»?\n\n" +
         "Чат исчезнет из списка. История хранится только в памяти этого " +

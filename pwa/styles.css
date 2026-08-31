@@ -243,7 +243,29 @@ button.small { padding: 8px 12px; font-size: 13px; }
 }
 .notif-btn:hover { background: var(--accent); border-color: var(--accent); }
 .notif-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-.back-btn { display: none; }
+/* v157 (Олег 31.08 «стрелка назад совсем мелкая»): нормальный tap-target.
+   Раньше у .back-btn не было собственных стилей размера — рендерился системным
+   дефолтом браузера (мелкий текст-глиф без паддинга). iOS-стиль chevron SVG
+   + 44×44px (Apple HIG minimal touch target). */
+.back-btn {
+    display: none;
+    background: transparent;
+    border: none;
+    color: var(--accent);
+    font-size: 26px;
+    line-height: 1;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    margin-left: -10px; /* оптическое выравнивание к краю экрана */
+    flex-shrink: 0;
+    cursor: pointer;
+    border-radius: 12px;
+    -webkit-tap-highlight-color: transparent;
+    align-items: center;
+    justify-content: center;
+}
+.back-btn:active { background: var(--surface-2); }
 .delete-btn {
     margin-left: auto;
     background: transparent;
@@ -717,7 +739,7 @@ button.small { padding: 8px 12px; font-size: 13px; }
     .messenger:not(.chat-open) .chat-view { display: none; }
     .messenger:not(.chat-open) .no-chat { display: flex; flex: 1; }
     .messenger.chat-open .no-chat { display: none; }
-    .back-btn { display: block; }
+    .back-btn { display: flex; }
 }
 
 /* ================= STATUS (small text at bottom) ================= */
