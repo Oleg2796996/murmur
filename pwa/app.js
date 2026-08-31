@@ -787,37 +787,39 @@ async function sha256hex(text) {
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-// Lesson #354 (v150): btn-create/btn-restore биндятся ДВАЖДЫ — inline bindHandler
-// в index.html (ждёт window._handleCreate для iOS cold-start) и прямые
-// addEventListener ниже. Без guardа один клик = identity_new × 2: вторая личность
-// затирала первую, а повторный enterMessenger ломал deep-link #invite (hash уже
-// очищен первым проходом).
-let _identityBusy = false;
-
 async function _handleCreate() {
-    if (_identityBusy) { console.log("[murmur] create already in progress — ignore double bind"); return; }
-    _identityBusy = true;
+    // Re-entrancy guard: на #btn-create висят ДВА листенера (app.js:840 + inline
+    // bindHandler в index.html) — раньше click создавал identity ДВАЖДЫ,
+    // второй enterMessenger сбрасывал открытый по #invite deep-link чат (Lesson #357).
+    if (_handleCreate._running) return;
+    _handleCreate._running = true;
     try {
         await ensureWasm();
         const mod = await loadWasmModule();
         const res = unwrap(mod.identity_new());
         // WASM returns JSON-encoded string (avoids externref shim pitfalls).
-        if (!res.ok) { $("identity-error").textContent = "identity_new error: " + res.error; return; }
+        if (!res.ok) { 
+            const errEl = $("identity-error");
+            if (errEl) { errEl.textContent = "identity_new error: " + res.error; errEl.hidden = false; }
+            return; 
+        }
         myNpub = res.data.npub;
         signKeyHex = res.data.signing_sk_hex;
         myAlias = myNpub;
         localStorage.setItem(LS_NPUB, myNpub);
         localStorage.setItem(LS_KEY, signKeyHex);
-        localStorage.removeItem(LS_NAME); // v149: alias=name концепция удалена
+        localStorage.setItem(LS_NAME, myAlias);
         await invalidateCacheIfKeyChanged();
         enterMessenger();
     } catch (e) {
         console.error("[murmur] _handleCreate error:", e);
         const errEl = $("identity-error");
-        errEl.textContent = "Error: " + (e.message || String(e));
-        errEl.hidden = false;
+        if (errEl) {
+            errEl.textContent = "Error: " + (e.message || String(e));
+            errEl.hidden = false;
+        }
     } finally {
-        _identityBusy = false;
+        _handleCreate._running = false;
     }
 }
 window.__murmurCreate = _handleCreate;
@@ -825,29 +827,41 @@ window.__murmurCreate = _handleCreate;
 // after the WASM/module has finished loading.
 window._handleCreate = _handleCreate;
 window._handleRestore = async function() {
-    if (_identityBusy) { console.log("[murmur] restore already in progress — ignore double bind"); return; }
-    _identityBusy = true;
+    const hex = $("restore-hex").value.trim();
+    if (!hex || hex.length < 60) { $("identity-error").textContent = "Enter 64-char hex key"; return; }
     try {
-        const hex = $("restore-hex").value.trim();
-        if (!hex || hex.length < 60) { $("identity-error").textContent = "Enter 64-char hex key"; return; }
         await ensureWasm();
         const mod = await loadWasmModule();
         const res = unwrap(mod.identity_restore(hex));
         if (!res.ok) { $("identity-error").textContent = "restore error: " + res.error; return; }
         myNpub = res.data.npub;
         signKeyHex = hex;
-        myAlias = myNpub; // v149: alias ≡ npub
+        myAlias = res.data.npub;
         localStorage.setItem(LS_NPUB, myNpub);
         localStorage.setItem(LS_KEY, signKeyHex);
-        localStorage.removeItem(LS_NAME); // v149
+        localStorage.setItem(LS_NAME, myAlias);
         await invalidateCacheIfKeyChanged();
         enterMessenger();
-    } catch (e) { $("identity-error").textContent = "Error: " + (e.message || e); }
-    finally { _identityBusy = false; }
+    } catch (e) { $("identity-error").textContent = "Error: " + e.message; }
 };
 $("btn-create")?.addEventListener("click", _handleCreate);
 
-$("btn-restore")?.addEventListener("click", () => window._handleRestore());
+$("btn-restore")?.addEventListener("click", async () => {
+    const hex = $("restore-hex").value.trim();
+    if (!hex || hex.length < 60) { $("identity-error").textContent = "Enter 64-char hex key"; return; }
+    try {
+        await ensureWasm();
+        const mod = await loadWasmModule();
+        const res = unwrap(mod.identity_restore(hex));
+        if (!res.ok) { $("identity-error").textContent = "restore error: " + res.error; return; }
+        myNpub = res.data.npub;
+        signKeyHex = hex;
+        myAlias = localStorage.getItem(LS_NAME) || myNpub;
+        localStorage.setItem(LS_NPUB, myNpub);
+        localStorage.setItem(LS_KEY, signKeyHex);
+        enterMessenger();
+    } catch (e) { $("identity-error").textContent = "Error: " + e.message; }
+});
 
 function enterMessenger() {
     identityScreen.style.display = "none";
@@ -867,12 +881,23 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw:push-only`;
-        banner.title = "Build murmur-v150. npub-only relay, minimal retention.";
+        banner.title = "Build murmur-v152. SW=push-only, no static control.";
     }
-    myNpubEl.textContent = truncateNpub(myNpub);
+    if (myNpubEl) myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
     if (fullEl) fullEl.textContent = myNpub;
-    // v149: register_alias удалён — релей знает нас по npub в envelope'ах.
+    // CRITICAL: Register alias immediately so history queries find us on either side.
+    // Use the user-chosen alias if available (LS_NAME key holds the chosen
+    // display name), otherwise fall back to npub for first-run. We then
+    // upsert the canonical alias under both names so the relay can find us
+    // regardless of whether the sender typed our display name or our npub.
+    const preferredAlias = myAlias || myNpub;
+    fetch(RELAY + "/api/register_alias", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ alias: preferredAlias, npub: myNpub })
+    }).then(r => r.json().then(j => console.log("register_alias on enter:", j)))
+      .catch(e => console.warn("register_alias on enter failed:", e));
     const copyBtn = $("btn-copy-npub");
     if (copyBtn && !copyBtn.dataset.bound) {
         copyBtn.dataset.bound = "1";
@@ -914,41 +939,14 @@ function enterMessenger() {
     startPolling();
     setupPushSubscription();
     updateBadge();
-    // v150: deep-link #invite=<npub> — обработать ПОСЛЕ полной инициализации
-    // (contacts/loadContacts могли ещё догоадываться, но наш peer гарантируется
-    // LS_INVITE_PEERS + ensureChatWithPeer; loadContacts merge не перезатрёт).
+    setupInviteUI();
+    // Deep-link invite: .../#invite=<npub> → открыть чат с этим контактом.
+    // Выполняется после enterMessenger: identity создана/восстановлена, DOM готов.
     handleInviteHash();
-    if (window.__murmurBindInvite) window.__murmurBindInvite();
 }
 
-$("btn-logout")?.addEventListener("click", async () => {
-    if (!confirm("Are you sure? Identity will be deleted.")) return;
-    // v150: пригласённые peers привязаны к личности — убрать до удаления npub.
-    if (myNpub) dropInvitePeersFor(myNpub);
-    localStorage.removeItem(LS_NPUB);
-    localStorage.removeItem(LS_KEY);
-    // Lesson #211: clear blob cache on logout — different signing key means
-    // existing cached blobs are encrypted for OLD pubkey → would fail to decrypt.
-    if (window.MurmurBlobCache) {
-        try { await window.MurmurBlobCache.clear(); } catch (e) { /* ignore */ }
-    }
-    if (pollTimer) clearInterval(pollTimer);
-    if (ws) { ws.close(); ws = null; }
-    contacts = {}; messages = {}; activePeer = null;
-    oldestTsForPeer = {};
-    localStorage.removeItem("murmur.contact_names");
-    messenger.classList.remove("active");
-    messenger.hidden = true;
-    identityScreen.style.display = "flex";
-    identityScreen.hidden = false;
-    $("identity-error").textContent = "";
-    $("restore-hex").value = "";
-});
-
-// Click handler: visible state shows whether browser+server agree there's
-// an active push subscription. If browser says yes but server has nothing
-// (e.g. after subscriptions.json reset), the button stays visually off so
-// user knows to re-tap.
+// (старый мягкий logout-обработчик удалён 2026-08-31: кнопка btn-logout теперь
+// «Удалить все данные», полный wipe в setupInviteUI — двойной обработчик давал 2 confirm-диалога)
 //
 // `subscribed` is true if EITHER permission="granted" in browser AND server
 // has at least one subscription record for our alias. We also surface a
@@ -981,14 +979,20 @@ async function updateNotifBtnState() {
         } catch (e) { /* ignore — SW ещё не готов, считаем как нет подписки */ }
     }
 
-    if (perm === "granted" && myNpub) {
+    if (perm === "granted" && (myAlias || myNpub)) {
         try {
-            // v149: npub-only — серверный статус проверяем по myNpub.
-            const r = await fetch(RELAY + "/push/status?npub=" + encodeURIComponent(myNpub), { cache: "no-store" });
-            const j = await r.json();
-            if (j && j.subscribed) {
-                serverHasSub = true;
-                serverCount = j.count;
+            // Try the user-chosen alias first (e.g. "Oleg"); fall back to npub
+            // if the user never set a display name.
+            const tried = [];
+            for (const candidate of [myAlias, myNpub].filter(Boolean)) {
+                const r = await fetch(RELAY + "/push/status?alias=" + encodeURIComponent(candidate), { cache: "no-store" });
+                const j = await r.json();
+                tried.push(candidate);
+                if (j && j.subscribed) {
+                    serverHasSub = true;
+                    serverCount = j.count;
+                    break;
+                }
             }
             if (serverCount > 1) {
                 serverEndNote = " · " + serverCount + " дубликатов на сервере";
@@ -1103,11 +1107,11 @@ if (notifBtn && !notifBtn.dataset.bound) {
                     }
                 } catch (e) { /* ignore */ }
                 // Also clear server-side records for this alias.
-                if (myNpub) {
+                if (myAlias) {
                     fetch(RELAY + "/push/unsubscribe", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ npub: myNpub, alias: myNpub }),
+                        body: JSON.stringify({ alias: myAlias }),
                     }).catch(() => {});
                 }
             } else {
@@ -1347,21 +1351,25 @@ async function setupPushSubscription() {
             console.log("[push] re-using existing browser subscription, endpoint=", sub.endpoint.slice(0, 60));
         }
         const subJson = sub.toJSON();
-        // v149: npub-only — подписка всегда регистрируется на myNpub.
-        // (Push-имена отправителей больше не резолвятся на ролее.)
+        // Use the user-chosen alias (e.g. "Oleg", "Ирина") so the relay can
+        // match incoming envelopes whose `to_alias` is the human-readable name.
+        // Fall back to npub only if no alias has been chosen yet — this keeps
+        // pushes working through onboarding but breaks as soon as the user picks
+        // a real alias (the old npub subscription stops matching).
         //
         // CRITICAL (Lesson #131.10): always re-register on the server, even
-        // when reusing the existing browser subscription.
-        const subAlias = myNpub;
+        // when reusing the existing browser subscription. Otherwise the server
+        // keeps the old `alias = npub1...` and never matches new envelopes.
+        const subAlias = myAlias || myNpub;
         const r = await fetch(RELAY + "/push/register_subscribe", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ npub: subAlias, subscription: subJson }),
+            body: JSON.stringify({ alias: subAlias, subscription: subJson }),
         });
         if (!r.ok) {
             console.warn("[push] register_subscribe HTTP", r.status, await r.text());
         } else {
-            console.log("[push] registered on server as npub=", subAlias.slice(0, 16) + "…");
+            console.log("[push] registered on server as alias=", subAlias);
         }
     } catch (e) {
         console.warn("[push] setup failed:", e && e.message);
@@ -1476,30 +1484,6 @@ async function loadContacts() {
         }
         if (addedAny) {
             console.log("[murmur] restored", localPeers.size, "local peers into contacts");
-        }
-        // v150: приглашённые по deep-link peers (до первого сообщения их больше
-        // никто не помнит — сервер ephemeral, IDB пуст). Merge + чистка чужих identity.
-        try {
-            const inv = loadInvitePeers();
-            let invAdded = false;
-            for (const [owner, peers] of Object.entries(inv)) {
-                if (owner === myNpub) {
-                    for (const p of peers || []) {
-                        const np = normalizePeer(p);
-                        if (np && np !== myNpub && !contacts[np]) {
-                            contacts[np] = { peer: np, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
-                            invAdded = true;
-                        }
-                    }
-                } else if (owner && owner.startsWith("npub1")) {
-                    // Старая личность — подчистить (аналог Lesson #344b).
-                    delete inv[owner];
-                    localStorage.setItem(LS_INVITE_PEERS, JSON.stringify(inv));
-                }
-            }
-            if (invAdded) addedAny = true;
-        } catch (e) { /* ignore */ }
-        if (addedAny) {
             renderChatList();
         }
     } catch (e) { console.warn("[murmur] local contact restore failed:", e); }
@@ -1577,6 +1561,148 @@ function renderChatList() {
         div.addEventListener("click", () => openChat(c.peer));
         chatList.appendChild(div);
     }
+}
+
+// ── UI Helpers (Invite & Logout) ───
+function handleInviteHash() {
+    // Deep-link вида https://host/#invite=<npub>.
+    // Выполняем только когда мы в мессенджере (identity есть).
+    const m = document.querySelector(".messenger");
+    if (!m) return;
+    const h = (location.hash || "");
+    const mt = h.match(/^#invite=(npub1[a-z0-9]+)/i);
+    if (!mt) return;
+    const peer = mt[1];
+    try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {}
+    // Если чат уже существует — просто открыть; иначе создать контакт и открыть.
+    if (typeof openChat !== "function") return;
+    if (!contacts[peer]) {
+        contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
+        renderChatList();
+    }
+    openChat(peer);
+    setTimeout(() => { try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {} }, 50);
+}
+function setupInviteUI() {
+    // Guard: enterMessenger может вызываться повторно (boot/restore/poll-reconnect).
+    // Без guard'а на кнопки вешаются дубли обработчиков → двойные confirm/alert (Lesson #356).
+    if (setupInviteUI._bound) return;
+    setupInviteUI._bound = true;
+    const btnInvite = $("btn-invite");
+    const btnLogout = $("btn-logout");
+
+    if (btnInvite) {
+        btnInvite.addEventListener("click", async () => {
+            const inviteLink = `${window.location.origin}${window.location.pathname}#invite=${myNpub}`;
+            // Step 1: synchronous copy INSIDE the user gesture.
+            // iOS Safari/PWA requires this; after any await the gesture is consumed
+            // and clipboard APIs throw NotAllowedError (Lesson #355).
+            const copied = legacyCopy(inviteLink);
+            // Step 2: native share menu when available (mobile UX preference).
+            if (navigator.share) {
+                try {
+                    await navigator.share({
+                        title: "murmur",
+                        text: "Присоединяйся в приватном мессенджере murmur!",
+                        url: inviteLink,
+                    });
+                    return;
+                } catch (e) {
+                    if (e.name === "AbortError") return; // user closed the share sheet
+                    // real share failure → fall through, we already tried copying
+                }
+            }
+            // Step 3: report result
+            if (copied) {
+                alert("Ссылка скопирована в буфер обмена!");
+            } else {
+                try {
+                    await navigator.clipboard.writeText(inviteLink);
+                    alert("Ссылка скопирована в буфер обмена!");
+                } catch (e) {
+                    // Last resort: manual copy overlay (fresh gesture works there)
+                    showInviteManualCopy(inviteLink);
+                }
+            }
+        });
+    }
+
+    if (btnLogout) {
+        btnLogout.addEventListener("click", async () => {
+            if (!confirm("Все ваши данные (личность, ключи, история чатов) будут безвозвратно удалены с этого устройства. Продолжить?")) {
+                return;
+            }
+            localStorage.clear();
+            // For robustness: clear IDB if appStore exists (chats store + blob cache)
+            if (window.appStore) {
+                try {
+                    for (const p of (await window.appStore.chats.listPeers())) {
+                        await window.appStore.chats.deleteMessages(p);
+                    }
+                } catch (e) { console.warn(e); }
+                try { await window.MurmurBlobCache.clear(); } catch (e) { console.warn(e); }
+            }
+            window.location.reload();
+        });
+    }
+}
+
+function legacyCopy(text) {
+    // Classic textarea + execCommand — the only copy method iOS allows
+    // inside a user-gesture (clipboard.writeText throws NotAllowedError in PWA).
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;top:-999px;left:-999px;opacity:0;";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+}
+
+function showInviteManualCopy(inviteLink) {
+    let ov = document.getElementById("invite-fallback");
+    if (ov) ov.remove();
+    ov = document.createElement("div");
+    ov.id = "invite-fallback";
+    ov.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px;";
+    const box = document.createElement("div");
+    box.style.cssText = "background:#17212b;border-radius:12px;padding:18px;max-width:340px;width:100%;color:#e8edf2;font:14px -apple-system,sans-serif;box-sizing:border-box;";
+    const title = document.createElement("div");
+    title.textContent = "Ссылка-приглашение";
+    title.style.cssText = "margin-bottom:10px;font-weight:600;font-size:15px;";
+    const hint = document.createElement("div");
+    hint.textContent = "Удерживайте палец на поле ниже → «Скопировать», либо нажмите кнопку.";
+    hint.style.cssText = "margin-bottom:12px;color:#8a97a5;font-size:13px;line-height:1.4;";
+    const inp = document.createElement("input");
+    inp.readOnly = true;
+    inp.value = inviteLink;
+    inp.style.cssText = "width:100%;box-sizing:border-box;background:#0e1621;color:#e8edf2;border:1px solid #2a3b4d;border-radius:8px;padding:10px;font-size:13px;";
+    const btnCopy = document.createElement("button");
+    btnCopy.textContent = "Скопировать";
+    btnCopy.style.cssText = "margin-top:12px;width:100%;background:#2b5278;color:#fff;border:0;border-radius:8px;padding:10px;font-size:14px;";
+    btnCopy.addEventListener("click", () => {
+        inp.select();
+        if (legacyCopy(inp.value)) {
+            ov.remove();
+            alert("Ссылка скопирована в буфер обмена!");
+        }
+    });
+    const btnClose = document.createElement("button");
+    btnClose.textContent = "Закрыть";
+    btnClose.style.cssText = "margin-top:8px;width:100%;background:transparent;color:#8a97a5;border:0;padding:6px;font-size:13px;";
+    btnClose.addEventListener("click", () => ov.remove());
+    box.appendChild(title);
+    box.appendChild(hint);
+    box.appendChild(inp);
+    box.appendChild(btnCopy);
+    box.appendChild(btnClose);
+    ov.appendChild(box);
+    document.body.appendChild(ov);
+    inp.focus();
+    inp.select();
 }
 
 // ── Open Chat ──
@@ -2456,8 +2582,8 @@ async function sendMessage() {
             attachments_meta: metaSnapshot, // [{blob_id, sha256, wrapped_key, name, mime, size}]
             ts: Math.floor(Date.now() / 1000),
         };
-        // v149: from_name больше не отправляем — имя отправителя живёт
-        // локально у получателя (LS_CONTACT_NAMES), на ролее минимум данных.
+        const myName = (localStorage.getItem(LS_NAME) || "").trim();
+        if (myName && myName !== myNpub) msg.from_name = myName;
         const mod = await loadWasmModule();
         // Signature covers (from|to|ts|ct) via canonical envelope hash, same as
         // relay's `Envelope::verify`. sig input = SHA3(npub || payload).
@@ -2646,117 +2772,6 @@ function createNewChatFromInput() {
 }
 
 $("btn-new-chat")?.addEventListener("click", createNewChatFromInput);
-
-// ── v150: Invite UI (кнопка ✉ + модалка TG/WA/копия) ──
-(function setupInviteUI() {
-    function inviteUrl() {
-        return location.origin + "/#invite=" + myNpub;
-    }
-    function openInviteModal() {
-        if (!myNpub) return;
-        const modal = document.getElementById("invite-modal");
-        const linkEl = document.getElementById("invite-link");
-        if (!modal || !linkEl) return;
-        linkEl.textContent = inviteUrl();
-        modal.hidden = false;
-    }
-    function closeInviteModal() {
-        const modal = document.getElementById("invite-modal");
-        if (modal) modal.hidden = true;
-    }
-    function bindOnce(id, fn) {
-        const el = document.getElementById(id);
-        if (el && !el.dataset.bound) { el.dataset.bound = "1"; el.addEventListener("click", fn); }
-    }
-    function tryBind() {
-        bindOnce("btn-invite", openInviteModal);
-        bindOnce("invite-close", closeInviteModal);
-        bindOnce("invite-tg", () => {
-            const u = inviteUrl();
-            const txt = "Напиши мне в murmur (E2E, без номера и регистрации): " + u;
-            window.open("https://t.me/share/url?url=" + encodeURIComponent(u) + "&text=" + encodeURIComponent(txt), "_blank");
-        });
-        bindOnce("invite-wa", () => {
-            const u = inviteUrl();
-            const txt = "Напиши мне в murmur (E2E, без номера и регистрации): " + u;
-            window.open("https://wa.me/?text=" + encodeURIComponent(txt + " " + u), "_blank");
-        });
-        bindOnce("invite-copy", async (e) => {
-            const btn = e.currentTarget;
-            try {
-                await navigator.clipboard.writeText(inviteUrl());
-                btn.textContent = "✓ Скопировано";
-            } catch (err) {
-                const ta = document.createElement("textarea");
-                ta.value = inviteUrl();
-                ta.style.position = "fixed"; ta.style.opacity = "0";
-                document.body.appendChild(ta); ta.select();
-                try { document.execCommand("copy"); btn.textContent = "✓ Скопировано"; }
-                catch { btn.textContent = "✗ Ошибка"; }
-                ta.remove();
-            }
-            setTimeout(() => { btn.textContent = "Копировать"; }, 1400);
-        });
-    }
-    // Кнопка живёт в sidebar (рендерится сразу) — bind при старте и повторно
-    // после enterMessenger (на случай пересоздания DOM — dataset.bound защищает).
-    document.addEventListener("DOMContentLoaded", tryBind);
-    window.__murmurBindInvite = tryBind;
-    tryBind();
-})();
-
-// ── v150: Invite deep-link (#invite=<npub>) ──
-// Ссылка вида https://murmur.senswifi.ru/#invite=<npub>. Hash выбран вместо
-// query — он НЕ отправляется на сервер (минимум данных), не попадает в логи.
-// Логика: после входа (identity есть/создана/восстановлена) — добавить чат
-// с пригласившим и открыть его. Затем чистим hash, чтобы refresh не повторял.
-const LS_INVITE_PEERS = "murmur.invite_peers"; // { [myNpub]: [peerNpub,…] }
-function loadInvitePeers() {
-    try { return JSON.parse(localStorage.getItem(LS_INVITE_PEERS) || "{}"); } catch { return {}; }
-}
-function saveInvitePeer(ownerNpub, peerNpub) {
-    const all = loadInvitePeers();
-    const list = all[ownerNpub] || [];
-    if (!list.includes(peerNpub)) list.push(peerNpub);
-    all[ownerNpub] = list;
-    localStorage.setItem(LS_INVITE_PEERS, JSON.stringify(all));
-}
-function dropInvitePeersFor(ownerNpub) {
-    const all = loadInvitePeers();
-    if (all[ownerNpub]) { delete all[ownerNpub]; localStorage.setItem(LS_INVITE_PEERS, JSON.stringify(all)); }
-}
-
-function ensureChatWithPeer(npub) {
-    npub = normalizePeer(npub);
-    if (!npub || !npub.startsWith("npub1")) return false;
-    if (!contacts[npub]) {
-        contacts[npub] = { peer: npub, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
-        // Lesson #353: contacts НЕ персистится (собирается из ephemeral-сервера
-        // + IDB/outbox, Lesson #342–344). До первого сообщения приглашённый peer
-        // исчез бы после reload — держим его в отдельном LS-списке по identity.
-        if (myNpub) saveInvitePeer(myNpub, npub);
-    }
-    renderChatList();
-    openChat(npub);
-    return true;
-}
-
-function handleInviteHash() {
-    try {
-        const m = (location.hash || "").match(/#invite=(npub1[0-9a-z]+)/i);
-        if (!m) return false;
-        const npub = m[1].toLowerCase();
-        if (!myNpub) return false; // identity ещё не готова — retry после enterMessenger
-        // Чистим hash сразу после чтения (не оставляем npub в history).
-        history.replaceState(null, "", location.pathname + location.search);
-        if (npub === myNpub.toLowerCase()) return true; // само-приглашение — ничего
-        ensureChatWithPeer(npub);
-        return true;
-    } catch (e) {
-        console.warn("[invite] parse failed", e);
-        return false;
-    }
-}
 
 newChatInput?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
@@ -3008,8 +3023,19 @@ function connectWS() {
         wsConnected = true;
         wsReconnectDelay = WS_RECONNECT_BASE;
         console.log("WS connected");
-        ws.send(JSON.stringify({ type: "subscribe", npub: myNpub })); // v149: npub-only
+        ws.send(JSON.stringify({ type: "subscribe", alias: myAlias, npub: myNpub }));
     };
+
+    // Register alias→npub mapping via HTTP (works even if WS tunnel is down).
+    // This is what allows /api/history and /api/inbox to find messages for us.
+    if (myNpub && myAlias) {
+        fetch(RELAY + "/api/register_alias", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ alias: myAlias, npub: myNpub })
+        }).then(r => r.json().then(j => console.log("register_alias:", j)))
+          .catch(e => console.warn("register_alias failed:", e));
+    }
 
     ws.onmessage = (evt) => {
         try {
@@ -3616,7 +3642,7 @@ async function tryAutoRestore() {
         if (res && res.ok && res.data && res.data.npub === savedNpub) {
             myNpub = res.data.npub;
             signKeyHex = res.data.signing_sk_hex;
-            myAlias = myNpub; // v149: alias ≡ npub
+            myAlias = localStorage.getItem(LS_NAME) || ("murmur-" + (res.data.npub || "").slice(4, 10));
             await invalidateCacheIfKeyChanged();
             enterMessenger();
         } else {
@@ -3635,3 +3661,8 @@ if (document.readyState === "loading") {
     warmOutboxCache();
     tryAutoRestore();
 }
+
+// Повторный заход по ссылке в уже открытом приложении (PWA живёт в фоне).
+window.addEventListener("hashchange", () => {
+    if (messenger && messenger.classList.contains("active")) handleInviteHash();
+});
