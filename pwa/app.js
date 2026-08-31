@@ -940,6 +940,23 @@ function sanitizePreview(p) {
     return s.slice(0, 80);
 }
 
+// v158c (Олег 22:49): превью чата с учётом файлов — файл без текста → «📎 имя»,
+// текст+файлы → «📎 имя · текст». Нерасшифровано → «🔒 зашифрованное сообщение».
+function previewForMsg(m) {
+    try {
+        if (!m) return "";
+        const am = (Array.isArray(m.attachments_meta) && m.attachments_meta.length) ? m.attachments_meta : (Array.isArray(m.attachments) ? m.attachments : []);
+        const names = am.map(a => (a && (a._plainName || a.name)) || "").filter(Boolean);
+        const attLabel = am.length ? "📎 " + (names[0] || "файл") + (am.length > 1 ? " +" + (am.length - 1) : "") : "";
+        let t = String(m.body || m.resolvedBody || m.outbox_body || "").trim();
+        if (t.startsWith("{")) t = ""; // сырой envelope — считаем нерасшифрованным
+        if (t && m.isBinary) t = "";  // "[binary, N bytes]" — чип файла, не текст
+        if (t) return (attLabel ? attLabel + " · " : "") + t.slice(0, 80 - (attLabel ? attLabel.length + 3 : 0));
+        if (attLabel) return attLabel;
+        return "🔒 зашифрованное сообщение";
+    } catch (e) { return ""; }
+}
+
 // Stable color for an avatar based on the npub (deterministic per peer).
 const AVATAR_PALETTE = [
     "#5e9aff", "#7c5cff", "#ff7c5c", "#5cff9a",
@@ -1669,8 +1686,22 @@ async function loadContacts() {
                         unreadCount: unreadMap[key] || 0,
                     };
                 } else {
+                    // v158c (Олег 22:49 «превью мерцает»): сервер не имеет ключей —
+                    // его preview для E2E-сообщений всегда «🔒 зашифрованное…».
+                    // Плюс квитанции v158 тоже поднимают server last_ts → условие
+                    // «сервер новее» срабатывает постоянно → превью прыгает
+                    // туда-сюда каждые ~5s. Если локально уже есть РЕАЛЬНЫЙ текст —
+                    // серверным placeholder'ом его НЕ перетирать (ts синхронизируем,
+                    // иначе loop). Реальный текст локально всё равно придёт через
+                    // pollHist → resyncSidebarPreviews.
                     if (c.last_ts > contacts[key].lastTs) {
-                        contacts[key].lastMessagePreview = sanitizePreview(c.last_message_preview);
+                        const serverPrev = sanitizePreview(c.last_message_preview);
+                        const localPrev = contacts[key].lastMessagePreview || "";
+                        const localReal = localPrev && localPrev !== "🔒 зашифрованное сообщение" && !localPrev.startsWith("{");
+                        const serverReal = serverPrev && !serverPrev.startsWith("🔒") && !serverPrev.startsWith("{");
+                        if (serverReal || !localReal) {
+                            contacts[key].lastMessagePreview = serverPrev;
+                        }
                         contacts[key].lastTs = c.last_ts;
                     }
                     // Не перезаписываем локальный unread с сервера — мы их считаем сами.
@@ -1838,10 +1869,12 @@ function setupInviteUI() {
             // Step 2: native share menu when available (mobile UX preference).
             if (navigator.share) {
                 try {
+                    // v158c (Олег 22:49): macOS share sheet discard'ит поле url,
+                    // когда есть text → в мессенджер уходит голый текст без ссылки.
+                    // Зашиваем ссылку В текст — тогда она доходит везде.
                     await navigator.share({
                         title: "murmur",
-                        text: "Присоединяйся в приватном мессенджере murmur!",
-                        url: inviteLink,
+                        text: "Присоединяйся в приватном мессенджере murmur! " + inviteLink,
                     });
                     return;
                 } catch (e) {
@@ -3377,7 +3410,7 @@ function handleIncomingEnvelope(env) {
         if (!contacts[peer]) {
             contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
         }
-        contacts[peer].lastMessagePreview = sanitizePreview(bodyText);
+        contacts[peer].lastMessagePreview = previewForMsg(msg);
         contacts[peer].lastTs = env.ts;
 
         // Lesson #127: при reload WS присылает старые envelopes. Если ts <= maxTs,
@@ -3624,7 +3657,7 @@ async function pollHistoryForPeer(peer) {
             if (!contacts[peer]) {
                 contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
             }
-            contacts[peer].lastMessagePreview = sanitizePreview(bodyText);
+            contacts[peer].lastMessagePreview = previewForMsg(envelope);
             contacts[peer].lastTs = msg.ts;
             // Lesson #131 + #132.1: при ЛЮБОМ новом сообщении для этого
             // peer (входящем ИЛИ self-sender с другого устройства)
@@ -3741,10 +3774,10 @@ async function pollHistoryForPeer(peer) {
                                 // ReferenceError, .catch() глотал, ничего не
                                 // происходило. Lesson #232 inline update тоже
                                 // внутри цикла — работает. Сейчас то же самое.
-                                if (m.direction === "in" && m.body && contacts) {
+                                if (m.direction === "in" && contacts) {
                                     if (!contacts[peer]) contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
-                                    const preview = String(m.body).slice(0, 80);
-                                    if (contacts[peer].lastMessagePreview !== preview) {
+                                    const preview = previewForMsg(m); // v158c: файлы → 📎 имя
+                                    if (preview && contacts[peer].lastMessagePreview !== preview) {
                                         contacts[peer].lastMessagePreview = preview;
                                         contacts[peer].lastTs = m.ts || Date.now();
                                         renderChatList();
@@ -3839,16 +3872,24 @@ function resyncSidebarPreviews() {
         if (!body && newest.direction === "out") {
             body = newest.resolvedBody || newest.outbox_body || "";
         }
-        if (!body) continue;
-        const bodyStr = String(body);
+        // v158c: без body не выходим — у attachment-only сообщений превью
+        // строится из attachments_meta («📎 имя»), раньше они выпадали тут.
+        const hasBody = !!(body && String(body).trim());
+        if (!hasBody && !(newest.attachments_meta && newest.attachments_meta.length)) continue;
+        const preview = previewForMsg(newest);
         // Lesson #243 v2: пропускаем только если это raw ciphertext envelope.
         // '[не удалось расшифровать]' начинается с '[' — пропускать НЕ надо
         // (это валидное сообщение для UI).
         // 'Это самолет' и т.п. plaintext — тоже не начинается с '{'.
-        if (bodyStr.startsWith("{")) continue;
+        // v158c: превью через previewForMsg (файлы → 📎 имя; 🔒 для нерасшифрованных).
+        // НО: resync видит только последний msg; если у него нет ни текста, ни
+        // attachments_meta (старый кэш), а в contacts уже стоит 📎 или текст из
+        // более раннего рендера — НЕ откатывать на 🔒-плейсхолдер (мерцание).
+        const fallbackish = (preview === "🔒 зашифрованное сообщение");
+        const cur = contacts[peer] ? contacts[peer].lastMessagePreview : "";
+        if (fallbackish && cur && cur !== "🔒 зашифрованное сообщение") continue;
         if (!contacts[peer]) contacts[peer] = { peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
-        const preview = bodyStr.slice(0, 80);
-        if (contacts[peer].lastMessagePreview !== preview) {
+        if (preview && contacts[peer].lastMessagePreview !== preview) {
             contacts[peer].lastMessagePreview = preview;
             contacts[peer].lastTs = newest.ts || Date.now();
             any = true;
