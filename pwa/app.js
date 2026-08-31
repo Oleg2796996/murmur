@@ -1968,10 +1968,8 @@ async function loadHistory(peer, beforeTs) {
                     // или до установки PWA. Расшифровываем.
                 }
                 pDecrypt.push(decryptWithTimeout(m).then(async ({ text: bodyText, attachments: attArr, attachmentsMeta: mergedMeta }) => {
-                    const fromName = m.from_name || (m.envelope && m.envelope.from_name);
-                    if (fromNpub && fromName && fromNpub !== myNpub) {
-                        setContactName(fromNpub, fromName);
-                    }
+                    // Privacy v155: from_name из wire больше не читается — имена
+                    // контактов пользователь задаёт сам, локально.
                     // Для исходящих от меня: если decrypt упал (__DECRYPT_FAILED__) —
                     // НЕ показываем «🔒 не удалось расшифровать». Вместо этого
                     // показываем attachments_meta (если есть) или короткий
@@ -2611,8 +2609,10 @@ async function sendMessage() {
             attachments_meta: serverMeta, // [{blob_id, sha256, wrapped_key, iv, mime, size, name=f-…bin}] — real names INSIDE ct
             ts: Math.floor(Date.now() / 1000),
         };
-        const myName = (localStorage.getItem(LS_NAME) || "").trim();
-        if (myName && myName !== myNpub) msg.from_name = myName;
+        // Privacy v155 (Олег 2026-08-31): from_name УДАЛЁН из wire-формата.
+        // Имена контактов живут только локально (murmur.contact_names,
+        // setContactName) и никогда не покидают устройство. Получатель сам
+        // даёт имя контакту; поле from_name больше не читается в render-путях.
         const mod = await loadWasmModule();
         // Signature covers (from|to|ts|ct) via canonical envelope hash, same as
         // relay's `Envelope::verify`. sig input = SHA3(npub || payload).
@@ -3110,11 +3110,7 @@ function handleIncomingEnvelope(env) {
 
     // E2E: если есть `ct` — расшифровываем async, иначе plaintext fallback.
     decryptEnvelopeForRender(env).then(({ text: bodyText, isBinary, attachments, attachmentsMeta }) => {
-        // Remember peer's display name if it came along with the envelope.
-        const fromName = env.from_name || (env.envelope && env.envelope.from_name);
-        if (fromNpub && fromName && fromNpub !== myNpub) {
-            setContactName(fromNpub, fromName);
-        }
+        // Privacy v155: from_name не читаем — имя контакта задаёт получатель локально.
 
         const msg = {
             from: fromNpub, to: toField, body: bodyText, ts: env.ts,
@@ -3360,11 +3356,7 @@ async function pollHistoryForPeer(peer) {
             messages[peer].push(envelope);
             added = true;
 
-            // Remember peer's display name if present (envelope or top-level).
-            const fromName = msg.from_name || (msg.envelope && msg.envelope.from_name);
-            if (fromNpub && fromName && fromNpub !== myNpub) {
-                setContactName(fromNpub, fromName);
-            }
+            // Privacy v155: from_name не читаем — имя контакта задаёт получатель локально.
 
             if (!contacts[peer]) {
                 contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
