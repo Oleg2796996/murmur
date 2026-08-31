@@ -951,6 +951,9 @@ function previewForMsg(m) {
         let t = String(m.body || m.resolvedBody || m.outbox_body || "").trim();
         if (t.startsWith("{")) t = ""; // сырой envelope — считаем нерасшифрованным
         if (t && m.isBinary) t = "";  // "[binary, N bytes]" — чип файла, не текст
+        // v158d: chip вида «📎 имя (размер)» в body — это рендер аттача, не текст;
+        // при наличии attLabel дублирует имя → в превью не включаем.
+        if (t && attLabel && t.startsWith("📎")) t = "";
         if (t) return (attLabel ? attLabel + " · " : "") + t.slice(0, 80 - (attLabel ? attLabel.length + 3 : 0));
         if (attLabel) return attLabel;
         return "🔒 зашифрованное сообщение";
