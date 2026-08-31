@@ -568,6 +568,21 @@ async function decryptEnvelopeForRender(env) {
         const plain = await decryptEnvelope(ct);
         // plain = {body: string, attachments: [{name, mime, size, data_b64}]}
         let body = plain.body || "";
+        // Privacy v154: server meta carries neutral names (f-…bin). Merge REAL
+        // names/mime from decrypted ct onto attachmentsMeta (by index) so that
+        // renderAttachment / download chips show the true filename.
+        if (plain.attachments && plain.attachments.length && attachmentsMeta.length) {
+            for (let i = 0; i < attachmentsMeta.length; i++) {
+                const pa = plain.attachments[i];
+                if (pa && pa.name) {
+                    attachmentsMeta[i] = Object.assign({}, attachmentsMeta[i], {
+                        name: pa.name,
+                        _plainName: pa.name,
+                        _plainMime: pa.mime || null,
+                    });
+                }
+            }
+        }
         // Render attachments inline в body.
         if (plain.attachments && plain.attachments.length) {
             for (const a of plain.attachments) {
@@ -1952,7 +1967,7 @@ async function loadHistory(peer, beforeTs) {
                     // Нет локального — это сообщение отправлено с ДРУГОГО устройства
                     // или до установки PWA. Расшифровываем.
                 }
-                pDecrypt.push(decryptWithTimeout(m).then(async ({ text: bodyText, attachments: attArr }) => {
+                pDecrypt.push(decryptWithTimeout(m).then(async ({ text: bodyText, attachments: attArr, attachmentsMeta: mergedMeta }) => {
                     const fromName = m.from_name || (m.envelope && m.envelope.from_name);
                     if (fromNpub && fromName && fromNpub !== myNpub) {
                         setContactName(fromNpub, fromName);
@@ -2008,7 +2023,9 @@ async function loadHistory(peer, beforeTs) {
                         // Phase 3: relay's attachment_refs (blob_id, wrapped_key, iv, mime, name, size).
                         // Used by renderMessages to async decrypt + render incoming attachments.
                         // Lesson #328: для исходящих подменяем на outbox-версию с plaintext_b64.
-                        attachments_meta: outboxAttachmentsMeta || m.attachments || [],
+                        // Privacy v154: mergedMeta (= m/inner attachments_meta после слияния real names
+                        // из ct в decryptEnvelopeForRender) — тогда чипы получают настоящее имя.
+                        attachments_meta: outboxAttachmentsMeta || mergedMeta || m.attachments_meta || [],
                     };
                     newMsgs.push(msg);
                     if (hash) existingHashSet.add(hash);
@@ -2565,11 +2582,24 @@ async function sendMessage() {
             return;
         }
         // Clone meta before clearing, to avoid race with subsequent edits.
+        // Privacy split (Олег 2026-08-31):
+        //  - attachments_meta (SERVER-VISIBLE) → publicName (f-…bin), no real filename
+        //  - sealed ct → attachments[].name = real filename (только peer увидит)
         const metaSnapshot = pendingAttachmentsMeta.map((a) => Object.assign({}, a));
         const sealedB64 = await encryptForRecipient(peerKey.npub, {
             body: text,
             attachments: metaSnapshot.map((a) => ({ name: a.name, mime: a.mime, size: a.size })),
         });
+        // Server-visible meta: replace real names with neutral ones, drop plaintext_b64.
+        const serverMeta = metaSnapshot.map((a) => ({
+            blob_id: a.blob_id,
+            sha256: a.sha256,
+            wrapped_key: a.wrapped_key,
+            iv: a.iv,
+            mime: a.mime,
+            size: a.size,
+            name: a.publicName || "f-redacted.bin", // neutral — relay never sees filenames
+        }));
         pendingAttachments = []; // clear after encrypt
         pendingAttachmentsMeta = []; // clear after encrypt
         renderAttachmentsPreview();
@@ -2578,7 +2608,7 @@ async function sendMessage() {
             from: myNpub,
             to: activePeer,
             ct: sealedB64,         // ← E2E sealed envelope (base64)
-            attachments_meta: metaSnapshot, // [{blob_id, sha256, wrapped_key, name, mime, size}]
+            attachments_meta: serverMeta, // [{blob_id, sha256, wrapped_key, iv, mime, size, name=f-…bin}] — real names INSIDE ct
             ts: Math.floor(Date.now() / 1000),
         };
         const myName = (localStorage.getItem(LS_NAME) || "").trim();
@@ -2605,10 +2635,7 @@ async function sendMessage() {
         // sig не ломают, но хранятся в SQLite (envelopes.body + /api/history).
         // Стрипаем перед POST; в outbox (saveToOutbox) plaintext остаётся.
         const wireMsg = Object.assign({}, msg, {
-            attachments_meta: metaSnapshot.map((a) => {
-                const { plaintext_b64, ciphertext, _uploading, _progress, _tempId, ...wire } = a;
-                return wire;
-            }),
+            attachments_meta: serverMeta, // уже с нейтральными именами f-…bin (real names внутри ct)
         });
 
         // Lesson #159: собираем plaintext cache для outbox + optimistic render
@@ -2872,6 +2899,9 @@ if (btnAttach && fileInput) {
                         mime: result.mime,
                         size: file.size,
                         name: file.name,
+                        // Privacy: server-visible meta keeps the NEUTRAL upload name
+                        // (f-XXXXXXXX.bin); real filename lives only in the sealed ct.
+                        publicName: result.publicName,
                         _uploading: false,
                         _progress: 1,
                     });
@@ -3079,7 +3109,7 @@ function handleIncomingEnvelope(env) {
     }
 
     // E2E: если есть `ct` — расшифровываем async, иначе plaintext fallback.
-    decryptEnvelopeForRender(env).then(({ text: bodyText, isBinary, attachments }) => {
+    decryptEnvelopeForRender(env).then(({ text: bodyText, isBinary, attachments, attachmentsMeta }) => {
         // Remember peer's display name if it came along with the envelope.
         const fromName = env.from_name || (env.envelope && env.envelope.from_name);
         if (fromNpub && fromName && fromNpub !== myNpub) {
@@ -3091,6 +3121,9 @@ function handleIncomingEnvelope(env) {
             direction: "in",
             sig: env.sig || "", _sig: sigKey, _hash: hash,
             isBinary: isBinary, status: null, attachments: attachments || [],
+            // Privacy v154: attachmentsMeta теперь содержит real names (_plainName),
+            // слитые из расшифрованного ct → чипы показывают настоящее имя файла.
+            attachments_meta: attachmentsMeta || [],
         };
         messages[peer].push(msg);
 
@@ -3422,6 +3455,11 @@ async function pollHistoryForPeer(peer) {
                                 if (m.direction === "in") {
                                     m.body = r.text;
                                     if (r.attachments) m.attachments = r.attachments;
+                                    // Privacy v154: подтягиваем meta со слитыми real names
+                                    // из расшифровки (иначе чипы навсегда f-…bin).
+                                    if (r.attachmentsMeta && r.attachmentsMeta.length) {
+                                        m.attachments_meta = r.attachmentsMeta;
+                                    }
                                 }
                                 changed = true;
                                 // Lesson #238 v3 (Олег 2026-08-26 22:02 MSK):
