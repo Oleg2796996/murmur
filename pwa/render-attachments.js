@@ -272,9 +272,15 @@ function renderByMime({ mime, name, blobUrl, size }) {
     } else {
         const link = document.createElement("a");
         link.href = blobUrl;
-        link.download = name || "file";
+        // Privacy v156 (Олег «PDF приходят как *.bin»): если real name из
+        // расшифрованного ct не доехал (_plainName отсутствует — например,
+        // decrypt тела не удался), а нейтральное имя — f-…bin, выводим
+        // человекочитаемое имя с расширением из mime — иначе файл не
+        // открывается по клику. Если real name есть — он приоритетен.
+        const dlName = deriveFriendlyName(name, mime);
+        link.download = dlName;
         link.className = "attach-file";
-        link.textContent = `📎 ${name || "file"} (${formatSize(size)})`;
+        link.textContent = `📎 ${dlName} (${formatSize(size)})`;
         figure.appendChild(link);
     }
     if (name && mime.startsWith("image/")) {
@@ -289,6 +295,33 @@ function formatSize(n) {
     if (n < 1024) return `${n} B`;
     if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
     return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Privacy v156: если у чипа только нейтральное серверное имя (f-…bin),
+// а mime известен — строим нейтральное, но ОТКРЫВАЕМОЕ имя (file.pdf,
+// file.docx…). Real name из расшифровки не трогаем (приоритет у него).
+function deriveFriendlyName(name, mime) {
+    const n = name || "";
+    const hasRealExt = n && !n.endsWith(".bin") && n.includes(".");
+    if (hasRealExt || !mime || mime === "application/octet-stream") return n || "file";
+    const extMap = {
+        "application/pdf": "pdf",
+        "text/plain": "txt",
+        "application/msword": "doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+        "application/vnd.ms-excel": "xls",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+        "application/vnd.ms-powerpoint": "ppt",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+        "application/zip": "zip",
+        "application/json": "json",
+        "text/csv": "csv",
+        "application/epub+zip": "epub",
+        "application/rtf": "rtf",
+    };
+    const ext = extMap[mime] || (mime.split("/")[1] || "bin").replace(/[^a-z0-9]/gi, "");
+    const base = (n.replace(/\.bin$/i, "") || "file");
+    return base + "." + ext;
 }
 
 // Fullscreen lightbox for images
