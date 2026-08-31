@@ -323,8 +323,7 @@ const messageInput = $("message-input");
 const chatPeerName = $("chat-peer-name");
 const myNpubEl = $("my-npub");
 const chatSearch = $("chat-search");
-const newChatInput = $("new-chat-input");
-const btnNewChat = $("btn-new-chat");
+// const newChatInput / btnNewChat удалены 2026-08-31 вместе с UI-полем (решение Олега)
 const btnSend = $("btn-send");
 const btnBack = $("btn-back");
 const btnDeleteChat = $("btn-delete-chat"); // Lesson #129
@@ -881,7 +880,7 @@ function enterMessenger() {
         } catch (e) {}
         if (scriptVer === "?") scriptVer = window.__APP_VERSION__ || "?";
         banner.textContent = `app?v${scriptVer} · sw:push-only`;
-        banner.title = "Build murmur-v152. SW=push-only, no static control.";
+        banner.title = "Build murmur-v153. SW=push-only, no static control.";
     }
     if (myNpubEl) myNpubEl.textContent = truncateNpub(myNpub);
     const fullEl = $("my-npub-full");
@@ -2750,35 +2749,9 @@ async function sendMessage() {
 
 // ── New Chat ──
 // Input is always visible. Pressing + (or Enter in input) creates the chat.
-function createNewChatFromInput() {
-    const npub = newChatInput.value.trim();
-    if (!npub) {
-        newChatInput.focus();
-        return;
-    }
-    if (!npub.startsWith("npub1")) {
-        newChatInput.style.borderColor = "var(--danger)";
-        setTimeout(() => { newChatInput.style.borderColor = ""; }, 1200);
-        return;
-    }
-    if (contacts[npub]) {
-        openChat(npub);
-    } else {
-        contacts[npub] = { peer: npub, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
-        renderChatList();
-        openChat(npub);
-    }
-    newChatInput.value = "";
-}
-
-$("btn-new-chat")?.addEventListener("click", createNewChatFromInput);
-
-newChatInput?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-        e.preventDefault();
-        createNewChatFromInput();
-    }
-});
+// (поле «новый чат: alias или npub» + кнопка + удалены из index.html 2026-08-31
+// по решению Олега: контакты создаются через invite-ссылку или входящее сообщение.
+// createNewChatFromInput удалена заодно — alias там всё равно не работал, только npub1…)
 
 // ── Input handling ──
 messageInput?.addEventListener("input", () => {
