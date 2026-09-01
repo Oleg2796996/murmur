@@ -461,9 +461,10 @@ impl PushServer {
                             (Method::GET, "/api/contacts") => {
                                 handle_api_contacts(req, db.clone()).await
                             }
-                            // v160f: манифест с start_url?invite=... — iOS запоминает его
-                            // в момент «На экран Домой» → PWA стартует сразу с чатом.
-                            (Method::GET, "/manifest.json") => {
+                            // v160f/i: манифест с start_url — как точный /manifest.json
+                            // (с query), так и path-формат /manifest/<npub>.json
+                            // (iOS вырезает query из URL манифеста при A2HS — Lesson #358).
+                            (Method::GET, path) if path == "/manifest.json" || path.starts_with("/manifest/") => {
                                 handle_manifest(req, &static_dir).await
                             }
                             (Method::GET, "/api/history") => {
@@ -1100,25 +1101,42 @@ async fn handle_manifest(
         Ok(v) => v,
         Err(e) => return Ok(json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("manifest parse: {e}"))),
     };
-    // ?invite=npub1… → подменяем start_url (и scope остаётся "/").
-    if let Some(q) = req.uri().query() {
-        for kv in q.split('&') {
-            if let Some(inv) = kv.strip_prefix("invite=") {
-                let inv = percent_decode(inv);
-                if inv.starts_with("npub1") && inv.len() < 100 && inv.chars().all(|c| c.is_ascii_alphanumeric()) {
-                    if let Some(obj) = json.as_object_mut() {
-                        // v160h: iOS strips QUERY (и hash) из start_url при запуске PWA
-                        // (WebKit bug 195030), но PATH сохраняет → шлём /invite/<npub>.
-                        // scope обязателен явно: без него scope = директория start_url
-                        // (/invite/) и приложение теряет доступ к корню сайта.
-                        obj.insert(
-                            "start_url".to_string(),
-                            JsonValue::String(format!("/invite/{}", inv)),
-                        );
-                        obj.insert("scope".to_string(), JsonValue::String("/".to_string()));
+    // Invite из query (?invite=) ИЛИ из path (/manifest/npub1… или /manifest.json/npub1…).
+    // v160i: iOS вырезает QUERY из URL манифеста при A2HS (запрашивает
+    // /manifest.json без ?invite=) — поэтому клиент свапает href на PATH
+    // /manifest/<npub>.json, который iOS сохраняет целиком.
+    let mut invite: Option<String> = None;
+    let path_str = req.uri().path().to_string();
+    if let Some(m) = path_str.strip_prefix("/manifest/") {
+        let m = m.strip_suffix(".json").unwrap_or(m);
+        let inv = percent_decode(m);
+        if inv.starts_with("npub1") && inv.len() < 100 && inv.chars().all(|c| c.is_ascii_alphanumeric()) {
+            invite = Some(inv);
+        }
+    }
+    if invite.is_none() {
+        if let Some(q) = req.uri().query() {
+            for kv in q.split('&') {
+                if let Some(inv) = kv.strip_prefix("invite=") {
+                    let inv = percent_decode(inv);
+                    if inv.starts_with("npub1") && inv.len() < 100 && inv.chars().all(|c| c.is_ascii_alphanumeric()) {
+                        invite = Some(inv);
                     }
                 }
             }
+        }
+    }
+    if let Some(inv) = invite {
+        if let Some(obj) = json.as_object_mut() {
+            // v160h: iOS strips QUERY (и hash) из start_url при запуске PWA,
+            // но PATH сохраняет → шлём /invite/<npub>.
+            // scope обязателен явно: без него scope = директория start_url
+            // (/invite/) и приложение теряет доступ к корню сайта.
+            obj.insert(
+                "start_url".to_string(),
+                JsonValue::String(format!("/invite/{}", inv)),
+            );
+            obj.insert("scope".to_string(), JsonValue::String("/".to_string()));
         }
     }
     let body = json.to_string();

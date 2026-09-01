@@ -1898,6 +1898,9 @@ function handleInviteHash() {
     const pm = (location.pathname || "").match(/\/invite\/(npub1[a-z0-9]+)/i);
     const mt = (location.hash || "").match(/^#invite=(npub1[a-z0-9]+)/i);
     const q = new URLSearchParams(location.search).get("invite");
+    // v160i: cookie-мост — если URL пуст (iOS выкинул query/path из start_url),
+    // достаём npub из cookie, поставленной в Safari при открытии ссылки.
+    const ck = readInviteCookie();
     if (pm) {
         peer = pm[1];
         try { history.replaceState(null, "", "/"); } catch (e) {}
@@ -1907,8 +1910,13 @@ function handleInviteHash() {
     } else if (q && /^npub1[a-z0-9]+$/i.test(q)) {
         peer = q;
         try { history.replaceState(null, "", location.pathname); } catch (e) {}
+    } else if (ck) {
+        // Cookie-мост: URL пуст, но в Safari недавно открывали invite-ссылку.
+        peer = ck;
     }
     if (!peer) return;
+    // Cookie одноразовая: съели — стёрли (иначе чат будет всплывать при каждом старте).
+    if (ck && !pm) clearInviteCookie();
     // Если чат уже существует — просто открыть; иначе создать контакт и открыть.
     // Нюанс v160h: path-формат приходит из start_url ПРИ КАЖДОМ запуске PWA —
     // поэтому для него авто-открытие только если контакта ещё нет (не насилуем
@@ -4099,6 +4107,18 @@ function extractInviteNpub() {
     return (q && /^npub1[a-z0-9]+$/i.test(q)) ? q : null;
 }
 
+// v160i: cookie-мост Safari→PWA. index.html (inline head) ставит murmur_invite
+// при открытии invite-ссылки; если манифест-механизм не сработал (iOS кэш/нормализация),
+// PWA при старте достаёт npub отсюда. На iOS 17+ хранилища изолированы — cookie
+// сработает не везде, но на iOS 15/16 и Android/десктопе это спасает.
+function readInviteCookie() {
+    const m = document.cookie.match(/(?:^|;\s*)murmur_invite=(npub1[a-z0-9]+)/i);
+    return m ? m[1] : null;
+}
+function clearInviteCookie() {
+    try { document.cookie = "murmur_invite=; max-age=0; path=/; SameSite=Lax"; } catch (e) {}
+}
+
 // A. Invite → PWA-манифест: iOS запоминает start_url из манифеста в момент
 // «На экран Домой». Свапаем <link rel=manifest> на /manifest.json?invite=<npub>,
 // релей отдаёт копию с start_url="/?invite=<npub>" → PWA стартует сразу с чатом.
@@ -4107,7 +4127,8 @@ function extractInviteNpub() {
     if (!invite) return;
     const link = document.querySelector('link[rel="manifest"]');
     if (!link) return;
-    link.href = "/manifest.json?invite=" + encodeURIComponent(invite);
+    // v160i: path-формат манифеста (уникальный URL бьёт кэш iOS, без query).
+    link.href = "/manifest/" + invite + ".json";
     console.log("[invite] manifest swapped for PWA start_url:", link.href);
 })();
 
@@ -4334,7 +4355,8 @@ async function tryAutoRestore() {
         console.log("auto-restore: nothing saved");
         // v160f: invite в Safari (не-PWA) без личности → лендинг-инструкция,
         // чтобы аккаунт не создался в Safari-контейнере впустую.
-        const inv = extractInviteNpub();
+        // v160i: invite ищем и в URL, и в cookie-мосте (Safari→PWA).
+        const inv = extractInviteNpub() || readInviteCookie();
         if (inv && !isStandalonePWA()) showInviteLanding(inv);
         return;
     }
