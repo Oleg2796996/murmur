@@ -873,13 +873,37 @@ function renderOutgoingAttachment({ mime, name, url, size }) {
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(img, url);
         figure.appendChild(img);
     } else if (mime.startsWith("video/")) {
-        const v = document.createElement("video");
-        v.src = url;
-        v.controls = true;
-        v.preload = "metadata";
-        v.className = "attach-video";
-        if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(v, url);
-        figure.appendChild(v);
+        // v160: превью-кадр + play-кнопка (синхронно с render-attachments.js)
+        const wrap = document.createElement("div");
+        wrap.className = "video-preview";
+        const thumb = document.createElement("video");
+        thumb.src = url + "#t=0.1";
+        thumb.muted = true;
+        thumb.playsInline = true;
+        thumb.preload = "metadata";
+        thumb.className = "video-thumb";
+        const playBtn = document.createElement("div");
+        playBtn.className = "video-play-btn";
+        playBtn.textContent = "▶";
+        wrap.appendChild(thumb);
+        wrap.appendChild(playBtn);
+        wrap.onclick = () => {
+            const overlay = document.createElement("div");
+            overlay.className = "fullscreen-overlay";
+            const pv = document.createElement("video");
+            pv.src = url;
+            pv.controls = true;
+            pv.autoplay = true;
+            pv.playsInline = true;
+            pv.className = "fullscreen-video";
+            overlay.appendChild(pv);
+            overlay.onclick = (e) => {
+                if (e.target === overlay) { pv.pause(); overlay.remove(); }
+            };
+            document.body.appendChild(overlay);
+        };
+        if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(thumb, url);
+        figure.appendChild(wrap);
     } else if (mime.startsWith("audio/")) {
         const a = document.createElement("audio");
         a.src = url;
