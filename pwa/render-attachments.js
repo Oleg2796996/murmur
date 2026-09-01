@@ -254,13 +254,28 @@ function renderByMime({ mime, name, blobUrl, size }) {
         }
         figure.appendChild(img);
     } else if (mime.startsWith("video/")) {
-        const v = document.createElement("video");
-        v.src = blobUrl;
-        v.controls = true;
-        v.preload = "metadata";
-        v.className = "attach-video";
-        if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(v, blobUrl);
-        figure.appendChild(v);
+        // v160 (Олег 2026-09-01): превью-кадр + play-кнопка вместо чёрного
+        // <video controls> (iOS не показывает первый кадр при preload=metadata).
+        // Тап по превью → полноэкранный плеер с контролами.
+        const wrap = document.createElement("div");
+        wrap.className = "video-preview";
+        const thumb = document.createElement("video");
+        thumb.src = blobUrl;
+        thumb.muted = true;
+        thumb.playsInline = true;
+        thumb.preload = "metadata";
+        thumb.className = "video-thumb";
+        // Кадр для превью: iOS игнорирует #t=0.1 без загрузки metadata —
+        // ставим src с фрагментом, при ошибке остаётся просто тёмный фон.
+        thumb.src = blobUrl + "#t=0.1";
+        const playBtn = document.createElement("div");
+        playBtn.className = "video-play-btn";
+        playBtn.textContent = "▶";
+        wrap.appendChild(thumb);
+        wrap.appendChild(playBtn);
+        wrap.onclick = () => openVideoFullscreen(blobUrl, mime, name);
+        if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(thumb, blobUrl);
+        figure.appendChild(wrap);
     } else if (mime.startsWith("audio/")) {
         const a = document.createElement("audio");
         a.src = blobUrl;
@@ -336,6 +351,28 @@ function openFullscreen(blobUrl, mime) {
     img.src = blobUrl;
     img.className = "fullscreen-image";
     overlay.appendChild(img);
+    document.body.appendChild(overlay);
+}
+
+// v160: полноэкранный видеоплеер (tap по превью в чате).
+// blob URL НЕ ревокается — он принадлежит аттачу в чате (auto-revoke
+// через __murmurBlobOwners при удалении сообщения).
+function openVideoFullscreen(blobUrl, mime, name) {
+    const overlay = document.createElement("div");
+    overlay.className = "fullscreen-overlay";
+    const v = document.createElement("video");
+    v.src = blobUrl;
+    v.controls = true;
+    v.autoplay = true;
+    v.playsInline = true;
+    v.className = "fullscreen-video";
+    overlay.appendChild(v);
+    overlay.onclick = (e) => {
+        if (e.target === overlay) { // клик по фону, не по контролам
+            v.pause();
+            overlay.remove();
+        }
+    };
     document.body.appendChild(overlay);
 }
 
