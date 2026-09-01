@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
+    <base href="/">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#17212b">
@@ -36,6 +37,7 @@
     // #invite=?invite гарантированно дала PWA со start_url=/?invite=<npub>.
     (function () {
         var m = (location.hash || "").match(/invite=(npub1[a-z0-9]+)/i)
+            || (location.pathname || "").match(/\/invite\/(npub1[a-z0-9]+)/i)
             || (location.search || "").match(/[?&]invite=(npub1[a-z0-9]+)/i);
         if (!m) return;
         var l = document.querySelector('link[rel="manifest"]');
@@ -54,12 +56,12 @@
      script. iOS Safari PWA cached HTML может не иметь inline-script (HTML cache
      pre-bump). Meta tag читается через document.querySelector + .content
      (работает даже если inline script не выполнился). -->
-    <meta name="app-version" content="v160g">
+    <meta name="app-version" content="v160h">
     <!-- Lesson #216: cache busting via ?v= query string. iOS Safari PWA
      caches app.js via HTTP cache independently of SW. Query string forces
      re-fetch on each version bump. SW CACHE_VERSION also bumps for SW
      activation, but the app.js itself needs explicit URL change. -->
-    <link rel="stylesheet" href="styles.css?v=160g">
+    <link rel="stylesheet" href="styles.css?v=160h">
 </head>
 <body>
     <!-- ================= IDENTITY SCREEN (create/restore) ================= -->
@@ -231,8 +233,8 @@
      Query string = guaranteed fresh load on each deploy. -->
     <script src="blob-cache.js?v=160d" defer></script>
     <script src="app-store.js?v=160d" defer></script>
-    <script src="render-attachments.js?v=160g" defer></script>
-    <script src="app.js?v=160g" defer></script>
+    <script src="render-attachments.js?v=160h" defer></script>
+    <script src="app.js?v=160h" defer></script>
     <script>
       // Register service worker (push notifications only — Lesson #345).
       // Статикой SW не управляет (fetch-хендлера нет), так что

@@ -1886,34 +1886,44 @@ function renderChatList() {
 
 // ── UI Helpers (Invite & Logout) ───
 function handleInviteHash() {
-    // Deep-link вида …/#invite=<npub> (хэш) или /?invite=<npub> (query —
-    // так PWA стартует после «На экран Домой» с манифеста v160f).
-    // Выполняем только когда мы в мессенджере (identity есть).
+    // Deep-link invite, 3 формата (выполняем только в мессенджере, identity есть):
+    //   …/#invite=<npub>        — старые share-ссылки
+    //   /invite/<npub>           — v160h: path-формат для PWA start_url
+    //                              (iOS выбрасывает query и hash из start_url,
+    //                               path сохраняет — Lesson #358)
+    //   /?invite=<npub>          — legacy
     const m = document.querySelector(".messenger");
     if (!m) return;
     let peer = null;
+    const pm = (location.pathname || "").match(/\/invite\/(npub1[a-z0-9]+)/i);
     const mt = (location.hash || "").match(/^#invite=(npub1[a-z0-9]+)/i);
-    if (mt) {
+    const q = new URLSearchParams(location.search).get("invite");
+    if (pm) {
+        peer = pm[1];
+        try { history.replaceState(null, "", "/"); } catch (e) {}
+    } else if (mt) {
         peer = mt[1];
         try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {}
-    } else {
-        // query ?invite= (start_url после A2HS): чистим URL, но сохраняем
-        // npub — history.replaceState может не сохранить параметры.
-        const q = new URLSearchParams(location.search).get("invite");
-        if (q && /^npub1[a-z0-9]+$/i.test(q)) {
-            peer = q;
-            try { history.replaceState(null, "", location.pathname); } catch (e) {}
-        }
+    } else if (q && /^npub1[a-z0-9]+$/i.test(q)) {
+        peer = q;
+        try { history.replaceState(null, "", location.pathname); } catch (e) {}
     }
     if (!peer) return;
     // Если чат уже существует — просто открыть; иначе создать контакт и открыть.
+    // Нюанс v160h: path-формат приходит из start_url ПРИ КАЖДОМ запуске PWA —
+    // поэтому для него авто-открытие только если контакта ещё нет (не насилуем
+    // юзера переходом в чат пригласившего при каждом старте). Hash-ссылки
+    // (живой переход по ссылке) — открываем всегда.
     if (typeof openChat !== "function") return;
+    const fromStartUrl = !!pm;
     if (!contacts[peer]) {
         contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
         renderChatList();
+        openChat(peer);
+    } else if (!fromStartUrl) {
+        openChat(peer);
     }
-    openChat(peer);
-    setTimeout(() => { try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {} }, 50);
+    setTimeout(() => { try { history.replaceState(null, "", "/"); } catch (e) {} }, 50);
 }
 function setupInviteUI() {
     // Guard: enterMessenger может вызываться повторно (boot/restore/poll-reconnect).
@@ -4075,10 +4085,15 @@ function isStandalonePWA() {
         || window.navigator.standalone === true;
 }
 
-// Invite в URL? (#invite=npub1… или ?invite=npub1…). Возврат npub или null.
+// Invite в URL? Поддерживаем 3 формата:
+//   #invite=npub1…            — старые ссылки + share-ссылки из UI
+//   /invite/npub1…            — v160h: path-формат, iOS сохраняет path в start_url
+//                               (query из start_url iOS выбрасывает — Lesson #358)
+//   ?invite=npub1…            — legacy (iOS его тоже выбрасывает из start_url)
 function extractInviteNpub() {
-    const h = (location.hash || "").match(/[#&]invite=(npub1[a-z0-9]+)/i)
-        || (location.hash || "").match(/^#invite=(npub1[a-z0-9]+)/i);
+    const pm = (location.pathname || "").match(/\/invite\/(npub1[a-z0-9]+)/i);
+    if (pm) return pm[1];
+    const h = (location.hash || "").match(/[#&]invite=(npub1[a-z0-9]+)/i);
     if (h) return h[1];
     const q = new URLSearchParams(location.search).get("invite");
     return (q && /^npub1[a-z0-9]+$/i.test(q)) ? q : null;
