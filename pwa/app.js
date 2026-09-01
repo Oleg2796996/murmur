@@ -874,14 +874,15 @@ function renderOutgoingAttachment({ mime, name, url, size }) {
         figure.appendChild(img);
     } else if (mime.startsWith("video/")) {
         // v160: превью-кадр + play-кнопка (синхронно с render-attachments.js)
+        // v160b: + iOS canvas-фоллбек (iPhone не рисует кадр с blob-URL сам).
         const wrap = document.createElement("div");
         wrap.className = "video-preview";
         const thumb = document.createElement("video");
-        thumb.src = url + "#t=0.1";
         thumb.muted = true;
         thumb.playsInline = true;
         thumb.preload = "metadata";
         thumb.className = "video-thumb";
+        thumb.src = url + "#t=0.1";
         const playBtn = document.createElement("div");
         playBtn.className = "video-play-btn";
         playBtn.textContent = "▶";
@@ -904,6 +905,36 @@ function renderOutgoingAttachment({ mime, name, url, size }) {
         };
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(thumb, url);
         figure.appendChild(wrap);
+        // iOS canvas-фоллбек (см. render-attachments.js — общая логика v160b)
+        requestAnimationFrame(() => {
+            const paintFallback = () => {
+                try {
+                    const cv = document.createElement("canvas");
+                    cv.width = thumb.videoWidth || 320;
+                    cv.height = thumb.videoHeight || 240;
+                    cv.getContext("2d").drawImage(thumb, 0, 0, cv.width, cv.height);
+                    thumb.parentNode.insertBefore(cv, thumb);
+                    cv.className = "video-thumb video-thumb-canvas";
+                    thumb.style.position = "absolute";
+                    thumb.style.inset = "0";
+                    thumb.style.opacity = "0.01";
+                } catch (e) {}
+            };
+            let painted = false;
+            const tryPaint = () => {
+                if (painted) return;
+                if (thumb.readyState >= 2) { painted = true; setTimeout(paintFallback, 350); }
+            };
+            thumb.addEventListener("loadeddata", tryPaint);
+            thumb.addEventListener("canplay", tryPaint);
+            thumb.addEventListener("loadedmetadata", () => {
+                try { thumb.currentTime = 0.1; } catch (e) {}
+                const p = thumb.play();
+                if (p && p.catch) p.catch(() => {});
+                setTimeout(() => { try { thumb.pause(); } catch (e) {} }, 120);
+            });
+            setTimeout(tryPaint, 1200);
+        });
     } else if (mime.startsWith("audio/")) {
         const a = document.createElement("audio");
         a.src = url;
