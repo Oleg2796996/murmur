@@ -29,21 +29,25 @@
     <meta name="twitter:description" content="Децентрализованный мессенджер без слежки. Открой ссылку, чтобы присоединиться.">
     <meta name="twitter:image" content="https://murmur.senswifi.ru/og-image.png">
     <title>murmur</title>
-    <link rel="manifest" href="manifest.json?v=2">
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=3">
-    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=3">
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=2">
+    <link rel="manifest" href="manifest.json?v=3">
+    <!-- v160e: иконки переименованы в новые имена файлов — iOS отбрасывает ?v= от
+         apple-touch-icon (canonicalization), а кэш иконок iOS переживает «Очистить
+         историю и данные». Новый путь = новый ключ кэша CF + iOS. -->
+    <link rel="apple-touch-icon" href="/ati-2026b.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/i192-2026b.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
+    <link rel="shortcut icon" href="/favicon-2026b.ico">
     <link rel="mask-icon" href="/mask-icon.svg" color="#229ED9">
     <!-- Lesson #222 (Олег 2026-08-26 15:55): put version in meta tag AND inline
      script. iOS Safari PWA cached HTML может не иметь inline-script (HTML cache
      pre-bump). Meta tag читается через document.querySelector + .content
      (работает даже если inline script не выполнился). -->
-    <meta name="app-version" content="v160d">
+    <meta name="app-version" content="v160e">
     <!-- Lesson #216: cache busting via ?v= query string. iOS Safari PWA
      caches app.js via HTTP cache independently of SW. Query string forces
      re-fetch on each version bump. SW CACHE_VERSION also bumps for SW
      activation, but the app.js itself needs explicit URL change. -->
-    <link rel="stylesheet" href="styles.css?v=160d">
+    <link rel="stylesheet" href="styles.css?v=160e">
 </head>
 <body>
     <!-- ================= IDENTITY SCREEN (create/restore) ================= -->
@@ -64,7 +68,14 @@
                 <h2>Новый аккаунт</h2>
                 <button id="btn-create" class="primary">Создать</button>
             </div>
-            <!-- Restore section removed for cleaner onboarding -->
+            <!-- v160e: восстановление вернули — перенос личности между Safari-вкладкой
+                 и PWA (разные хранилища на iOS) и между устройствами -->
+            <div class="identity-section">
+                <h2>У меня есть ключ</h2>
+                <input id="restore-hex" type="password" autocomplete="off" spellcheck="false"
+                       placeholder="ключ (64 символа)" style="width:100%;box-sizing:border-box;background:#0e1621;color:#e8edf2;border:1px solid #2a3b4d;border-radius:8px;padding:10px;font-size:13px;margin-bottom:8px;">
+                <button id="btn-restore" class="secondary">Восстановить</button>
+            </div>
         </div>
     </div>
 
@@ -82,6 +93,7 @@
 
             <div class="sidebar-footer">
                 <button id="btn-invite" class="invite-btn-green">Пригласить друга ✉</button>
+                <button id="btn-show-key" class="logout-btn-danger" title="Показать ключ для переноса на другое устройство" style="background:#2b5278;">Мой ключ 🔑</button>
                 <button id="btn-logout" class="logout-btn-danger" title="Удалить все данные">Удалить все данные</button>
             </div>
 
@@ -201,8 +213,8 @@
      Query string = guaranteed fresh load on each deploy. -->
     <script src="blob-cache.js?v=160d" defer></script>
     <script src="app-store.js?v=160d" defer></script>
-    <script src="render-attachments.js?v=160d" defer></script>
-    <script src="app.js?v=160d" defer></script>
+    <script src="render-attachments.js?v=160e" defer></script>
+    <script src="app.js?v=160e" defer></script>
     <script>
       // Register service worker (push notifications only — Lesson #345).
       // Статикой SW не управляет (fetch-хендлера нет), так что

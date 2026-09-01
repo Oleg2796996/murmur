@@ -52,8 +52,8 @@ self.addEventListener("push", (event) => {
     // ignore the field. v149: subtitle = short npub (имена — на клиенте).
     subtitle: payload.subtitle || "",
     body: payload.body || "Откройте murmur, чтобы прочитать сообщение",
-    icon: "/icon-192.png",
-    badge: "/icon-192.png",
+    icon: "/i192-2026b.png",
+    badge: "/i192-2026b.png",
     tag: "murmur-" + (payload.envelope_hash_hex || "").slice(0, 8),
     renotify: true,
     data: {
