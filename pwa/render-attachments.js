@@ -414,20 +414,22 @@ window.murmurSetupVideoPreview = function (wrap, thumb, blobUrl) {
     // До загрузки — дефолт 16/9, чтобы было куда рисовать кадр.
     if (!wrap.style.aspectRatio) wrap.style.aspectRatio = "16 / 9";
 
-    // 2. iOS: muted-автопроигрывание — единственный надёжный способ показать
-    //    кадр (preload=metadata и #t=0.1 iOS игнорирует на blob-URL).
-    //    loop чтобы кадр не замирал на последнем кадре.
-    thumb.loop = true;
-    const tryPlay = () => {
-        const p = thumb.play();
-        if (p && p.catch) p.catch(() => {
-            // Автоплей заблокирован — пробуем по первому тапу (wrap.onclick
-            // открывает fullscreen, но play() внутри жеста разрешён; кадр
-            // останется чёрным только до тапа).
-        });
-    };
-    thumb.addEventListener("canplay", tryPlay, { once: true });
-    setTimeout(tryPlay, 800); // страховка: canplay может не прийти на iOS
+    // 2. Автоплей-луп — ТОЛЬКО как iOS-фолбэк, когда постера НЕТ (v160j:
+    // бесконечное декодирование видео на десктопе + копии blob'ов в памяти
+    // вешали вкладку при приёме видео). Если постер есть — видео НЕ играем:
+    // кадр уже нарисован на poster, экономим CPU/память.
+    if (!thumb.poster) {
+        thumb.loop = true;
+        const tryPlay = () => {
+            const p = thumb.play();
+            if (p && p.catch) p.catch(() => {});
+        };
+        thumb.addEventListener("canplay", tryPlay, { once: true });
+        setTimeout(tryPlay, 800); // страховка: canplay может не прийти на iOS
+    } else {
+        // Постер от отправителя: превью статично, декодирование не нужно.
+        // iOS покажет poster (это <img>-механика), десктоп — тоже.
+    }
 
     // 3. requestVideoFrameCallback — если доступен, ничего больше не нужно:
     //    кадр отрисуется браузером (и на iOS при активном воспроизведении).

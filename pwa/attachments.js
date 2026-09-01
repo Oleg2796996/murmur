@@ -227,32 +227,66 @@ async function extractVideoPoster(file) {
             resolve(val);
         };
         const url = URL.createObjectURL(file);
-        const timer = setTimeout(() => finish(null), 8000);
+        const timer = setTimeout(() => finish(null), 10000);
         try {
             const v = document.createElement("video");
             v.muted = true;
             v.playsInline = true;
             v.preload = "auto";
             v.src = url;
+            // v160j (Олег: «по прежнему нет превью на телефоне»): iOS декодирует
+            // видео ТОЛЬКО после начала воспроизведения — drawImage по неиграющему
+            // видео даёт чёрный кадр (браковался → poster=null → превью нет).
+            // Фикс: сразу muted-play (iOS разрешает без жеста; Lesson v160c),
+            // ждём первый декодированный кадр (rVFC), потом seek → grab.
+            let playStarted = false;
+            const tryPlay = () => {
+                if (playStarted) return;
+                playStarted = true;
+                const p = v.play();
+                if (p && p.catch) p.catch(() => { /* Low Power Mode — останется старый путь */ });
+            };
+            let grabTries = 0;
             const grab = () => {
                 try {
+                    // v160j hardening: на холодном декодере seeked может прийти
+                    // раньше, чем decodeThread выдаст кадры (наблюдаемо в WebKit
+                    // headless) — не бракуем сразу, ретраим до 1.5с.
+                    if ((!v.videoWidth || !v.videoHeight) && grabTries++ < 5) {
+                        return setTimeout(grab, 300);
+                    }
                     if (!v.videoWidth || !v.videoHeight) return finish(null);
                     const cv = document.createElement("canvas");
                     cv.width = v.videoWidth;
                     cv.height = v.videoHeight;
-                    cv.getContext("2d").drawImage(v, 0, 0);
+                    const ctx = cv.getContext("2d");
+                    ctx.drawImage(v, 0, 0);
                     // Чёрный кадр = декод не удался (iOS до play) — бракуем.
-                    const px = cv.getContext("2d").getImageData(
+                    const px = ctx.getImageData(
                         cv.width >> 1, cv.height >> 1, 1, 1).data;
-                    if (px[0] + px[1] + px[2] < 12) return finish(null);
+                    if (px[0] + px[1] + px[2] < 12) {
+                        // Возможно, кадр ещё не декодирован — одна ретра-попытка.
+                        if (grabTries++ < 5) return setTimeout(grab, 300);
+                        return finish(null);
+                    }
+                    try { v.pause(); } catch (e) {}
                     finish(cv.toDataURL("image/jpeg", 0.6));
                 } catch (e) { finish(null); }
             };
             v.addEventListener("loadeddata", () => {
-                // Чуть отматываем от нулевого кадра (там часто чёрный/заставка).
+                tryPlay();
                 const t = Math.min(0.5, (v.duration || 1) * 0.25);
-                v.addEventListener("seeked", grab, { once: true });
-                try { v.currentTime = t; } catch (e) { grab(); }
+                const doSeek = () => {
+                    v.addEventListener("seeked", grab, { once: true });
+                    try { v.currentTime = t; } catch (e) { grab(); }
+                };
+                if (typeof v.requestVideoFrameCallback === "function") {
+                    // iOS: ждём РЕАЛЬНО декодированный кадр, потом seek.
+                    v.requestVideoFrameCallback(() => doSeek());
+                    setTimeout(doSeek, 1500); // страховка, если rVFC завис
+                } else {
+                    setTimeout(doSeek, 600);
+                }
             }, { once: true });
             v.addEventListener("error", () => finish(null), { once: true });
         } catch (e) { finish(null); }
