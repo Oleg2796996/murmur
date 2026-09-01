@@ -1107,10 +1107,15 @@ async fn handle_manifest(
                 let inv = percent_decode(inv);
                 if inv.starts_with("npub1") && inv.len() < 100 && inv.chars().all(|c| c.is_ascii_alphanumeric()) {
                     if let Some(obj) = json.as_object_mut() {
+                        // v160h: iOS strips QUERY (и hash) из start_url при запуске PWA
+                        // (WebKit bug 195030), но PATH сохраняет → шлём /invite/<npub>.
+                        // scope обязателен явно: без него scope = директория start_url
+                        // (/invite/) и приложение теряет доступ к корню сайта.
                         obj.insert(
                             "start_url".to_string(),
-                            JsonValue::String(format!("/?invite={}", inv)),
+                            JsonValue::String(format!("/invite/{}", inv)),
                         );
+                        obj.insert("scope".to_string(), JsonValue::String("/".to_string()));
                     }
                 }
             }
