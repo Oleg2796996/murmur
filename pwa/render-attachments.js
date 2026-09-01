@@ -257,16 +257,15 @@ function renderByMime({ mime, name, blobUrl, size }) {
         // v160 (Олег 2026-09-01): превью-кадр + play-кнопка вместо чёрного
         // <video controls> (iOS не показывает первый кадр при preload=metadata).
         // Тап по превью → полноэкранный плеер с контролами.
+        // v160b: iOS Safari не рисует кадр с blob-URL (игнорирует preload=metadata
+        // и #t=0.1) → canvas-фоллбек: рисуем кадр сами через drawImage(video).
         const wrap = document.createElement("div");
         wrap.className = "video-preview";
         const thumb = document.createElement("video");
-        thumb.src = blobUrl;
         thumb.muted = true;
         thumb.playsInline = true;
         thumb.preload = "metadata";
         thumb.className = "video-thumb";
-        // Кадр для превью: iOS игнорирует #t=0.1 без загрузки metadata —
-        // ставим src с фрагментом, при ошибке остаётся просто тёмный фон.
         thumb.src = blobUrl + "#t=0.1";
         const playBtn = document.createElement("div");
         playBtn.className = "video-play-btn";
@@ -276,6 +275,40 @@ function renderByMime({ mime, name, blobUrl, size }) {
         wrap.onclick = () => openVideoFullscreen(blobUrl, mime, name);
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(thumb, blobUrl);
         figure.appendChild(wrap);
+        // iOS canvas-фоллбек: на iPhone кадр может не появиться сам — рисуем
+        // его на canvas. iOS требует, чтобы video был в DOM, muted+playsinline
+        // и получил play() — иначе drawImage даёт чёрный кадр.
+        requestAnimationFrame(() => {
+            const paintFallback = () => {
+                try {
+                    const cv = document.createElement("canvas");
+                    cv.width = thumb.videoWidth || 320;
+                    cv.height = thumb.videoHeight || 240;
+                    cv.getContext("2d").drawImage(thumb, 0, 0, cv.width, cv.height);
+                    thumb.parentNode.insertBefore(cv, thumb);
+                    cv.className = "video-thumb video-thumb-canvas";
+                    thumb.style.position = "absolute";
+                    thumb.style.inset = "0";
+                    thumb.style.opacity = "0.01"; // video остаётся кликабельным-невидимым, canvas показывает кадр
+                } catch (e) { /* drawImage может кинуть на незагруженном видео */ }
+            };
+            let painted = false;
+            const tryPaint = () => {
+                if (painted) return;
+                if (thumb.readyState >= 2) { painted = true; setTimeout(paintFallback, 350); }
+            };
+            thumb.addEventListener("loadeddata", tryPaint);
+            thumb.addEventListener("canplay", tryPaint);
+            // iOS-трюк: muted+playsinline play() на мгновение и pause — после
+            // этого videoWidth/frame доступны и drawImage работает.
+            thumb.addEventListener("loadedmetadata", () => {
+                try { thumb.currentTime = 0.1; } catch (e) {}
+                const p = thumb.play();
+                if (p && p.catch) p.catch(() => {});
+                setTimeout(() => { try { thumb.pause(); } catch (e) {} }, 120);
+            });
+            setTimeout(tryPaint, 1200);
+        });
     } else if (mime.startsWith("audio/")) {
         const a = document.createElement("audio");
         a.src = blobUrl;
