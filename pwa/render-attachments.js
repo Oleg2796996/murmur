@@ -275,40 +275,10 @@ function renderByMime({ mime, name, blobUrl, size }) {
         wrap.onclick = () => openVideoFullscreen(blobUrl, mime, name);
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(thumb, blobUrl);
         figure.appendChild(wrap);
-        // iOS canvas-фоллбек: на iPhone кадр может не появиться сам — рисуем
-        // его на canvas. iOS требует, чтобы video был в DOM, muted+playsinline
-        // и получил play() — иначе drawImage даёт чёрный кадр.
-        requestAnimationFrame(() => {
-            const paintFallback = () => {
-                try {
-                    const cv = document.createElement("canvas");
-                    cv.width = thumb.videoWidth || 320;
-                    cv.height = thumb.videoHeight || 240;
-                    cv.getContext("2d").drawImage(thumb, 0, 0, cv.width, cv.height);
-                    thumb.parentNode.insertBefore(cv, thumb);
-                    cv.className = "video-thumb video-thumb-canvas";
-                    thumb.style.position = "absolute";
-                    thumb.style.inset = "0";
-                    thumb.style.opacity = "0.01"; // video остаётся кликабельным-невидимым, canvas показывает кадр
-                } catch (e) { /* drawImage может кинуть на незагруженном видео */ }
-            };
-            let painted = false;
-            const tryPaint = () => {
-                if (painted) return;
-                if (thumb.readyState >= 2) { painted = true; setTimeout(paintFallback, 350); }
-            };
-            thumb.addEventListener("loadeddata", tryPaint);
-            thumb.addEventListener("canplay", tryPaint);
-            // iOS-трюк: muted+playsinline play() на мгновение и pause — после
-            // этого videoWidth/frame доступны и drawImage работает.
-            thumb.addEventListener("loadedmetadata", () => {
-                try { thumb.currentTime = 0.1; } catch (e) {}
-                const p = thumb.play();
-                if (p && p.catch) p.catch(() => {});
-                setTimeout(() => { try { thumb.pause(); } catch (e) {} }, 120);
-            });
-            setTimeout(tryPaint, 1200);
-        });
+        // v160c: общий сетап превью — реализация в window.murmurSetupVideoPreview
+        // (ниже в этом файле). Чинит регресс v160b: video+canvas оба absolute
+        // → wrap схлопывался в 0 высоты (на маке «показался и пропал»).
+        if (window.murmurSetupVideoPreview) window.murmurSetupVideoPreview(wrap, thumb, blobUrl);
     } else if (mime.startsWith("audio/")) {
         const a = document.createElement("audio");
         a.src = blobUrl;
@@ -413,3 +383,55 @@ if (typeof module !== "undefined" && module.exports) {
     module.exports = { renderAttachment };
 }
 window.MurmurRenderAttachments = { renderAttachment };
+
+// ═══════════════════════════════════════════════════════════════════
+// v160c: общий сетап видео-превью (входящие + исходящие).
+//
+// Стратегия:
+//   1. video остаётся В ПОТОКЕ (не absolute!) — wrap не схлопывается.
+//   2. Высота обёртки: aspect-ratio по реальным пропорциям видео
+//      (фиксирует размер до загрузки; при неизвестных пропорциях — 16/9).
+//   3. Кадр: на маке/Android Safari/Chrome рисует видео сам. Для iOS
+//      включаем muted-автопроигрывание — iOS показывает текущий кадр,
+//      и НЕ рисуем canvas вовсе (v160b canvas-слой был причиной регресса).
+//      iOS: видео остаётся играет (muted, loop, без контролов) — кадр живой.
+//   4. requestVideoFrameCallback (Safari 15.4+) — надёжный сигнал «кадр
+//      реально показан»; если он есть — вообще без таймеров.
+//
+// Урок v160b: НЕ вставлять под видео absolute-слои — выносит из потока.
+// ═══════════════════════════════════════════════════════════════════
+window.murmurSetupVideoPreview = function (wrap, thumb, blobUrl) {
+    if (!wrap || !thumb) return;
+
+    // 1. Гарантированная высота: фиксируем пропорции сразу.
+    thumb.addEventListener("loadedmetadata", () => {
+        const w = thumb.videoWidth || 16;
+        const h = thumb.videoHeight || 9;
+        if (w && h) wrap.style.aspectRatio = `${w} / ${h}`;
+    });
+    // До загрузки — дефолт 16/9, чтобы было куда рисовать кадр.
+    if (!wrap.style.aspectRatio) wrap.style.aspectRatio = "16 / 9";
+
+    // 2. iOS: muted-автопроигрывание — единственный надёжный способ показать
+    //    кадр (preload=metadata и #t=0.1 iOS игнорирует на blob-URL).
+    //    loop чтобы кадр не замирал на последнем кадре.
+    thumb.loop = true;
+    const tryPlay = () => {
+        const p = thumb.play();
+        if (p && p.catch) p.catch(() => {
+            // Автоплей заблокирован — пробуем по первому тапу (wrap.onclick
+            // открывает fullscreen, но play() внутри жеста разрешён; кадр
+            // останется чёрным только до тапа).
+        });
+    };
+    thumb.addEventListener("canplay", tryPlay, { once: true });
+    setTimeout(tryPlay, 800); // страховка: canplay может не прийти на iOS
+
+    // 3. requestVideoFrameCallback — если доступен, ничего больше не нужно:
+    //    кадр отрисуется браузером (и на iOS при активном воспроизведении).
+    if (typeof thumb.requestVideoFrameCallback === "function") {
+        thumb.requestVideoFrameCallback(() => {
+            wrap.classList.add("video-frame-ready");
+        });
+    }
+};
