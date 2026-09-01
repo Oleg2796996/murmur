@@ -251,7 +251,19 @@ pub fn accept_envelope(
     }
 
     // 7. Push delivery.
+    // v159: receipts (_kind:"receipt") deliver silently — they are service
+    // messages (✓✓ read markers), not chats worth waking the sender's phone.
+    // The marker lives in the outer JSON (same level as from/to/ct/sig) and
+    // is NOT signed — checking it here is routing policy, not verification.
+    let is_receipt = parsed.json_path
+        && serde_json::from_slice::<serde_json::Value>(&parsed.payload)
+            .ok()
+            .and_then(|v| v.get("_kind").and_then(|k| k.as_str()).map(|s| s == "receipt"))
+            .unwrap_or(false);
     if let Some(push) = push {
+        if is_receipt {
+            info!(to=%recipient_npub, "receipt envelope: WS-only, no web-push");
+        } else {
         let push = push.clone();
         let payload = crate::push::PushPayload::from_entry(&entry, store);
         let npub_for_log = recipient_npub.clone();
@@ -262,6 +274,7 @@ pub fn accept_envelope(
                 Err(e) => warn!(err=%e, "push deliver failed"),
             }
         });
+        }
     }
 
     Ok((hash_hex, n))
