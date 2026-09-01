@@ -1886,15 +1886,26 @@ function renderChatList() {
 
 // ── UI Helpers (Invite & Logout) ───
 function handleInviteHash() {
-    // Deep-link вида https://host/#invite=<npub>.
+    // Deep-link вида …/#invite=<npub> (хэш) или /?invite=<npub> (query —
+    // так PWA стартует после «На экран Домой» с манифеста v160f).
     // Выполняем только когда мы в мессенджере (identity есть).
     const m = document.querySelector(".messenger");
     if (!m) return;
-    const h = (location.hash || "");
-    const mt = h.match(/^#invite=(npub1[a-z0-9]+)/i);
-    if (!mt) return;
-    const peer = mt[1];
-    try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {}
+    let peer = null;
+    const mt = (location.hash || "").match(/^#invite=(npub1[a-z0-9]+)/i);
+    if (mt) {
+        peer = mt[1];
+        try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {}
+    } else {
+        // query ?invite= (start_url после A2HS): чистим URL, но сохраняем
+        // npub — history.replaceState может не сохранить параметры.
+        const q = new URLSearchParams(location.search).get("invite");
+        if (q && /^npub1[a-z0-9]+$/i.test(q)) {
+            peer = q;
+            try { history.replaceState(null, "", location.pathname); } catch (e) {}
+        }
+    }
+    if (!peer) return;
     // Если чат уже существует — просто открыть; иначе создать контакт и открыть.
     if (typeof openChat !== "function") return;
     if (!contacts[peer]) {
