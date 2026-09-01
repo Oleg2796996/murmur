@@ -30,6 +30,18 @@
     <meta name="twitter:image" content="https://murmur.senswifi.ru/og-image.png">
     <title>murmur</title>
     <link rel="manifest" href="manifest.json?v=3">
+    <script>
+    // v160f: invite → PWA start_url. iOS читает манифест В МОМЕНТ «На экран
+    // Домой» — свапаем href ДО загрузки app.js (defer), чтобы ссылка с
+    // #invite=?invite гарантированно дала PWA со start_url=/?invite=<npub>.
+    (function () {
+        var m = (location.hash || "").match(/invite=(npub1[a-z0-9]+)/i)
+            || (location.search || "").match(/[?&]invite=(npub1[a-z0-9]+)/i);
+        if (!m) return;
+        var l = document.querySelector('link[rel="manifest"]');
+        if (l) l.href = "/manifest.json?invite=" + encodeURIComponent(m[1]);
+    })();
+    </script>
     <!-- v160e: иконки переименованы в новые имена файлов — iOS отбрасывает ?v= от
          apple-touch-icon (canonicalization), а кэш иконок iOS переживает «Очистить
          историю и данные». Новый путь = новый ключ кэша CF + iOS. -->
@@ -42,12 +54,12 @@
      script. iOS Safari PWA cached HTML может не иметь inline-script (HTML cache
      pre-bump). Meta tag читается через document.querySelector + .content
      (работает даже если inline script не выполнился). -->
-    <meta name="app-version" content="v160f">
+    <meta name="app-version" content="v160g">
     <!-- Lesson #216: cache busting via ?v= query string. iOS Safari PWA
      caches app.js via HTTP cache independently of SW. Query string forces
      re-fetch on each version bump. SW CACHE_VERSION also bumps for SW
      activation, but the app.js itself needs explicit URL change. -->
-    <link rel="stylesheet" href="styles.css?v=160f">
+    <link rel="stylesheet" href="styles.css?v=160g">
 </head>
 <body>
     <!-- ================= IDENTITY SCREEN (create/restore) ================= -->
@@ -219,8 +231,8 @@
      Query string = guaranteed fresh load on each deploy. -->
     <script src="blob-cache.js?v=160d" defer></script>
     <script src="app-store.js?v=160d" defer></script>
-    <script src="render-attachments.js?v=160f" defer></script>
-    <script src="app.js?v=160f" defer></script>
+    <script src="render-attachments.js?v=160g" defer></script>
+    <script src="app.js?v=160g" defer></script>
     <script>
       // Register service worker (push notifications only — Lesson #345).
       // Статикой SW не управляет (fetch-хендлера нет), так что
