@@ -211,9 +211,61 @@ function uploadCiphertext({ sha256Hex, mime, name, size, wrappedKey, ciphertext,
 // Returns: { blob_id, sha256, mime, size, name, wrapped_key }
 //
 // On failure, throws. Caller decides UX (toast / retry / abort).
+// v160d: постер-кадр для видео. Вызывается У ОТПРАВИТЕЛЯ в момент выбора
+// файла (юзер-жест → iOS разрешает декодирование blob-video и drawImage).
+// Получатель ставит кадр как video.poster — iOS показывает постер ВСЕГДА,
+// без декодирования (preload/#t на iPhone игнорируются — Lesson v160b/c).
+// Возврат: data:image/jpeg;base64,… или null (не критично — мак рисует сам).
+async function extractVideoPoster(file) {
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (val) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            try { URL.revokeObjectURL(url); } catch (e) {}
+            resolve(val);
+        };
+        const url = URL.createObjectURL(file);
+        const timer = setTimeout(() => finish(null), 8000);
+        try {
+            const v = document.createElement("video");
+            v.muted = true;
+            v.playsInline = true;
+            v.preload = "auto";
+            v.src = url;
+            const grab = () => {
+                try {
+                    if (!v.videoWidth || !v.videoHeight) return finish(null);
+                    const cv = document.createElement("canvas");
+                    cv.width = v.videoWidth;
+                    cv.height = v.videoHeight;
+                    cv.getContext("2d").drawImage(v, 0, 0);
+                    // Чёрный кадр = декод не удался (iOS до play) — бракуем.
+                    const px = cv.getContext("2d").getImageData(
+                        cv.width >> 1, cv.height >> 1, 1, 1).data;
+                    if (px[0] + px[1] + px[2] < 12) return finish(null);
+                    finish(cv.toDataURL("image/jpeg", 0.6));
+                } catch (e) { finish(null); }
+            };
+            v.addEventListener("loadeddata", () => {
+                // Чуть отматываем от нулевого кадра (там часто чёрный/заставка).
+                const t = Math.min(0.5, (v.duration || 1) * 0.25);
+                v.addEventListener("seeked", grab, { once: true });
+                try { v.currentTime = t; } catch (e) { grab(); }
+            }, { once: true });
+            v.addEventListener("error", () => finish(null), { once: true });
+        } catch (e) { finish(null); }
+    });
+}
+
 async function attachEncryptAndUpload({ file, peerNpub, selfNpub, onProgress }) {
     // a. Compress if large image (Lesson #327 — speed)
     const compressedFile = await compressImageIfLarge(file);
+    // v160d: постер для видео — снимаем ДО шифрования, у отправителя.
+    const posterDataUrl = (file.type && file.type.startsWith("video/"))
+        ? await extractVideoPoster(file)
+        : null;
     // b. Read file as ArrayBuffer
     const ab = await compressedFile.arrayBuffer();
     // b. SHA-256 (for integrity check before upload)
@@ -262,11 +314,12 @@ async function attachEncryptAndUpload({ file, peerNpub, selfNpub, onProgress }) 
         wrapped_key: wrappedKey, // for recipient to unwrap with own privkey
         iv: b64encode(iv), // base64 — recipient decodes to 12-byte IV
         plaintext_b64: b64encode(new Uint8Array(ab)), // local cache for outgoing render
+        poster_data_url: posterDataUrl, // v160d: JPEG-кадр для превью (в sealed ct)
     };
 }
 
 // Export for ES module use, and global fallback for service-worker.
 if (typeof module !== "undefined" && module.exports) {
-    module.exports = { attachEncryptAndUpload };
+    module.exports = { attachEncryptAndUpload, extractVideoPoster };
 }
-window.MurmurAttachments = { attachEncryptAndUpload };
+window.MurmurAttachments = { attachEncryptAndUpload, extractVideoPoster };

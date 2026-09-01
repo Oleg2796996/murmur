@@ -586,6 +586,9 @@ async function decryptEnvelopeForRender(env) {
                         name: pa.name,
                         _plainName: pa.name,
                         _plainMime: pa.mime || null,
+                        // v160d: постер-кадр видео (data:image/jpeg;base64) —
+                        // извлечён отправителем, релей его не видел (внутри ct).
+                        _plainPoster: pa.poster_data_url || null,
                     });
                 }
             }
@@ -860,7 +863,7 @@ function b64ToBlob(b64, mime) {
 }
 
 // Render an outgoing attachment from local plaintext (no decrypt round-trip).
-function renderOutgoingAttachment({ mime, name, url, size }) {
+function renderOutgoingAttachment({ mime, name, url, size, poster }) {
     const figure = document.createElement("figure");
     figure.className = "attach-figure";
     if (mime.startsWith("image/")) {
@@ -884,6 +887,7 @@ function renderOutgoingAttachment({ mime, name, url, size }) {
         thumb.preload = "metadata";
         thumb.className = "video-thumb";
         thumb.src = url + "#t=0.1";
+        if (poster) thumb.poster = poster; // v160d: кадр от отправителя (iOS)
         const playBtn = document.createElement("div");
         playBtn.className = "video-play-btn";
         playBtn.textContent = "▶";
@@ -2590,7 +2594,7 @@ function renderMessages() {
                         const url = URL.createObjectURL(blob);
                         // Lesson #225: track в WeakMap imgElement→blobUrl для авто-revoke
                         // (но сначала надо создать img element чтобы зарегистрировать)
-                        const el = renderOutgoingAttachment({ mime, name: att.name, url, size: att.size });
+                        const el = renderOutgoingAttachment({ mime, name: att.name, url, size: att.size, poster: att.poster_data_url || null });
                         if (el && el.tagName === "IMG" && window.__murmurBlobOwners) {
                             window.__murmurBlobOwners.set(el, url);
                         }
@@ -2893,7 +2897,10 @@ async function sendMessage() {
         const metaSnapshot = pendingAttachmentsMeta.map((a) => Object.assign({}, a));
         const sealedB64 = await encryptForRecipient(peerKey.npub, {
             body: text,
-            attachments: metaSnapshot.map((a) => ({ name: a.name, mime: a.mime, size: a.size })),
+            attachments: metaSnapshot.map((a) => ({ name: a.name, mime: a.mime, size: a.size,
+                // v160d: постер-кадр (data:image/jpeg) — только получателю, внутри E2E.
+                poster_data_url: a.poster_data_url || null,
+            })),
         });
         // Server-visible meta: replace real names with neutral ones, drop plaintext_b64.
         const serverMeta = metaSnapshot.map((a) => ({
@@ -2957,6 +2964,7 @@ async function sendMessage() {
                 name: a.name,
                 size: a.size,
                 plaintext_b64: a.plaintext_b64,
+                poster_data_url: a.poster_data_url || null, // v160d
             }));
 
         // Optimistic render
@@ -3205,6 +3213,7 @@ if (btnAttach && fileInput) {
                         wrapped_key: result.wrapped_key,
                         iv: result.iv, // base64 12-byte IV for AES-GCM decrypt (Lesson #182)
                         plaintext_b64: result.plaintext_b64, // local outbox cache
+                        poster_data_url: result.poster_data_url || null, // v160d: кадр для превью
                         mime: result.mime,
                         size: file.size,
                         name: file.name,
