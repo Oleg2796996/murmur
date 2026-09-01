@@ -1895,6 +1895,46 @@ function setupInviteUI() {
     setupInviteUI._bound = true;
     const btnInvite = $("btn-invite");
     const btnLogout = $("btn-logout");
+    const btnShowKey = $("btn-show-key");
+
+    // v160e: показать ключ личности (перенос Safari↔PWA↔устройства).
+    if (btnShowKey) {
+        btnShowKey.addEventListener("click", () => {
+            const key = localStorage.getItem(LS_KEY) || "";
+            if (!key) { alert("Ключ не найден (нет аккаунта?)"); return; }
+            let ov = document.getElementById("key-reveal");
+            if (ov) ov.remove();
+            ov = document.createElement("div");
+            ov.id = "key-reveal";
+            ov.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px;";
+            const box = document.createElement("div");
+            box.style.cssText = "background:#17212b;border-radius:12px;padding:18px;max-width:340px;width:100%;color:#e8edf2;font:14px -apple-system,sans-serif;box-sizing:border-box;";
+            const title = document.createElement("div");
+            title.textContent = "Твой ключ (секрет!)";
+            title.style.cssText = "margin-bottom:10px;font-weight:600;font-size:15px;";
+            const hint = document.createElement("div");
+            hint.textContent = "Вставь его на другом устройстве / в PWA через «У меня есть ключ». Никому не показывай.";
+            hint.style.cssText = "margin-bottom:12px;color:#8a97a5;font-size:13px;line-height:1.4;";
+            const inp = document.createElement("input");
+            inp.readOnly = true;
+            inp.value = key;
+            inp.style.cssText = "width:100%;box-sizing:border-box;background:#0e1621;color:#e8edf2;border:1px solid #2a3b4d;border-radius:8px;padding:10px;font-size:13px;word-break:break-all;";
+            const btnCopy = document.createElement("button");
+            btnCopy.textContent = "Скопировать";
+            btnCopy.style.cssText = "margin-top:12px;width:100%;background:#2b5278;color:#fff;border:0;border-radius:8px;padding:10px;font-size:14px;";
+            btnCopy.addEventListener("click", () => {
+                inp.select();
+                if (legacyCopy(inp.value)) { btnCopy.textContent = "Скопировано ✓"; setTimeout(() => ov.remove(), 800); }
+            });
+            const btnClose = document.createElement("button");
+            btnClose.textContent = "Закрыть";
+            btnClose.style.cssText = "margin-top:8px;width:100%;background:#22303e;color:#8a97a5;border:0;border-radius:8px;padding:10px;font-size:14px;";
+            btnClose.addEventListener("click", () => ov.remove());
+            ov.addEventListener("click", (e) => { if (e.target === ov) ov.remove(); });
+            box.appendChild(title); box.appendChild(hint); box.appendChild(inp); box.appendChild(btnCopy); box.appendChild(btnClose);
+            ov.appendChild(box); document.body.appendChild(ov);
+        });
+    }
 
     if (btnInvite) {
         btnInvite.addEventListener("click", async () => {
