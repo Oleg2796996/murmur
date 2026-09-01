@@ -461,6 +461,11 @@ impl PushServer {
                             (Method::GET, "/api/contacts") => {
                                 handle_api_contacts(req, db.clone()).await
                             }
+                            // v160f: манифест с start_url?invite=... — iOS запоминает его
+                            // в момент «На экран Домой» → PWA стартует сразу с чатом.
+                            (Method::GET, "/manifest.json") => {
+                                handle_manifest(req, &static_dir).await
+                            }
                             (Method::GET, "/api/history") => {
                                 handle_api_history(req, db.clone()).await
                             }
@@ -479,6 +484,13 @@ impl PushServer {
                             }
                             (Method::POST, "/api/upload") => {
                                 handle_api_upload(req, db.clone(), pending.clone()).await
+                            }
+                            // v160f: identity transfer (перенос личности Safari → PWA)
+                            (Method::POST, "/api/transfer/create") => {
+                                handle_transfer_create(req, db.clone()).await
+                            }
+                            (Method::POST, "/api/transfer/redeem") => {
+                                handle_transfer_redeem(req, db.clone()).await
                             }
                             (Method::GET, path) if path.starts_with("/api/blob/") => {
                                 handle_api_blob_download(req, db.clone()).await
@@ -1067,6 +1079,161 @@ fn json_error(status: StatusCode, msg: &str) -> Response<Full<Bytes>> {
         .header("access-control-allow-origin", "*")
         .body(Full::new(Bytes::from(body)))
         .unwrap()
+}
+
+// ── v160f: /manifest.json с start_url из ?invite= ──────────────────────────
+// iOS читает манифест В МОМЕНТ «На экран Домой» и запоминает start_url.
+// Свапаем link[rel=manifest] на ?invite=<npub> (app.js), тут отдаём копию
+// с start_url="/?invite=<npub>" → PWA стартует с чатом приглашённого.
+async fn handle_manifest(
+    req: Request<Incoming>,
+    static_dir: &Option<PathBuf>,
+) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    // Базовый манифест со диска (не кэшируем в памяти — файл может меняться).
+    let Some(bytes) = static_dir.as_ref().and_then(|d| {
+        let p = d.join("manifest.json");
+        std::fs::read(p).ok()
+    }) else {
+        return Ok(json_error(StatusCode::NOT_FOUND, "manifest not found"));
+    };
+    let mut json: JsonValue = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => return Ok(json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("manifest parse: {e}"))),
+    };
+    // ?invite=npub1… → подменяем start_url (и scope остаётся "/").
+    if let Some(q) = req.uri().query() {
+        for kv in q.split('&') {
+            if let Some(inv) = kv.strip_prefix("invite=") {
+                let inv = percent_decode(inv);
+                if inv.starts_with("npub1") && inv.len() < 100 && inv.chars().all(|c| c.is_ascii_alphanumeric()) {
+                    if let Some(obj) = json.as_object_mut() {
+                        obj.insert(
+                            "start_url".to_string(),
+                            JsonValue::String(format!("/?invite={}", inv)),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let body = json.to_string();
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/manifest+json")
+        .header("cache-control", "no-cache, no-store, must-revalidate")
+        .header("access-control-allow-origin", "*")
+        .body(Full::new(Bytes::from(body)))
+        .unwrap())
+}
+
+// ── v160f: identity transfer (перенос личности Safari → PWA) ────────────────
+// Сервер хранит ТОЛЬКО ct_b64 = AES-GCM(ключ_личности, код) под hash(код).
+// Код (6+2 симв) существует только на клиентах; hash нельзя обратить.
+
+fn sha256_hex(input: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    Digest::update(&mut h, input.as_bytes());
+    hex::encode(Digest::finalize(h))
+}
+
+const TRANSFER_TTL_SECS: i64 = 600; // 10 минут
+const TRANSFER_MAX_CT: usize = 8 * 1024; // шифротекст ключа — пара сотен байт
+
+async fn handle_transfer_create(
+    req: Request<Incoming>,
+    store: Option<crate::storage::MessageStore>,
+) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    let Some(db) = store else {
+        return Ok(json_error(StatusCode::SERVICE_UNAVAILABLE, "message store not initialised"));
+    };
+    let body = match req.collect().await {
+        Ok(c) => c.to_bytes(),
+        Err(e) => return Ok(json_error(StatusCode::BAD_REQUEST, &format!("body read: {e}"))),
+    };
+    if body.len() > TRANSFER_MAX_CT {
+        return Ok(json_error(StatusCode::PAYLOAD_TOO_LARGE, "ct too large"));
+    }
+    let json: JsonValue = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return Ok(json_error(StatusCode::BAD_REQUEST, &format!("bad json: {e}"))),
+    };
+    let Some(code) = json.get("code").and_then(|v| v.as_str()) else {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "missing code"));
+    };
+    let Some(ct_b64) = json.get("ct_b64").and_then(|v| v.as_str()) else {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "missing ct_b64"));
+    };
+    // Базовая валидация кода: 7-8 алфанит. символов (клиент генерит сам,
+    // сервер не должен уметь их перебирать — hash уникализирует запись).
+    let code = code.trim().to_uppercase();
+    if code.len() < 6 || code.len() > 10 || !code.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "bad code format"));
+    }
+    if ct_b64.len() == 0 || ct_b64.len() > TRANSFER_MAX_CT {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "bad ct_b64 size"));
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0) as i64;
+    let code_hash = sha256_hex(&code);
+    match db.create_identity_transfer(&code_hash, ct_b64, now, TRANSFER_TTL_SECS) {
+        Ok(expires_at) => {
+            let resp = serde_json::json!({ "ok": true, "expires_at": expires_at });
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "application/json")
+                .header("access-control-allow-origin", "*")
+                .body(Full::new(Bytes::from(resp.to_string())))
+                .unwrap())
+        }
+        Err(e) => Ok(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("create transfer: {e}"),
+        )),
+    }
+}
+
+async fn handle_transfer_redeem(
+    req: Request<Incoming>,
+    store: Option<crate::storage::MessageStore>,
+) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    let Some(db) = store else {
+        return Ok(json_error(StatusCode::SERVICE_UNAVAILABLE, "message store not initialised"));
+    };
+    let body = match req.collect().await {
+        Ok(c) => c.to_bytes(),
+        Err(e) => return Ok(json_error(StatusCode::BAD_REQUEST, &format!("body read: {e}"))),
+    };
+    let json: JsonValue = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return Ok(json_error(StatusCode::BAD_REQUEST, &format!("bad json: {e}"))),
+    };
+    let Some(code) = json.get("code").and_then(|v| v.as_str()) else {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "missing code"));
+    };
+    let code = code.trim().to_uppercase();
+    if code.len() < 7 || code.len() > 9 || !code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "bad code format"));
+    }
+    let code_hash = sha256_hex(&code.replace('-', ""));
+    match db.consume_identity_transfer(&code_hash) {
+        Ok(Some(ct_b64)) => {
+            let resp = serde_json::json!({ "ok": true, "ct_b64": ct_b64 });
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "application/json")
+                .header("access-control-allow-origin", "*")
+                .body(Full::new(Bytes::from(resp.to_string())))
+                .unwrap())
+        }
+        Ok(None) => Ok(json_error(StatusCode::NOT_FOUND, "code not found, expired or already used")),
+        Err(e) => Ok(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("redeem transfer: {e}"),
+        )),
+    }
 }
 
 // --- /api/upload + /api/blob/{id} (Phase 1 attachments, Variant B) ---

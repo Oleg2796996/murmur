@@ -1133,6 +1133,22 @@ window._handleRestore = async function() {
         enterMessenger();
     } catch (e) { $("identity-error").textContent = "Error: " + e.message; }
 };
+// v160f: восстановление по готовому hex-ключу (код переноса / deep-link) —
+// без инпута, общий путь с _handleRestore.
+window._handleRestoreFromKey = async function(hex) {
+    await ensureWasm();
+    const mod = await loadWasmModule();
+    const res = unwrap(mod.identity_restore(hex));
+    if (!res.ok) throw new Error("restore failed: " + res.error);
+    myNpub = res.data.npub;
+    signKeyHex = hex;
+    myAlias = res.data.npub;
+    localStorage.setItem(LS_NPUB, myNpub);
+    localStorage.setItem(LS_KEY, signKeyHex);
+    localStorage.setItem(LS_NAME, myAlias);
+    await invalidateCacheIfKeyChanged();
+    enterMessenger();
+};
 $("btn-create")?.addEventListener("click", _handleCreate);
 
 $("btn-restore")?.addEventListener("click", async () => {
@@ -1926,12 +1942,17 @@ function setupInviteUI() {
                 inp.select();
                 if (legacyCopy(inp.value)) { btnCopy.textContent = "Скопировано ✓"; setTimeout(() => ov.remove(), 800); }
             });
+            // v160f: кнопка кода переноса внутри той же модалки.
+            const btnTransfer = document.createElement("button");
+            btnTransfer.textContent = "Код переноса (10 мин)";
+            btnTransfer.style.cssText = "margin-top:8px;width:100%;background:#2b5278;color:#fff;border:0;border-radius:8px;padding:10px;font-size:14px;";
+            btnTransfer.addEventListener("click", () => { ov.remove(); showTransferCodeModal(); });
             const btnClose = document.createElement("button");
             btnClose.textContent = "Закрыть";
             btnClose.style.cssText = "margin-top:8px;width:100%;background:#22303e;color:#8a97a5;border:0;border-radius:8px;padding:10px;font-size:14px;";
             btnClose.addEventListener("click", () => ov.remove());
             ov.addEventListener("click", (e) => { if (e.target === ov) ov.remove(); });
-            box.appendChild(title); box.appendChild(hint); box.appendChild(inp); box.appendChild(btnCopy); box.appendChild(btnClose);
+            box.appendChild(title); box.appendChild(hint); box.appendChild(inp); box.appendChild(btnCopy); box.appendChild(btnTransfer); box.appendChild(btnClose);
             ov.appendChild(box); document.body.appendChild(ov);
         });
     }
@@ -4034,12 +4055,261 @@ function startPolling() {
 // Старый visibility handler для WS удалён — visibilitychange теперь в startPolling
 // вызывает tick() с полным рекурсивным циклом.
 
+// ── v160f: invite → PWA-манифест + лендинг + код переноса ────────────────
+
+const TRANSFER_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // без похожих (0/O, 1/I/L)
+
+function isStandalonePWA() {
+    return (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
+        || window.navigator.standalone === true;
+}
+
+// Invite в URL? (#invite=npub1… или ?invite=npub1…). Возврат npub или null.
+function extractInviteNpub() {
+    const h = (location.hash || "").match(/[#&]invite=(npub1[a-z0-9]+)/i)
+        || (location.hash || "").match(/^#invite=(npub1[a-z0-9]+)/i);
+    if (h) return h[1];
+    const q = new URLSearchParams(location.search).get("invite");
+    return (q && /^npub1[a-z0-9]+$/i.test(q)) ? q : null;
+}
+
+// A. Invite → PWA-манифест: iOS запоминает start_url из манифеста в момент
+// «На экран Домой». Свапаем <link rel=manifest> на /manifest.json?invite=<npub>,
+// релей отдаёт копию с start_url="/?invite=<npub>" → PWA стартует сразу с чатом.
+(function swapManifestForInvite() {
+    const invite = extractInviteNpub();
+    if (!invite) return;
+    const link = document.querySelector('link[rel="manifest"]');
+    if (!link) return;
+    link.href = "/manifest.json?invite=" + encodeURIComponent(invite);
+    console.log("[invite] manifest swapped for PWA start_url:", link.href);
+})();
+
+// B. Safari (не-PWA) + invite + нет личности → лендинг-инструкция вместо
+// «Создать аккаунт». Иначе юзер создаст аккаунт в Safari-контейнере, а PWA
+// получит пустое хранилище и сгенерит второго юзера (баг-репорт Олега 01.09).
+function showInviteLanding(inviteNpub) {
+    if (!identityScreen) return;
+    const card = identityScreen.querySelector(".identity-card");
+    if (!card || document.getElementById("invite-landing")) return;
+    const ov = document.createElement("div");
+    ov.id = "invite-landing";
+    ov.style.cssText = "padding:4px;";
+    const steps = isStandalonePWA()
+        ? [] // в standalone лендинг не нужен — чат откроется сам (start_url с invite)
+        : [
+            "1. Внизу Safari жми ⟨Поделиться⟩ (квадрат со стрелкой)",
+            "2. Выбери ⟨На экран „Домой“⟩ → ⟨Добавить⟩",
+            "3. Открой murmur с новой иконки — аккаунт создастся сам, и чат уже будет ждать",
+          ];
+    ov.innerHTML =
+        '<div style="font-size:15px;font-weight:600;margin-bottom:8px;">Тебя пригласили в murmur 👋</div>' +
+        (steps.length
+            ? '<div style="color:#8a97a5;font-size:13px;line-height:1.7;margin-bottom:14px;">' + steps.map(s => s.replace(/⟨/g, "<b>").replace(/⟩/g, "</b>")).join("<br>") + "</div>"
+            : "");
+    const btnPwa = document.createElement("button");
+    btnPwa.className = "primary";
+    btnPwa.textContent = steps.length ? "Понятно, добавлю на домашний экран" : "Создать аккаунт и открыть чат";
+    btnPwa.addEventListener("click", () => {
+        ov.remove();
+        card.style.display = "";
+        // В standalone: сразу создаём аккаунт (тот же обработчик, что btn-create).
+        if (!steps.length && typeof window._handleCreate === "function") window._handleCreate();
+    });
+    ov.appendChild(btnPwa);
+    const btnBrowser = document.createElement("button");
+    btnBrowser.className = "secondary";
+    btnBrowser.style.marginTop = "8px";
+    btnBrowser.textContent = "Продолжить в браузере (без установки)";
+    btnBrowser.addEventListener("click", () => {
+        ov.remove();
+        card.style.display = "";
+    });
+    ov.appendChild(btnBrowser);
+    card.style.display = "none";
+    card.parentNode.insertBefore(ov, card);
+}
+
+// v160f: модалка «код переноса» — генерация (отправитель, в мессенджере).
+async function showTransferCodeModal() {
+    let ov = document.getElementById("transfer-modal");
+    if (ov) ov.remove();
+    ov = document.createElement("div");
+    ov.id = "transfer-modal";
+    ov.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px;";
+    const box = document.createElement("div");
+    box.style.cssText = "background:#17212b;border-radius:12px;padding:18px;max-width:340px;width:100%;color:#e8edf2;font:14px -apple-system,sans-serif;box-sizing:border-box;";
+    box.innerHTML = '<div style="font-weight:600;font-size:15px;margin-bottom:8px;">Код переноса</div>' +
+        '<div style="color:#8a97a5;font-size:13px;line-height:1.5;margin-bottom:12px;">Открой murmur на другом устройстве (или в PWA) → «У меня есть код» → введи код. Код живёт 10 минут и сгорает после использования.</div>';
+    const codeEl = document.createElement("div");
+    codeEl.textContent = "генерирую…";
+    codeEl.style.cssText = "font:600 22px ui-monospace,monospace;letter-spacing:2px;text-align:center;background:#0e1621;border:1px solid #2a3b4d;border-radius:8px;padding:14px;margin-bottom:12px;";
+    const btnCopy = document.createElement("button");
+    btnCopy.className = "primary";
+    btnCopy.textContent = "Скопировать код";
+    btnCopy.disabled = true;
+    btnCopy.addEventListener("click", () => {
+        if (legacyCopy(codeEl.textContent)) { btnCopy.textContent = "Скопировано ✓"; setTimeout(() => ov.remove(), 700); }
+    });
+    const btnClose = document.createElement("button");
+    btnClose.className = "secondary";
+    btnClose.style.marginTop = "8px";
+    btnClose.textContent = "Закрыть";
+    btnClose.addEventListener("click", () => ov.remove());
+    box.appendChild(codeEl); box.appendChild(btnCopy); box.appendChild(btnClose);
+    ov.appendChild(box);
+    ov.addEventListener("click", (e) => { if (e.target === ov) ov.remove(); });
+    document.body.appendChild(ov);
+    try {
+        const code = await createTransferCode();
+        if (!code) { codeEl.textContent = "ошибка"; return; }
+        codeEl.textContent = code;
+        btnCopy.disabled = false;
+    } catch (e) {
+        codeEl.textContent = "ошибка";
+        console.warn("transfer create failed", e);
+    }
+}
+
+// v160f: модалка ввода кода (на identity-экране, получатель).
+function showRedeemModal() {
+    let ov = document.getElementById("redeem-modal");
+    if (ov) ov.remove();
+    ov = document.createElement("div");
+    ov.id = "redeem-modal";
+    ov.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px;";
+    const box = document.createElement("div");
+    box.style.cssText = "background:#17212b;border-radius:12px;padding:18px;max-width:340px;width:100%;color:#e8edf2;font:14px -apple-system,sans-serif;box-sizing:border-box;";
+    box.innerHTML = '<div style="font-weight:600;font-size:15px;margin-bottom:8px;">Введи код переноса</div>' +
+        '<div style="color:#8a97a5;font-size:13px;line-height:1.5;margin-bottom:12px;">Код показывает тот, кто уже пользуется murmur (кнопка «Мой ключ 🔑» → «Код переноса»).</div>';
+    const inp = document.createElement("input");
+    inp.placeholder = "XXXX-XXXX";
+    inp.autocomplete = "off";
+    inp.style.cssText = "width:100%;box-sizing:border-box;background:#0e1621;color:#e8edf2;border:1px solid #2a3b4d;border-radius:8px;padding:10px;font:600 18px ui-monospace,monospace;text-align:center;letter-spacing:2px;text-transform:uppercase;margin-bottom:12px;";
+    const err = document.createElement("div");
+    err.style.cssText = "color:#e05b5b;font-size:13px;margin-bottom:8px;min-height:16px;";
+    const btnGo = document.createElement("button");
+    btnGo.className = "primary";
+    btnGo.textContent = "Перенести аккаунт";
+    btnGo.addEventListener("click", async () => {
+        btnGo.disabled = true;
+        err.textContent = "";
+        try {
+            await redeemTransferCode(inp.value);
+            ov.remove();
+        } catch (e) {
+            err.textContent = e.message || String(e);
+            btnGo.disabled = false;
+        }
+    });
+    const btnClose = document.createElement("button");
+    btnClose.className = "secondary";
+    btnClose.style.marginTop = "8px";
+    btnClose.textContent = "Отмена";
+    btnClose.addEventListener("click", () => ov.remove());
+    box.appendChild(inp); box.appendChild(err); box.appendChild(btnGo); box.appendChild(btnClose);
+    ov.appendChild(box);
+    ov.addEventListener("click", (e) => { if (e.target === ov) ov.remove(); });
+    document.body.appendChild(ov);
+    setTimeout(() => inp.focus(), 50);
+}
+
+// B2. Код переноса: генерация (отправитель) + модалка.
+// Код 8 символов (напр. K7M2-9XQ4). Ключ шифруется кодом на клиенте
+// (AES-GCM, PBKDF2 150k) — релей видит только шифротекст под hash(код).
+function genTransferCode() {
+    const buf = new Uint8Array(8);
+    crypto.getRandomValues(buf);
+    const chars = Array.from(buf, (b) => TRANSFER_CODE_ALPHABET[b % TRANSFER_CODE_ALPHABET.length]);
+    return chars.slice(0, 4).join("") + "-" + chars.slice(4).join("");
+}
+
+async function deriveTransferKey(code) {
+    const enc = new TextEncoder();
+    const keyMat = await crypto.subtle.importKey("raw", enc.encode(code), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt: enc.encode("murmur-transfer-v1"), iterations: 150000, hash: "SHA-256" },
+        keyMat,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"],
+    );
+}
+
+function b64encodeBytes(u8) {
+    let s = "";
+    for (const b of u8) s += String.fromCharCode(b);
+    return btoa(s);
+}
+function b64decodeToU8(s) {
+    const bin = atob(s);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return u8;
+}
+
+// Создать код: шифруем ключ личности кодом, POST на релей, показываем код.
+async function createTransferCode() {
+    const key = localStorage.getItem(LS_KEY);
+    if (!key || key.length < 60) { alert("Нет ключа"); return; }
+    const code = genTransferCode();
+    const aesKey = await deriveTransferKey(code.replace("-", ""));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv }, aesKey, new TextEncoder().encode(key),
+    );
+    const payload = { code: code.replace("-", ""), ct_b64: b64encodeBytes(iv) + ":" + b64encodeBytes(new Uint8Array(ct)) };
+    const r = await fetch(RELAY + "/api/transfer/create", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+    if (!r.ok) { alert("Сервер не принял код: " + r.status); return; }
+    return code;
+}
+
+// Погасить код: GET ct с релея, дешифруем кодом, restore identity.
+async function redeemTransferCode(codeRaw) {
+    const code = (codeRaw || "").trim().toUpperCase().replace(/\s+/g, "");
+    if (!/^[A-Z2-9]{4}-?[A-Z2-9]{4}$/.test(code)) throw new Error("Формат кода: XXXX-XXXX");
+    const r = await fetch(RELAY + "/api/transfer/redeem", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: code.replace("-", "") }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || ("HTTP " + r.status));
+    const [ivB64, ctB64] = String(j.ct_b64 || "").split(":");
+    if (!ivB64 || !ctB64) throw new Error("Плохой ответ сервера");
+    const aesKey = await deriveTransferKey(code.replace("-", ""));
+    const pt = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: b64decodeToU8(ivB64) }, aesKey, b64decodeToU8(ctB64),
+    );
+    const hexKey = new TextDecoder().decode(pt);
+    if (!/^[0-9a-f]{64,}$/i.test(hexKey)) throw new Error("Код не подошёл (не расшифровалось)");
+    // Восстановление — тот же путь, что «У меня есть ключ».
+    if (typeof window._handleRestoreFromKey === "function") {
+        await window._handleRestoreFromKey(hexKey);
+    } else {
+        const inp = $("restore-hex");
+        if (inp) inp.value = hexKey;
+        if (typeof window._handleRestore === "function") await window._handleRestore();
+    }
+}
+
+// v160f: экспорт для inline-обработчика btn-redeem-code в index.html.
+window.showRedeemModal = showRedeemModal;
+
 // ── Auto-restore last identity on load ──
 async function tryAutoRestore() {
     const savedNpub = localStorage.getItem(LS_NPUB);
     const savedKey = localStorage.getItem(LS_KEY);
     if (!savedNpub || !savedKey) {
         console.log("auto-restore: nothing saved");
+        // v160f: invite в Safari (не-PWA) без личности → лендинг-инструкция,
+        // чтобы аккаунт не создался в Safari-контейнере впустую.
+        const inv = extractInviteNpub();
+        if (inv && !isStandalonePWA()) showInviteLanding(inv);
         return;
     }
     try {

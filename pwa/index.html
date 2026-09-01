@@ -42,12 +42,12 @@
      script. iOS Safari PWA cached HTML может не иметь inline-script (HTML cache
      pre-bump). Meta tag читается через document.querySelector + .content
      (работает даже если inline script не выполнился). -->
-    <meta name="app-version" content="v160e">
+    <meta name="app-version" content="v160f">
     <!-- Lesson #216: cache busting via ?v= query string. iOS Safari PWA
      caches app.js via HTTP cache independently of SW. Query string forces
      re-fetch on each version bump. SW CACHE_VERSION also bumps for SW
      activation, but the app.js itself needs explicit URL change. -->
-    <link rel="stylesheet" href="styles.css?v=160e">
+    <link rel="stylesheet" href="styles.css?v=160f">
 </head>
 <body>
     <!-- ================= IDENTITY SCREEN (create/restore) ================= -->
@@ -75,6 +75,7 @@
                 <input id="restore-hex" type="password" autocomplete="off" spellcheck="false"
                        placeholder="ключ (64 символа)" style="width:100%;box-sizing:border-box;background:#0e1621;color:#e8edf2;border:1px solid #2a3b4d;border-radius:8px;padding:10px;font-size:13px;margin-bottom:8px;">
                 <button id="btn-restore" class="secondary">Восстановить</button>
+                <button id="btn-redeem-code" class="secondary" style="margin-top:8px;">У меня есть код</button>
             </div>
         </div>
     </div>
@@ -192,6 +193,11 @@
       // Inline script at end of <body> — DOM is already parsed here.
       bindHandler("btn-create", "_handleCreate", "Создать");
       bindHandler("btn-restore", "_handleRestore", "Восстановить");
+      // v160f: код переноса — открывает модалку ввода (app.js showRedeemModal).
+      document.getElementById("btn-redeem-code")?.addEventListener("click", () => {
+        if (typeof window.showRedeemModal === "function") window.showRedeemModal();
+        else console.warn("showRedeemModal not ready");
+      });
       // Safety: if app.js was loaded before this script, handlers are already wired there.
       console.log("[murmur] inline handlers bound");
     </script>
@@ -213,8 +219,8 @@
      Query string = guaranteed fresh load on each deploy. -->
     <script src="blob-cache.js?v=160d" defer></script>
     <script src="app-store.js?v=160d" defer></script>
-    <script src="render-attachments.js?v=160e" defer></script>
-    <script src="app.js?v=160e" defer></script>
+    <script src="render-attachments.js?v=160f" defer></script>
+    <script src="app.js?v=160f" defer></script>
     <script>
       // Register service worker (push notifications only — Lesson #345).
       // Статикой SW не управляет (fetch-хендлера нет), так что
