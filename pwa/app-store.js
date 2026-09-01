@@ -285,9 +285,14 @@ const blobs = {
         }));
     },
     async put(blobId, blob, mime) {
-        const arrayBuffer = await blob.arrayBuffer();
-        const size = arrayBuffer.byteLength;
-        const record = { blob_id: blobId, data: arrayBuffer, mime: mime || "application/octet-stream", size, ts: Date.now(), hits: 0 };
+        const size = blob.size;
+        // v160j (Олег: «мак завис при приёме видео»): большие блобы НЕ читаем в
+        // ArrayBuffer на главном потоке (сотни МБ → фриз+GC-шторм). Кладём Blob
+        // как есть (IDB умеет хранить Blob нативно); get() отдаёт через rec.blob.
+        const LARGE = 8 * 1024 * 1024;
+        const record = (size <= LARGE)
+            ? { blob_id: blobId, data: await blob.arrayBuffer(), mime: mime || "application/octet-stream", size, ts: Date.now(), hits: 0 }
+            : { blob_id: blobId, blob: blob, mime: mime || "application/octet-stream", size, ts: Date.now(), hits: 0 };
         // Fire-and-forget — не блокируем UI (Lesson #322)
         _tx(STORE_BLOBS, "readwrite", (store) => new Promise((resolve, reject) => {
             const req = store.put(record);
