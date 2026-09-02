@@ -3217,9 +3217,9 @@ async function sendMessage() {
         // (Олег 2026-09-02: «висит расшифка, потом видео — должно из кэша»).
         for (const a of metaSnapshot) {
             if (a.plaintext_b64 && window.MurmurBlobCache && window.MurmurBlobCache.isAvailable()) {
-                b64ToBlob(a.plaintext_b64, a.mime).then((blob) => {
-                    window.MurmurBlobCache.put(a.blob_id, blob, a.mime).catch(() => {});
-                }).catch(() => {});
+                try {
+                    window.MurmurBlobCache.put(a.blob_id, b64ToBlob(a.plaintext_b64, a.mime), a.mime).catch(() => {});
+                } catch (e) { /* cache paste — fail OK */ }
             }
         }
         // v160p: постер каждого вложения в постоянный кэш по blob_id
