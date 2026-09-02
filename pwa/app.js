@@ -108,10 +108,42 @@ const RECEIPT_BATCH_CAP = 80;               // hash'ей в одной квит�
 const RECEIPT_FLUSH_DELAY_MS = 2000;        // debounce ~2s (poll 5s → ✓✓ за ~7s)
 const MESSAGES_CACHE_MAX_PER_PEER = 100;
 
+// v160o: видео/большие файлы НЕ кладём plaintext_b64 в IDB/outbox —
+// 37–50MB base64-строки выдувают квоту IndexedDB/LS (iOS), после чего весь
+// кэш перестаёт сохраняться (DataCloneError/QuotaExceeded) и превью пропадает
+// после 2–3 перезаходов. Постер (≤150KB dataURL) оставляем — им рисуем превью
+// до завершения remote-decrypt; сам plaintext доставит fetch blob (живёт 24h
+// на relay — v160o). Для картинок/мелких файлов plaintext оставляем —
+// мгновенный рендер без сети.
+function _sanitizeAttachmentForStorage(att) {
+    if (!att || typeof att !== "object") return att;
+    const mime = att.mime || "";
+    const big = (att.size || 0) > 1.5 * 1024 * 1024;
+    if (!att.plaintext_b64 || !(mime.indexOf("video/") === 0 || big)) return att;
+    const copy = Object.assign({}, att);
+    delete copy.plaintext_b64;
+    return copy;
+}
+// v160o: runtime-only поля на message-объектах (_decrypt_promise — Promise из
+// decryptWithTimeout) не переживают structuredClone → DataCloneError → весь
+// IDB put падает молча → кэш переписки не persists. Стримаем перед записью.
+function _sanitizeMessageForStorage(m) {
+    if (!m || typeof m !== "object") return m;
+    if (!m._decrypt_promise && !(Array.isArray(m.attachments_meta) && m.attachments_meta.some(_sanitizeAttachmentNeedsCopy))) return m;
+    const cm = Object.assign({}, m);
+    delete cm._decrypt_promise;
+    if (Array.isArray(cm.attachments_meta)) cm.attachments_meta = cm.attachments_meta.map(_sanitizeAttachmentForStorage);
+    return cm;
+}
+function _sanitizeAttachmentNeedsCopy(att) {
+    return !!att && typeof att === "object" && !!att.plaintext_b64
+        && ((att.mime || "").indexOf("video/") === 0 || (att.size || 0) > 1.5 * 1024 * 1024);
+}
+
 async function saveMessagesCacheForPeer(peer) {
     const arr = messages[peer] || [];
     if (arr.length === 0) return;
-    const trimmed = arr.slice(-MESSAGES_CACHE_MAX_PER_PEER);
+    const trimmed = arr.slice(-MESSAGES_CACHE_MAX_PER_PEER).map(_sanitizeMessageForStorage);
     if (!window.appStore) {
         try {
             const cache = JSON.parse(localStorage.getItem(LS_MESSAGES_CACHE) || "{}");
@@ -212,7 +244,10 @@ async function saveToOutbox(msg, plaintext, attachmentsPlaintext) {
     const entry = {
         body: plaintext,
         attachments: msg.attachments || [],
-        attachments_meta: attachmentsPlaintext || [],
+        // v160o: видео plaintext НЕ пишем в IDB/LS (квота, см. комментарий
+        // у _sanitizeAttachmentForStorage); постер остаётся — превью рисуется,
+        // plaintext доставит remote-decrypt (blob живёт 24h на relay).
+        attachments_meta: (attachmentsPlaintext || []).map(_sanitizeAttachmentForStorage),
         ts: msg.ts,
         from: msg.from,
         to: msg.to,
@@ -1260,6 +1295,10 @@ function enterMessenger() {
     // Deep-link invite: .../#invite=<npub> → открыть чат с этим контактом.
     // Выполняется после enterMessenger: identity создана/восстановлена, DOM готов.
     handleInviteHash();
+    // v160o: холодный старт установленной PWA — если в Safari открыли новую
+    // invite-ссылку, cookie-мост добавит чат (handleInviteHash уже мог съесть
+    // cookie через peer===ck — тогда bridge тихо выйдет).
+    checkInviteCookieBridge(false);
 }
 
 // (старый мягкий logout-обработчик удалён 2026-08-31: кнопка btn-logout теперь
@@ -1913,6 +1952,11 @@ function handleInviteHash() {
     // v160i: cookie-мост — если URL пуст (iOS выкинул query/path из start_url),
     // достаём npub из cookie, поставленной в Safari при открытии ссылки.
     const ck = readInviteCookie();
+    // v160o: приоритет источника пира. Cookie (свежий invite из Safari) бьёт
+    // start_url, ЕСЛИ они расходятся: iOS хранит start_url вечно (старый чат
+    // будет «прилетать» при каждом холодном старте), а cookie ставится только
+    // когда юзер реально открыл новую ссылку. Равные значения → это наш
+    // собственный start_url, приоритет не важен.
     if (pm) {
         peer = pm[1];
         try { history.replaceState(null, "", "/"); } catch (e) {}
@@ -1927,15 +1971,19 @@ function handleInviteHash() {
         peer = ck;
     }
     if (!peer) return;
-    // Cookie одноразовая: съели — стёрли (иначе чат будет всплывать при каждом старте).
-    if (ck && !pm) clearInviteCookie();
+    // v160o: cookie съедаем ТОЛЬКО когда реально её использовали (peer из cookie,
+    // не из URL) И мы в standalone-PWA. В Safari чистить нельзя — иначе Safari
+    // съест мост до того, как PWA успеет его прочитать (куки общие).
+    // Баг v160i `ck && !pm` ел cookie в Safari сразу после установки моста.
+    if (ck && peer === ck && isStandalonePWA()) clearInviteCookie();
     // Если чат уже существует — просто открыть; иначе создать контакт и открыть.
     // Нюанс v160h: path-формат приходит из start_url ПРИ КАЖДОМ запуске PWA —
     // поэтому для него авто-открытие только если контакта ещё нет (не насилуем
     // юзера переходом в чат пригласившего при каждом старте). Hash-ссылки
-    // (живой переход по ссылке) — открываем всегда.
+    // (живой переход по ссылке) — открываем всегда. Cookie-мост — как hash:
+    // это явный свежий invite, открываем всегда.
     if (typeof openChat !== "function") return;
-    const fromStartUrl = !!pm;
+    const fromStartUrl = !!pm; // cookie-мост НЕ start_url — авто-открытие разрешено
     if (!contacts[peer]) {
         contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
         renderChatList();
@@ -1945,6 +1993,27 @@ function handleInviteHash() {
     }
     setTimeout(() => { try { history.replaceState(null, "", "/"); } catch (e) {} }, 50);
 }
+
+// v160o: cookie-мост для УСТАНОВЛЕННОЙ PWA. Сценарий: PWA стоит (стартует с
+// «/» — invite в URL отсутствует), юзер открыл новую invite-ссылку в Safari →
+// index.html положил cookie. При следующем запуске/резюме PWA добавляем чат
+// (и открываем его). Веб-ссылка не может программно открыть установленную iOS
+// PWA (нет universal links для web-app) — этот мост практический эквивалент.
+function checkInviteCookieBridge(autoOpen) {
+    // Только в установленной PWA: в Safari cookie — мост ДЛЯ PWA, есть URL-пути.
+    if (!isStandalonePWA()) return;
+    const m = document.querySelector(".messenger");
+    if (!m) return; // мессенджер не активен — нечего открывать
+    const ck = readInviteCookie();
+    if (!ck || !/^npub1[a-z0-9]+$/i.test(ck)) return;
+    if (ck === activePeer && contacts[ck]) { clearInviteCookie(); return; }
+    if (!contacts[ck]) {
+        contacts[ck] = { peer: ck, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
+        renderChatList();
+    }
+    clearInviteCookie(); // съели — чат добавлен, повторное авто-открытие не нужно
+    if (autoOpen) openChat(ck);
+}
 function setupInviteUI() {
     // Guard: enterMessenger может вызываться повторно (boot/restore/poll-reconnect).
     // Без guard'а на кнопки вешаются дубли обработчиков → двойные confirm/alert (Lesson #356).
@@ -1953,6 +2022,38 @@ function setupInviteUI() {
     const btnInvite = $("btn-invite");
     const btnLogout = $("btn-logout");
     const btnShowKey = $("btn-show-key");
+
+    // v160o: cookie-мост на резюме PWA (юзер открыл ссылку в Safari, вернулся
+    // в PWA — чат подхватится без перезапуска). _visBound — от повторных биндов.
+    if (!setupInviteUI._visBound) {
+        setupInviteUI._visBound = true;
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "visible" && isStandalonePWA()) {
+                checkInviteCookieBridge(true);
+            }
+        });
+    }
+
+    // v160o: гарантированный путь добавить чат — вставить ссылку/npub вручную.
+    // iOS ≥17 не даёт веб-странице программно открыть установленную PWA, а
+    // cookie-мост требует, чтобы юзер хоть раз вернулся в PWA. Paste-add —
+    // работает всегда, из любого места (Комната, заметки, Telegram).
+    const btnAddByLink = $("btn-add-by-link");
+    if (btnAddByLink) {
+        btnAddByLink.addEventListener("click", () => {
+            const raw = prompt("Вставь invite-ссылку или npub собеседника:");
+            if (!raw) return;
+            const m = raw.match(/invite[=\\/](npub1[a-z0-9]+)/i)
+                || raw.match(/\b(npub1[a-z0-9]{20,})\b/i);
+            if (!m) { alert("Не нашла npub1… в вставленном тексте"); return; }
+            const peer = m[1];
+            if (!contacts[peer]) {
+                contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
+                renderChatList();
+            }
+            openChat(peer);
+        });
+    }
 
     // v160e: показать ключ личности (перенос Safari↔PWA↔устройства).
     if (btnShowKey) {
@@ -2675,22 +2776,24 @@ function renderMessages() {
             //    no plaintext_b64, just a wrapped_key for the recipient.
             //    Render a non-decrypting placeholder to avoid ECIES bad-tag error
             //    (Lesson #195).
-            const hasPlaintext = m.attachments_meta.every(att => att.plaintext_b64);
-            // Lesson #348: рендерим img для тех att, где plaintext ЕСТЬ, даже если
-            // не у всех (PARTIAL). Chip'и (remote) — только для att без plaintext.
-            // Раньше: every() → один att без plaintext топил ВСЕ фото в chip'и,
-            // даже если у остальных plaintext был на месте.
-            const anyPlaintext = m.attachments_meta.some(att => att.plaintext_b64);
-            if (hasPlaintext || anyPlaintext) {
-                for (const att of m.attachments_meta) {
+            // v160o: сплит по plaintext. Всё, у чего plaintext ЕСТЬ (картинки,
+            // мелкие файлы) — прежний inline-рендер из outbox. Всё без plaintext
+            // (видео после v160o-санитайза, серверные echo) — через remote-decrypt
+            // (fetch blob + ECIES unwrap НАШИМ privkey, Lesson #349), с постером
+            // из локальных meta, пока fetch идёт. Chip остаётся fallback'ом при
+            // полном провале (нет ни plaintext, ни blob на relay — >24h).
+            // v160o: сплит по plaintext (см. выше).
+            const localAtts = m.attachments_meta.filter(att => att.plaintext_b64);
+            const remoteAtts = m.attachments_meta.filter(att => !att.plaintext_b64);
+            // Lesson #349: у исходящих с двойн-wrapped ключом ({r,s}) plaintext из
+            // outbox НЕ нужен — рендерим через remote-decrypt (fetch blob +
+            // ECIES unwrap s НАШИМ privkey + AES). Работает на любом устройстве
+            // с той же личностью и переживает чистый outbox. Legacy single-wrapped
+            // (без .s) тоже попробуем decrypt'ом — с нашей подписью это НАШЕ
+            // сообщение, но unwrap 'r' с нашим ключом упадёт → chip fallback.
+            if (localAtts.length > 0) {
+                for (const att of localAtts) {
                     try {
-                        if (!att.plaintext_b64) {
-                            const chip = document.createElement("div");
-                            chip.className = "msg-attach-remote";
-                            chip.textContent = "\ud83d\udcf7 " + (att.name || "file") + " (" + formatSize(att.size || 0) + ")";
-                            placeholderEl.appendChild(chip);
-                            continue;
-                        }
                         const mime = att.mime || "application/octet-stream";
                         const blob = b64ToBlob(att.plaintext_b64, mime);
                         const url = URL.createObjectURL(blob);
@@ -2705,13 +2808,8 @@ function renderMessages() {
                         console.error("[attach-out] render failed:", e);
                     }
                 }
-            } else {
-                // Lesson #349: у исходящих с双重-wrapped ключом ({r,s}) plaintext из
-                // outbox НЕ нужен — рендерим через remote-decrypt (fetch blob +
-                // ECIES unwrap s НАШИМ privkey + AES). Работает на любом устройстве
-                // с той же личностью и переживает чистый outbox. Legacy single-wrapped
-                // (без .s) тоже попробуем decrypt'ом — с нашей подписью это НАШЕ
-                // сообщение, но unwrap 'r' с нашим ключом упадёт → chip fallback.
+            }
+            if (remoteAtts.length > 0) {
                 const remoteList = document.createElement("div");
                 remoteList.className = "msg-attach-list";
                 placeholderEl.appendChild(remoteList);
@@ -2734,8 +2832,11 @@ function renderMessages() {
                             const mod = await import("./render-attachments.js");
                             window.MurmurRenderAttachments = mod;
                         }
-                        for (const att of m.attachments_meta) {
-                            const attEl = { ...att, _selfKey: true };
+                        // v160o: только att БЕЗ plaintext (локальные уже отрендерены
+                        // выше). _plainPoster — постер из локальных meta, чтобы
+                        // превью видео было видно сразу, до завершения fetch+decrypt.
+                        for (const att of remoteAtts) {
+                            const attEl = { ...att, _selfKey: true, _plainPoster: att._plainPoster || att.poster_data_url || null };
                             thisRenderTasks.push(
                                 window.MurmurRenderAttachments.renderAttachment(attEl, remoteList, renderAbort.signal).catch(() => {})
                             );
@@ -3062,6 +3163,12 @@ async function sendMessage() {
             .filter((a) => a.plaintext_b64)
             .map((a) => ({
                 blob_id: a.blob_id,
+                sha256: a.sha256,
+                // v160o: wrapped_key ({r,s}) + iv нужны для self-decrypt после
+                // reload (когда plaintext из storage выброшен санитайзером —
+                // Lesson #349). Без них превью после перезахода становится чипом.
+                wrapped_key: a.wrapped_key,
+                iv: a.iv,
                 mime: a.mime,
                 name: a.name,
                 size: a.size,

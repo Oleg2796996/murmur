@@ -113,8 +113,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 warn!(err=%err, "failed to create undelivered notification");
                             }
                         }
-                        // Удаляем просроченный envelope (каскад: attachment_refs
-                        // + ref_count → blob файл+строка при 0).
+                        // Удаляем просроченный envelope (v160o: refs сносятся,
+                        // blob'ы остаются как orphan до 24h от created_at).
                         if let Err(err) = store_for_ttl.delete_envelope_by_hash(&e.envelope_hash) {
                             warn!(err=%err, "failed to delete expired envelope");
                         }
@@ -149,8 +149,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(_) => {}
                 Err(err) => warn!(err=%err, "pending retention failed"),
             }
-            // v149: blob'ы без ссылок (например, пережитки до багфикса) — удалить.
-            match store_for_ttl.delete_orphan_blobs() {
+            // v160o: blob'ы без ссылок удаляем только если им больше 24h от
+            // загрузки (свежие orphan'ы — ещё не забранные видео/фото).
+            let now_secs: i64 = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            match store_for_ttl.delete_orphan_blobs(now_secs, 86_400) {
                 Ok(files) if !files.is_empty() => {
                     info!(count = files.len(), "orphan blobs deleted");
                 }
