@@ -1036,8 +1036,10 @@ async fn handle_api_history(
                 })
             }).collect();
 
-            // Lesson #131: honest relay — помечаем все отданные envelope'ы к удалению
-            // через 5 мин. Peer offline зашёл за ними — мы больше не помним.
+            // v160m honest relay v2: получатель забрал историю — реально
+            // доставлено. Помечаем отданные envelope'ы к удалению через 5 мин
+            // (крон снесёт; приватность после доставки — как в Lesson #131).
+            // Непомеченные (не забранные) живут полные 24h.
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
