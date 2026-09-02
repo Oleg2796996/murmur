@@ -37,6 +37,13 @@
     // iOS вырезает query из URL манифеста при A2HS, а path сохраняет; уникальный
     // путь бьёт кэш манифестов iOS). Плюс ставим cookie-мост (см. ниже).
     (function () {
+        // v160o: в standalone-PWA НЕ свапаем манифест и НЕ перезаписываем cookie:
+        // start_url у установленной PWA уже заморожен в iOS (смена href ничего
+        // не меняет), а свежая cookie из Safari (новый invite) затиралась бы
+        // старой из frozen start_url при каждом холодном старте PWA.
+        var standalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
+            || window.navigator.standalone === true;
+        if (standalone) return;
         var m = (location.pathname || "").match(/\/invite\/(npub1[a-z0-9]+)/i)
             || (location.hash || "").match(/invite=(npub1[a-z0-9]+)/i)
             || (location.search || "").match(/[?&]invite=(npub1[a-z0-9]+)/i);
@@ -60,7 +67,7 @@
      script. iOS Safari PWA cached HTML может не иметь inline-script (HTML cache
      pre-bump). Meta tag читается через document.querySelector + .content
      (работает даже если inline script не выполнился). -->
-    <meta name="app-version" content="v160n">
+    <meta name="app-version" content="v160o">
     <!-- Lesson #216: cache busting via ?v= query string. iOS Safari PWA
      caches app.js via HTTP cache independently of SW. Query string forces
      re-fetch on each version bump. SW CACHE_VERSION also bumps for SW
@@ -112,6 +119,7 @@
 
             <div class="sidebar-footer">
                 <button id="btn-invite" class="invite-btn-green">Пригласить друга ✉</button>
+                <button id="btn-add-by-link" class="logout-btn-danger" title="Вставить invite-ссылку или npub — добавить чат (гарантированный путь, когда ссылка из Safari не может открыть PWA)" style="background:#2b5278;">Вставить ссылку 📋</button>
                 <button id="btn-show-key" class="logout-btn-danger" title="Показать ключ для переноса на другое устройство" style="background:#2b5278;">Мой ключ 🔑</button>
                 <button id="btn-logout" class="logout-btn-danger" title="Удалить все данные">Удалить все данные</button>
             </div>
@@ -235,10 +243,10 @@
     <!-- Lesson #216 (Олег 2026-08-26 15:18): ?v= cache busting — iOS Safari
      HTTP cache не обновляет app.js по CACHE_VERSION bump alone.
      Query string = guaranteed fresh load on each deploy. -->
-    <script src="blob-cache.js?v=160j" defer></script>
-    <script src="app-store.js?v=160j" defer></script>
-    <script src="render-attachments.js?v=160j" defer></script>
-    <script src="app.js?v=160j" defer></script>
+    <script src="blob-cache.js?v=160o" defer></script>
+    <script src="app-store.js?v=160o" defer></script>
+    <script src="render-attachments.js?v=160o" defer></script>
+    <script src="app.js?v=160o" defer></script>
     <script>
       // Register service worker (push notifications only — Lesson #345).
       // Статикой SW не управляет (fetch-хендлера нет), так что

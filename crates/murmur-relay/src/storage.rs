@@ -275,6 +275,11 @@ impl MessageStore {
     ) -> rusqlite::Result<bool> {
         let mut c = self.conn.lock();
         let tx = c.transaction()?;
+        // v160o: wall-clock для refresh created_at при ref_count++ (см. ниже).
+        let now_ts: i64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
         let n = tx.execute(
             "INSERT OR IGNORE INTO envelopes (envelope_hash, from_npub, to_npub, body, sig, ts, expires_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -316,10 +321,11 @@ impl MessageStore {
                         original_size,
                     ],
                 )?;
-                // Increment blob ref_count (so orphan cleanup knows it's still used).
+                // v160o: ref_count refresh — «24h от последней отправки».
+                // Дедуп-хит оживляет старый blob (orphan cleanup отсчитывает от created_at).
                 tx.execute(
-                    "UPDATE blobs SET ref_count = ref_count + 1 WHERE id = ?1",
-                    params![blob_id],
+                    "UPDATE blobs SET ref_count = ref_count + 1, created_at = ?2 WHERE id = ?1",
+                    params![blob_id, now_ts],
                 )?;
             }
         }
@@ -600,62 +606,29 @@ impl MessageStore {
         Ok(n > 0)
     }
 
-    /// Удаляет envelope по hash + каскад вложений (v149, минимальное хранение):
-    /// attachment_refs по hash сносятся, blob'ы декрементируются; blob с
-    /// ref_count 0 удаляется физически (строка + файл). Вызывается из TTL-cron
-    /// И из пути доставки после успешной broadcast — данные живут ровно столько,
-    /// сколько нужно для маршрутизации.
-    pub fn delete_envelope_by_hash(&self, hash: &str) -> rusqlite::Result<Vec<String>> {
-        let mut deleted_files: Vec<String> = Vec::new();
+    /// Удаляет envelope по hash + сносит attachment_refs (v160o).
+    /// Blob'ы ТОЛЬКО декрементируются: ref_count 0 → blob остаётся в БД как
+    /// «orphan» (строка + файл) и физически удаляется позже — только
+    /// delete_orphan_blobs, если он старше BLOB_MAX_AGE_SECS (24h от загрузки).
+    /// Это гарантирует: полученное видео остаётся доступным ~24h независимо
+    /// от судьбы envelope (v160m каскад убивал файл через ~5 мин после доставки).
+    /// Приватность: файл — AES-256-GCM шифротекст; wrapped_key живёт только в
+    /// attachment_refs, после их удаления дешифровать не может даже владелец relay.
+    pub fn delete_envelope_by_hash(&self, hash: &str) -> rusqlite::Result<()> {
         let c = self.conn.lock();
-        // 1) Какие blob'ы привязаны к этому envelope?
-        let blob_ids: Vec<(String, String)> = {
-            let mut s = c.prepare(
-                "SELECT ar.blob_id, COALESCE(b.storage_path, '') FROM attachment_refs ar \
-                 LEFT JOIN blobs b ON b.id = ar.blob_id \
-                 WHERE ar.envelope_hash = ?1",
-            )?;
-            let rows = s
-                .query_map(params![hash], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
-                .filter_map(|r| r.ok())
-                .collect();
-            rows
-        };
-        // 2) В одной транзакции: refs → декремент → удаление при ref_count <= 0.
         let tx = c.unchecked_transaction()?;
+        // ref_count уникальных blob'ов этого envelope — вниз (строки blob'ов живут).
+        tx.execute(
+            "UPDATE blobs SET ref_count = MAX(ref_count - 1, 0) \
+             WHERE id IN (SELECT DISTINCT blob_id FROM attachment_refs WHERE envelope_hash = ?1)",
+            params![hash],
+        )?;
         tx.execute("DELETE FROM attachment_refs WHERE envelope_hash = ?1", params![hash])?;
-        for (blob_id, storage_path) in &blob_ids {
-            tx.execute(
-                "UPDATE blobs SET ref_count = ref_count - 1 WHERE id = ?1",
-                params![blob_id],
-            )?;
-            let remaining: i64 = tx.query_row(
-                "SELECT ref_count FROM blobs WHERE id = ?1",
-                params![blob_id],
-                |r| r.get(0),
-            ).unwrap_or(0);
-            if remaining <= 0 {
-                tx.execute("DELETE FROM blobs WHERE id = ?1", params![blob_id])?;
-                if !storage_path.is_empty() {
-                    deleted_files.push(storage_path.clone());
-                }
-            }
-        }
         tx.commit()?;
         drop(c);
-        // 3) Сам envelope.
+        // Сам envelope.
         self.exec_sql("DELETE FROM envelopes WHERE envelope_hash = ?1", params![hash])?;
-        // 4) Файлы — после коммита (I/O вне блокировки).
-        for p in &deleted_files {
-            let path = std::path::Path::new(p);
-            if path.exists() {
-                match std::fs::remove_file(path) {
-                    Ok(_) => info!(blob = %p, "v149: blob file deleted (ref_count=0)"),
-                    Err(e) => warn!(blob = %p, error = %e, "v149: failed to delete blob file"),
-                }
-            }
-        }
-        Ok(deleted_files)
+        Ok(())
     }
 
     /// v149: blob'ы без ссылок (orphan) — удалить. Вызывается из TTL-cron.
@@ -728,16 +701,22 @@ impl MessageStore {
         Ok(Some(ct_b64))
     }
 
-    pub fn delete_orphan_blobs(&self) -> rusqlite::Result<Vec<String>> {
+    /// v160o: blob'ы без ссылок (orphan) удаляем только если они старше
+    /// retention_secs (сек от загрузки, created_at). Свежие orphan'ы — это
+    /// чьи-то ещё не забранные видео/фото: они обязаны дожить до 24h.
+    pub fn delete_orphan_blobs(&self, now: i64, retention_secs: i64) -> rusqlite::Result<Vec<String>> {
         let mut deleted_files: Vec<String> = Vec::new();
         let blob_ids: Vec<(String, String)> = {
             let c = self.conn.lock();
             let mut s = c.prepare(
                 "SELECT b.id, b.storage_path FROM blobs b \
-                 WHERE NOT EXISTS (SELECT 1 FROM attachment_refs ar WHERE ar.blob_id = b.id)",
+                 WHERE NOT EXISTS (SELECT 1 FROM attachment_refs ar WHERE ar.blob_id = b.id) \
+                 AND b.created_at < ?1",
             )?;
             let rows = s
-                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .query_map(params![now.saturating_sub(retention_secs)], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })?
                 .filter_map(|r| r.ok())
                 .collect();
             rows
@@ -760,8 +739,8 @@ impl MessageStore {
             let path = std::path::Path::new(p);
             if path.exists() {
                 match std::fs::remove_file(path) {
-                    Ok(_) => info!(blob = %p, "v149: orphan blob deleted"),
-                    Err(e) => warn!(blob = %p, error = %e, "v149: failed to delete orphan blob file"),
+                    Ok(_) => info!(blob = %p, "v160o: orphan blob deleted (age > retention)"),
+                    Err(e) => warn!(blob = %p, error = %e, "v160o: failed to delete orphan blob file"),
                 }
             }
         }
@@ -825,7 +804,8 @@ mod tests {
             )
             .unwrap();
         // v149: envelopes + blobs (+attachment_refs). user_aliases удалена.
-        assert_eq!(n, 3);
+        // v160f: + identity_transfers (итого 4).
+        assert_eq!(n, 4);
     }
 
     #[test]
@@ -906,13 +886,41 @@ mod tests {
             Ok((a, b))
         }).unwrap();
         assert_eq!((c1, c2), (2, 1), "ref_count must equal live ref rows");
+        // v160o: удаление envelope НЕ удаляет blob'ы физически (ref_count → 0,
+        // строка+файл живут как orphan до 24h от created_at).
         db.delete_envelope_by_hash("e1").unwrap();
         let b1: i64 = db.with_conn(|c| c.query_row("SELECT ref_count FROM blobs WHERE id='b1'", [], |r| r.get(0))).unwrap();
         let b2: Option<i64> = db.with_conn(|c| c.query_row("SELECT ref_count FROM blobs WHERE id='b2'", [], |r| r.get(0)).optional()).map(|o| o.flatten()).unwrap_or(None);
         assert_eq!(b1, 1);
-        assert!(b2.is_none(), "b2 must be deleted at ref_count=0");
+        assert!(b2.is_some(), "b2 must survive as orphan (row alive, ref_count=0)");
         db.delete_envelope_by_hash("e2").unwrap();
-        let left: i64 = db.with_conn(|c| c.query_row("SELECT COUNT(*) FROM blobs", [], |r| r.get(0))).unwrap();
-        assert_eq!(left, 0, "all blobs gone after both envelopes deleted");
+        let (left, (r1, r2)): (i64, (i64, i64)) = db.with_conn(|c| {
+            let n: i64 = c.query_row("SELECT COUNT(*) FROM blobs", [], |r| r.get(0)).unwrap();
+            let a: i64 = c.query_row("SELECT ref_count FROM blobs WHERE id='b1'", [], |r| r.get(0)).unwrap();
+            let b: i64 = c.query_row("SELECT ref_count FROM blobs WHERE id='b2'", [], |r| r.get(0)).unwrap();
+            Ok((n, (a, b)))
+        }).unwrap();
+        assert_eq!(left, 2, "v160o: both blob rows survive envelope deletion");
+        assert_eq!((r1, r2), (0, 0), "ref_counts drained to 0");
+        // Свежий orphan (created_at = сейчас) НЕ удаляется cleanup'ом с retention 24h.
+        let now: i64 = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        db.with_conn(|c| {
+            c.execute_batch(
+                "INSERT INTO blobs (id, sha256, mime, size, storage_path, created_at, ref_count) VALUES
+                 ('b3', 's3', 'image/png', 10, '/tmp/b3', 0, 0);",
+            )
+        })
+        .unwrap();
+        db.with_conn(|c| c.execute("UPDATE blobs SET created_at = ?1 WHERE id IN ('b1','b2','b3')", params![now])).unwrap();
+        let fresh: Vec<String> = db.delete_orphan_blobs(now, 86_400).unwrap();
+        assert!(fresh.is_empty(), "fresh orphans must survive cleanup");
+        let left_fresh: i64 = db.with_conn(|c| c.query_row("SELECT COUNT(*) FROM blobs", [], |r| r.get(0))).unwrap();
+        assert_eq!(left_fresh, 3);
+        // Старше retention — удаляются (файлы fake, remove_file защищён exists()).
+        db.with_conn(|c| c.execute_batch("UPDATE blobs SET created_at = created_at - 90000")).unwrap();
+        let stale: Vec<String> = db.delete_orphan_blobs(now, 86_400).unwrap();
+        assert_eq!(stale.len(), 3, "aged orphans must be deleted");
+        let left_old: i64 = db.with_conn(|c| c.query_row("SELECT COUNT(*) FROM blobs", [], |r| r.get(0))).unwrap();
+        assert_eq!(left_old, 0);
     }
 }
