@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>murmur · диагностика превью видео</title>
+<style>
+  body { font: 14px/1.45 -apple-system, system-ui, sans-serif; margin: 0; padding: 16px; background: #0b0f14; color: #d8dee6; }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  .sub { color: #7c8794; font-size: 12px; margin-bottom: 14px; }
+  button { font-size: 15px; padding: 12px 18px; border-radius: 10px; border: 0; background: #2f6feb; color: #fff; width: 100%; }
+  button.secondary { background: #30363d; margin-top: 10px; }
+  #log { margin-top: 14px; background: #12171d; border-radius: 10px; padding: 10px; font: 11px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; min-height: 200px; }
+  .ok { color: #4cc38a; } .bad { color: #f0883e; } .dim { color: #7c8794; }
+  #shot { max-width: 100%; border-radius: 8px; margin-top: 10px; display: none; }
+</style>
+</head>
+<body>
+<h1>🎬 Диагностика постера видео</h1>
+<div class="sub">Реальный iPhone · проверяет extractVideoPoster в изоляции</div>
+<button onclick="pickVideo()">Выбрать видео (.MOV)</button>
+<video id="pv" controls playsinline style="display:none;width:100%;margin-top:10px"></video>
+<img id="shot" alt="poster">
+<div id="log">Готово к проверке.</div>
+<script>
+const $log = document.getElementById("log");
+function log(msg, cls) {
+  const t = new Date().toLocaleTimeString("ru-RU");
+  const line = document.createElement("div");
+  line.className = cls || "";
+  line.textContent = `[${t}] ${msg}`;
+  $log.appendChild(line);
+  $log.scrollTop = $log.scrollHeight;
+}
+log("UA: " + navigator.userAgent, "dim");
+log("standalone: " + (window.matchMedia && matchMedia("(display-mode: standalone)").matches), "dim");
+log("rVFC: " + (HTMLVideoElement.prototype.requestVideoFrameCallback ? "yes" : "no"), "dim");
+
+function pickVideo() {
+  const inp = document.createElement("input");
+  inp.type = "file";
+  inp.accept = "video/*";
+  inp.onchange = () => {
+    const f = inp.files[0];
+    if (!f) return;
+    document.getElementById("pv").style.display = "block";
+    document.getElementById("pv").src = URL.createObjectURL(f);
+    document.getElementById("shot").style.display = "none";
+    log(`файл: ${f.name} type=${f.type} size=${(f.size/1e6).toFixed(1)}MB`);
+    run(f);
+  };
+  inp.click();
+}
+
+function run(file) {
+  const t0 = performance.now();
+  let url = null, v = null, timer = null, settled = false;
+  const finish = (val, why) => {
+    if (settled) return; settled = true;
+    clearTimeout(timer);
+    const dt = ((performance.now() - t0) / 1000).toFixed(1);
+    if (val) {
+      document.getElementById("shot").src = val;
+      document.getElementById("shot").style.display = "block";
+      log(`✅ POSTER OK за ${dt}s (${why}), длина=${val.length}`, "ok");
+      // копия extractVideoPoster v160k: чёрный центр?
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement("canvas");
+        c.width = img.width; c.height = img.height;
+        const x = c.getContext("2d");
+        x.drawImage(img, 0, 0);
+        const p = x.getImageData(c.width >> 1, c.height >> 1, 1, 1).data;
+        log(`центр постера RGB = ${p[0]},${p[1]},${p[2]}`, p[0]+p[1]+p[2] < 12 ? "bad" : "ok");
+      };
+      img.src = val;
+    } else {
+      log(`❌ POSTER NULL за ${dt}s (${why})`, "bad");
+    }
+    log("— конец —", "dim");
+  };
+  url = URL.createObjectURL(file);
+  timer = setTimeout(() => finish(null, "timeout 15s"), 15000);
+  try {
+    v = document.createElement("video");
+    v.style.cssText = "position:fixed;left:-9999px;top:-9999px;width:2px;height:2px;opacity:0.01;pointer-events:none;";
+    document.body.appendChild(v);
+    v.muted = true; v.playsInline = true; v.preload = "auto";
+    v.src = url;
+    try { v.load(); } catch (e) {}
+    log("DOM: appended, load() called", "dim");
+
+    v.addEventListener("loadedmetadata", () => log(`loadedmetadata: ${v.videoWidth}x${v.videoHeight} dur=${v.duration}s`), { once: true });
+    let playStarted = false;
+    const tryPlay = () => {
+      if (playStarted) return; playStarted = true;
+      const p = v.play();
+      if (p && p.catch) p.catch((e) => { playStarted = false; log(`play() reject: ${e && e.name}`, "bad"); });
+      if (p && p.then) p.then(() => log("play() resolved ✅", "ok"));
+    };
+    tryPlay();
+    const retry = setInterval(tryPlay, 1000);
+    setTimeout(() => clearInterval(retry), 10000);
+
+    let grabTries = 0;
+    const grab = () => {
+      try {
+        if ((!v.videoWidth || !v.videoHeight) && grabTries++ < 5) return setTimeout(grab, 300);
+        if (!v.videoWidth || !v.videoHeight) return finish(null, "no videoWidth");
+        const cv = document.createElement("canvas");
+        cv.width = v.videoWidth; cv.height = v.videoHeight;
+        const ctx = cv.getContext("2d");
+        ctx.drawImage(v, 0, 0);
+        const px = ctx.getImageData(cv.width >> 1, cv.height >> 1, 1, 1).data;
+        log(`grab: ${cv.width}x${cv.height} центр RGB=${px[0]},${px[1]},${px[2]}`);
+        if (px[0] + px[1] + px[2] < 12) {
+          if (grabTries++ < 5) return setTimeout(grab, 300);
+          return finish(null, "black frame");
+        }
+        try { v.pause(); } catch (e) {}
+        finish(cv.toDataURL("image/jpeg", 0.6), "grab");
+      } catch (e) { finish(null, "grab error: " + e.message); }
+    };
+    let seekScheduled = false;
+    const scheduleSeek = () => {
+      if (seekScheduled) return; seekScheduled = true;
+      const t = Math.min(0.5, (v.duration || 1) * 0.25);
+      const doSeek = () => {
+        v.addEventListener("seeked", grab, { once: true });
+        try { v.currentTime = t; log(`seek → ${t}s`); } catch (e) { grab(); }
+      };
+      if (typeof v.requestVideoFrameCallback === "function") {
+        v.requestVideoFrameCallback(() => { log("rVFC fired ✅"); doSeek(); });
+        setTimeout(doSeek, 1500);
+      } else {
+        setTimeout(doSeek, 600);
+      }
+    };
+    v.addEventListener("loadeddata", () => { log("loadeddata ✅"); tryPlay(); scheduleSeek(); }, { once: true });
+    setTimeout(scheduleSeek, 3000);
+    v.addEventListener("error", () => finish(null, "video error: " + (v.error && v.error.message)), { once: true });
+  } catch (e) { finish(null, "exception: " + e.message); }
+}
+</script>
+</body>
+</html>
