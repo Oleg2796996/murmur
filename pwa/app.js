@@ -922,6 +922,7 @@ function b64ToBlob(b64, mime) {
     for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
     return new Blob([out], { type: mime || "application/octet-stream" });
 }
+window.b64ToBlob = b64ToBlob; // v160p: глобальный alias — blob-cache paste в sendMessage
 
 // Render an outgoing attachment from local plaintext (no decrypt round-trip).
 function renderOutgoingAttachment({ mime, name, url, size, poster, att }) {
