@@ -281,11 +281,17 @@ async function extractVideoPoster(file) {
                         return setTimeout(grab, 300);
                     }
                     if (!v.videoWidth || !v.videoHeight) return finish(null);
+                    // v160l: постер НЕ в разрешении видео. 4K .MOV давал
+                    // 2160x3840 JPEG ≈ 1.5 MB → в sealed ct → тяжёлый envelope,
+                    // медленный ECIES на телефоне, жирный /api/history.
+                    // Даунскейл до 640px по длинной стороне (~50–150 KB).
+                    const MAXP = 640;
+                    const scale = Math.min(1, MAXP / Math.max(v.videoWidth, v.videoHeight));
                     const cv = document.createElement("canvas");
-                    cv.width = v.videoWidth;
-                    cv.height = v.videoHeight;
+                    cv.width = Math.max(1, Math.round(v.videoWidth * scale));
+                    cv.height = Math.max(1, Math.round(v.videoHeight * scale));
                     const ctx = cv.getContext("2d");
-                    ctx.drawImage(v, 0, 0);
+                    ctx.drawImage(v, 0, 0, cv.width, cv.height);
                     // Чёрный кадр = декод не удался (iOS до play) — бракуем.
                     const px = ctx.getImageData(
                         cv.width >> 1, cv.height >> 1, 1, 1).data;
