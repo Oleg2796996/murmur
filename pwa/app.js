@@ -159,6 +159,7 @@ function _sanitizeMessageForStorage(m) {
     if (Array.isArray(cm.attachments_meta)) cm.attachments_meta = cm.attachments_meta.map(_sanitizeAttachmentForStorage);
     return cm;
 }
+window._murmurSanitizeMessageForStorage = _sanitizeMessageForStorage; // v160s: app-store.js IDB put
 function _sanitizeAttachmentNeedsCopy(att) {
     return !!att && typeof att === "object" && !!att.plaintext_b64
         && ((att.mime || "").indexOf("video/") === 0 || (att.size || 0) > 1.5 * 1024 * 1024);

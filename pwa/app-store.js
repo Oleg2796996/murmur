@@ -208,7 +208,11 @@ const chats = {
     },
     async saveMessages(peer, messages) {
         if (!Array.isArray(messages) || messages.length === 0) return;
-        const trimmed = messages.slice(-MAX_MESSAGES_PER_PEER);
+        // v160s (Lesson #362): runtime-only поля (Promise и другие несериализуемые)
+        // в messages[] ломают IDB put → DataCloneError → кэш не persists.
+        // Санитайзер из app.js: _sanitizeMessageForStorage (если есть).
+        const sanitize = window._murmurSanitizeMessageForStorage;
+        const trimmed = messages.slice(-MAX_MESSAGES_PER_PEER).map(sanitize ? sanitize : (m) => m);
         const record = { peer, messages: trimmed, updatedAt: Date.now() };
         return _tx(STORE_CHATS, "readwrite", (store) => new Promise((resolve, reject) => {
             const req = store.put(record);
