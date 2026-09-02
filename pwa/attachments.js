@@ -219,21 +219,36 @@ function uploadCiphertext({ sha256Hex, mime, name, size, wrappedKey, ciphertext,
 async function extractVideoPoster(file) {
     return new Promise((resolve) => {
         let settled = false;
+        let playRetry = null;
         const finish = (val) => {
             if (settled) return;
             settled = true;
             clearTimeout(timer);
+            if (playRetry) clearInterval(playRetry);
+            try { v && v.parentNode && v.parentNode.removeChild(v); } catch (e) {}
             try { URL.revokeObjectURL(url); } catch (e) {}
             resolve(val);
         };
         const url = URL.createObjectURL(file);
-        const timer = setTimeout(() => finish(null), 10000);
+        // v160k: 4K/HEVC .MOV на реальном iPhone декодируется дольше — 15 c.
+        const timer = setTimeout(() => finish(null), 15000);
+        let v = null;
         try {
-            const v = document.createElement("video");
+            v = document.createElement("video");
+            // v160k (реальный iPhone: «превью по-прежнему нет» при зелёном симе):
+            // iOS Safari НЕ начинает загрузку медиа у <video> вне DOM —
+            // loadeddata не приходит, до seek/grab дело не доходит →
+            // 10s timeout → poster=null → превью нет. Playwright WebKit на HP
+            // так себя не ведёт, поэтому v160j в симуляции зелёный, а на телефоне
+            // нет. Фикс: вставляем элемент в DOM оф-скрин (НЕ display:none —
+            // он глушит декодирование).
+            v.style.cssText = "position:fixed;left:-9999px;top:-9999px;width:2px;height:2px;opacity:0.01;pointer-events:none;";
+            document.body.appendChild(v);
             v.muted = true;
             v.playsInline = true;
             v.preload = "auto";
             v.src = url;
+            try { v.load(); } catch (e) {}
             // v160j (Олег: «по прежнему нет превью на телефоне»): iOS декодирует
             // видео ТОЛЬКО после начала воспроизведения — drawImage по неиграющему
             // видео даёт чёрный кадр (браковался → poster=null → превью нет).
@@ -244,8 +259,18 @@ async function extractVideoPoster(file) {
                 if (playStarted) return;
                 playStarted = true;
                 const p = v.play();
-                if (p && p.catch) p.catch(() => { /* Low Power Mode — останется старый путь */ });
+                if (p && p.catch) p.catch(() => {
+                    // Low Power Mode / нет жеста — сбрасываем флаг, ретраи
+                    // попытаются снова (v160k).
+                    playStarted = false;
+                });
             };
+            // v160k: играть СРАЗУ после установки src (v160j звал tryPlay только
+            // внутри loadeddata — на iOS loadeddata может не прийти до старта
+            // воспроизведения) + ретраи каждую секунду.
+            tryPlay();
+            playRetry = setInterval(tryPlay, 1000);
+            setTimeout(() => { if (playRetry) { clearInterval(playRetry); playRetry = null; } }, 10000);
             let grabTries = 0;
             const grab = () => {
                 try {
@@ -273,8 +298,10 @@ async function extractVideoPoster(file) {
                     finish(cv.toDataURL("image/jpeg", 0.6));
                 } catch (e) { finish(null); }
             };
-            v.addEventListener("loadeddata", () => {
-                tryPlay();
+            let seekScheduled = false;
+            const scheduleSeek = () => {
+                if (seekScheduled) return;
+                seekScheduled = true;
                 const t = Math.min(0.5, (v.duration || 1) * 0.25);
                 const doSeek = () => {
                     v.addEventListener("seeked", grab, { once: true });
@@ -287,7 +314,14 @@ async function extractVideoPoster(file) {
                 } else {
                     setTimeout(doSeek, 600);
                 }
+            };
+            v.addEventListener("loadeddata", () => {
+                tryPlay();
+                scheduleSeek();
             }, { once: true });
+            // v160k: если loadeddata так и не пришёл (iOS без старта загрузки —
+            // наш основной подозреваемый), всё равно пробуем seek по таймеру.
+            setTimeout(scheduleSeek, 3000);
             v.addEventListener("error", () => finish(null), { once: true });
         } catch (e) { finish(null); }
     });
