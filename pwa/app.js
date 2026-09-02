@@ -1173,6 +1173,18 @@ function enterMessenger() {
     identityScreen.hidden = true;
     messenger.hidden = false;
     messenger.classList.add("active");
+    // v160n: прогрев ленивых модулей вложений. attachments.js/render-attachments.js
+    // грузятся динамическим import() ТОЛЬКО в момент прикрепления файла. На
+    // iOS PWA без кэша (no-store) плохая сеть (метро/LTE-тоннель) даёт
+    // «TypeError: Load failed» → чип «Не удалось загрузить модуль шифрования»,
+    // и WebKit запоминает неудачу до перезагрузки страницы. Греем оба модуля
+    // сразу после входа — к моменту attach они уже в памяти.
+    import("./attachments.js")
+        .then(() => { window.MurmurAttachments = window.MurmurAttachments || null; console.log("[warmup] attachments.js ready"); })
+        .catch((e) => console.warn("[warmup] attachments.js failed (will retry on attach):", e));
+    import("./render-attachments.js")
+        .then(() => console.log("[warmup] render-attachments.js ready"))
+        .catch((e) => console.warn("[warmup] render-attachments.js failed (will retry on render):", e));
     // Lesson #212: show app version + SW version banner for debugging
     const banner = $("version-banner");
     if (banner) {
@@ -3250,12 +3262,24 @@ if (btnAttach && fileInput) {
             return;
         }
         // Ensure attachments module loaded (dynamic import, code-splitting #171).
+        // v160n: ретраи с паузой — в метро/LTE-тоннеле первый fetch может упасть
+        // («Load failed»). 3 попытки: сразу, +1.5s, +3s; после неудачи — чип.
+        // Прогрев из enterMessenger обычно уже загрузил модуль, это fallback.
         if (!window.MurmurAttachments) {
-            try {
-                await import("./attachments.js");
-            } catch (err) {
-                pushRejectedChip({ name: "—", size: 0 }, "Не удалось загрузить модуль шифрования.");
-                console.error(err);
+            let loaded = false, lastErr = null;
+            for (let attempt = 0; attempt < 3 && !loaded; attempt++) {
+                if (attempt > 0) await new Promise((r) => setTimeout(r, 1500 * attempt));
+                try {
+                    await import("./attachments.js");
+                    loaded = true;
+                } catch (err) {
+                    lastErr = err;
+                    console.error("attachments.js import attempt", attempt + 1, "failed:", err);
+                }
+            }
+            if (!loaded) {
+                pushRejectedChip({ name: "—", size: 0 }, "Не удалось загрузить модуль шифрования (сеть? проверьте соединение и откройте приложение заново).");
+                console.error(lastErr);
                 fileInput.value = "";
                 return;
             }
