@@ -214,16 +214,13 @@ const chats = {
         const sanitize = window._murmurSanitizeMessageForStorage;
         const trimmed = messages.slice(-MAX_MESSAGES_PER_PEER).map(sanitize ? sanitize : (m) => m)
             .map((m) => {
-                // v160u: deep defense — Promise/несериализуемые поля → null (Lesson #362).
+                // v160w: deep defense — Promise/несериализуемые поля → null (Lesson #362).
+                // Promise может жить в вложенных объектах (_server_msg). JSON.stringify
+                // с replacer вырезает Promise (typeof v.then === "function") целиком.
                 if (!m || typeof m !== "object") return m;
-                let needs = false;
-                const cm = Object.assign({}, m);
-                for (const k in cm) {
-                    if (cm[k] && typeof cm[k] === "object" && typeof cm[k].then === "function") {
-                        cm[k] = null; needs = true;
-                    }
-                }
-                return needs ? cm : m;
+                const cm = JSON.parse(JSON.stringify(m, (k, v) =>
+                    (v && typeof v === "object" && typeof v.then === "function" ? null : v)));
+                return cm;
             });
         const record = { peer, messages: trimmed, updatedAt: Date.now() };
         return _tx(STORE_CHATS, "readwrite", (store) => new Promise((resolve, reject) => {
