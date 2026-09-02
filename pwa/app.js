@@ -102,6 +102,30 @@ const LS_MESSAGES_MAX_TS = "murmur.messages_max_ts";
 // v158 (Олег 2026-08-31 19:16): квитанции доставки ✓✓ — клиент-only, БЕЗ «прочитано».
 const LS_ACKS = "murmur.acks.v1";           // { [envelope_hash]: ts } — ✓✓ от получателя
 const LS_RECEIPTED = "murmur.receipted.v1"; // { ["peer|hash"]: ts } — уже отчитались (анти-шторм)
+
+// v160p (Олег 2026-09-02 «пропало превью на отправленном видео»: постер сервер
+// не видел (внутри E2E), локальные меты теряются при слиянии кэша с серверной
+// строкой). Постеры в постоянном кэше по blob_id: пишем при отправке и при
+// расшифровке входящих, читаем при любом рендере. ≤24 постеров (~150KB).
+const LS_POSTERS = "murmur.posters.v1";
+function savePosterToCache(blobId, dataUrl) {
+    if (!blobId || !dataUrl) return;
+    try {
+        const store = JSON.parse(localStorage.getItem(LS_POSTERS) || "{}");
+        store[blobId] = dataUrl;
+        const keys = Object.keys(store);
+        if (keys.length > 24) keys.slice(0, keys.length - 24).forEach((k) => delete store[k]);
+        localStorage.setItem(LS_POSTERS, JSON.stringify(store));
+    } catch (e) { /* quota — fail OK */ }
+}
+function posterFromCache(blobId) {
+    if (!blobId) return null;
+    try {
+        const store = JSON.parse(localStorage.getItem(LS_POSTERS) || "{}");
+        return store[blobId] || null;
+    } catch (e) { return null; }
+}
+window.MurmurPosterCache = { put: savePosterToCache, get: posterFromCache };
 const RECEIPT_ACKS_CAP = 500;
 const RECEIPT_STORE_CAP = 800;
 const RECEIPT_BATCH_CAP = 80;               // hash'ей в одной квитанции
@@ -625,6 +649,8 @@ async function decryptEnvelopeForRender(env) {
                         // извлечён отправителем, релей его не видел (внутри ct).
                         _plainPoster: pa.poster_data_url || null,
                     });
+                    // v160p: постер входящего в постоянный кэш по blob_id.
+                    if (attachmentsMeta[i].blob_id) savePosterToCache(attachmentsMeta[i].blob_id, pa.poster_data_url);
                 }
             }
         }
@@ -898,7 +924,7 @@ function b64ToBlob(b64, mime) {
 }
 
 // Render an outgoing attachment from local plaintext (no decrypt round-trip).
-function renderOutgoingAttachment({ mime, name, url, size, poster }) {
+function renderOutgoingAttachment({ mime, name, url, size, poster, att }) {
     const figure = document.createElement("figure");
     figure.className = "attach-figure";
     if (mime.startsWith("image/")) {
@@ -928,21 +954,9 @@ function renderOutgoingAttachment({ mime, name, url, size, poster }) {
         playBtn.textContent = "▶";
         wrap.appendChild(thumb);
         wrap.appendChild(playBtn);
-        wrap.onclick = () => {
-            const overlay = document.createElement("div");
-            overlay.className = "fullscreen-overlay";
-            const pv = document.createElement("video");
-            pv.src = url;
-            pv.controls = true;
-            pv.autoplay = true;
-            pv.playsInline = true;
-            pv.className = "fullscreen-video";
-            overlay.appendChild(pv);
-            overlay.onclick = (e) => {
-                if (e.target === overlay) { pv.pause(); overlay.remove(); }
-            };
-            document.body.appendChild(overlay);
-        };
+        // v160p: полный плеер теперь window.openVideoFullscreen (self-healing,
+        // re-resolve из blob-кэша при dead URL) — дубль убран.
+        wrap.onclick = () => openVideoFullscreen(url, mime, att.name || att._plainName || name, att);
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(thumb, url);
         figure.appendChild(wrap);
         if (window.murmurSetupVideoPreview) window.murmurSetupVideoPreview(wrap, thumb, url);
@@ -2799,7 +2813,7 @@ function renderMessages() {
                         const url = URL.createObjectURL(blob);
                         // Lesson #225: track в WeakMap imgElement→blobUrl для авто-revoke
                         // (но сначала надо создать img element чтобы зарегистрировать)
-                        const el = renderOutgoingAttachment({ mime, name: att.name, url, size: att.size, poster: att.poster_data_url || null });
+                        const el = renderOutgoingAttachment({ mime, name: att.name, url, size: att.size, poster: att.poster_data_url || att._plainPoster || posterFromCache(att.blob_id) || null, att });
                         if (el && el.tagName === "IMG" && window.__murmurBlobOwners) {
                             window.__murmurBlobOwners.set(el, url);
                         }
@@ -3196,6 +3210,20 @@ async function sendMessage() {
         // Lesson #159: сохраняем в outbox localStorage, чтобы после reload можно было
         // отрисовать без decrypt (анти-паттерн шифровать/расшифровывать собственные).
         console.log("[send] attachmentsWithPlaintext count =", attachmentsWithPlaintext.length, "metaSnapshot =", metaSnapshot.length);
+        // v160p: plaintext каждого вложения (видео и большие файлы тоже!) кладём
+        // в blob-cache (IDB хранит Blob нативно — квота base64-строк не ревает,
+        // Lesson #360). После reload рендер мгновенный из кэша, без расшифки
+        // (Олег 2026-09-02: «висит расшифка, потом видео — должно из кэша»).
+        for (const a of metaSnapshot) {
+            if (a.plaintext_b64 && window.MurmurBlobCache && window.MurmurBlobCache.isAvailable()) {
+                b64ToBlob(a.plaintext_b64, a.mime).then((blob) => {
+                    window.MurmurBlobCache.put(a.blob_id, blob, a.mime).catch(() => {});
+                }).catch(() => {});
+            }
+        }
+        // v160p: постер каждого вложения в постоянный кэш по blob_id
+        // превью survives reload'ы и слияние кэша с серверной строкой.
+        for (const a of metaSnapshot) savePosterToCache(a.blob_id, a.poster_data_url);
         // Lesson #350: _sig стабилен (локальный ts не меняем) — outbox сразу под финальным ключом.
         saveToOutbox(renderedMsg, text, attachmentsWithPlaintext);
         renderMessages();
