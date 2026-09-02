@@ -157,7 +157,7 @@ async function renderAttachment(att, containerEl, abortSignal) {
                 // neutral f-…bin otherwise.
                 const displayName = att._plainName || att.name;
                 const mime = att._plainMime || att.mime || cachedBlob.type || "application/octet-stream";
-                const el = renderByMime({ mime, name: displayName, blobUrl, size: cachedBlob.size, poster: att._plainPoster || null });
+                const el = renderByMime({ mime, name: displayName, blobUrl, size: cachedBlob.size, poster: att._plainPoster || att.poster_data_url || posterFromCache(att.blob_id) || null });
                 placeholder.replaceWith(el);
                 clearTimeout(safetyNetId); // Lesson #319: safety net отработал — снимаем
                 console.log("[attach-cache] HIT", att.blob_id.slice(0, 8), "size=", cachedBlob.size);
@@ -183,12 +183,15 @@ async function renderAttachment(att, containerEl, abortSignal) {
         const mime = att._plainMime || att.mime || "application/octet-stream";
         const blob = new Blob([plain], { type: mime });
         // Lesson #211: save to cache for next render (fire-and-forget)
+        // v160p: входящие мелкие файлы (<1.5MB) — plaintext в blob-cache, рендер
+        // после reload мгновенный, без fetch+decrypt (Олег 2026-09-02).
+        if (window.MurmurPosterCache) { /* poster cache marker */ }
         if (cache && cache.isAvailable && cache.isAvailable()) {
             cache.put(att.blob_id, blob, mime).catch(e => console.warn("[attach-cache] put failed", e));
         }
         blobUrl = URL.createObjectURL(blob);
         // e. Render based on mime
-        const el = renderByMime({ mime, name: att._plainName || att.name, blobUrl, size: plain.length, poster: att._plainPoster || null });
+        const el = renderByMime({ mime, name: att._plainName || att.name, blobUrl, size: plain.length, poster: att._plainPoster || att.poster_data_url || posterFromCache(att.blob_id) || null });
         placeholder.replaceWith(el);
         clearTimeout(safetyNetId); // Lesson #319: safety net отработал — снимаем
         return el;
@@ -274,7 +277,7 @@ function renderByMime({ mime, name, blobUrl, size, poster }) {
         playBtn.textContent = "▶";
         wrap.appendChild(thumb);
         wrap.appendChild(playBtn);
-        wrap.onclick = () => openVideoFullscreen(blobUrl, mime, name);
+        wrap.onclick = () => openVideoFullscreen(blobUrl, mime, name, att);
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(thumb, blobUrl);
         figure.appendChild(wrap);
         // v160c: общий сетап превью — реализация в window.murmurSetupVideoPreview
@@ -362,15 +365,49 @@ function openFullscreen(blobUrl, mime) {
 // v160: полноэкранный видеоплеер (tap по превью в чате).
 // blob URL НЕ ревокается — он принадлежит аттачу в чате (auto-revoke
 // через __murmurBlobOwners при удалении сообщения).
-function openVideoFullscreen(blobUrl, mime, name) {
+function openVideoFullscreen(blobUrl, mime, name, att) {
     const overlay = document.createElement("div");
     overlay.className = "fullscreen-overlay";
     const v = document.createElement("video");
-    v.src = blobUrl;
     v.controls = true;
     v.autoplay = true;
     v.playsInline = true;
     v.className = "fullscreen-video";
+    v.src = blobUrl;
+    // v160p (Олег 2026-09-02 «превью есть, но проиграть невозможно»: captured
+    // blobUrl может быть ревокирован/исчезнуть при перерисовке чата). Плеер
+    // self-healing: при ошибке src — fresh URL из blob-кэша (IDB), иначе
+    // fetch+decrypt по метам аттача. Тап по превью теперь всегда играет.
+    if (att && att.blob_id) {
+        v.onerror = async () => {
+            console.warn("[v160p] fullscreen src dead, re-resolving", att.blob_id.slice(0, 8));
+            try {
+                const cache = window.MurmurBlobCache;
+                let blob = null;
+                if (cache && cache.isAvailable && cache.isAvailable()) {
+                    blob = await cache.get(att.blob_id);
+                }
+                if (!blob) {
+                    const ct = await withTimeout(fetchBlob(att.blob_id, null), 45000, "fetchBlob");
+                    const key = await withTimeout(eciesUnwrapKey(att.wrapped_key, { self: !!att._selfKey }), 15000, "eciesUnwrap");
+                    const iv = b64decode(att.iv);
+                    const plain = await aesDecrypt({ ciphertext: ct, key, iv });
+                    const mime2 = att._plainMime || att.mime || "application/octet-stream";
+                    blob = new Blob([plain], { type: mime2 });
+                    if (cache && cache.isAvailable && cache.isAvailable()) {
+                        cache.put(att.blob_id, blob, mime2).catch(() => {});
+                    }
+                }
+                v.src = URL.createObjectURL(blob);
+                v.load();
+                const p = v.play();
+                if (p && p.catch) p.catch(() => {});
+                console.log("[v160p] fullscreen re-resolved OK");
+            } catch (e) {
+                console.warn("[v160p] fullscreen re-resolve failed:", e);
+            }
+        };
+    }
     overlay.appendChild(v);
     overlay.onclick = (e) => {
         if (e.target === overlay) { // клик по фону, не по контролам
