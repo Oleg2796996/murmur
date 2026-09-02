@@ -570,7 +570,7 @@ impl MessageStore {
             "original_recipient": original.to_npub,
             "original_ts": original.ts,
             "reason": "expired",
-            "message": "Адресат не заходил в сеть 24 часа. Попробуйте позже.",
+            "message": "Адресат не забрал сообщение за 24 часа. Попробуйте позже.",
         });
         let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
         let new_hash = {

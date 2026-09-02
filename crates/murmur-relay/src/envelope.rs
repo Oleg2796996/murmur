@@ -222,8 +222,18 @@ pub fn accept_envelope(
         if inserted {
             // v149: серверный unread удалён (клиент считает сам, lesson #125).
         } else {
-            // Duplicate envelope — skip.
+            // Duplicate envelope — re-broadcast (peer мог подключиться между
+            // попытками отправителя) + shorten при live-доставке, как выше.
             let n = hub.broadcast(&entry, Some(store));
+            if n > 0 {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                if let Err(e) = store.shorten_expires_at(&hash_hex, now + 300) {
+                    warn!(err=%e, "shorten_expires_at failed (dup)");
+                }
+            }
             return Ok((hash_hex, n));
         }
     }
@@ -232,21 +242,24 @@ pub fn accept_envelope(
     let n = hub.broadcast(&entry, store);
     info!(to=%recipient_npub, hash=%hash_hex, subs=n, "envelope accepted + fanout");
 
-    // Lesson #131: honest relay — после broadcast/envelope сокращаем TTL до 5 минут.
-    // Peer через WS уже получил. Cron снесёт через 5 мин. Если peer был
-    // offline — он зайдёт через /api/history в течение 5 мин (iPhone
-    // обычно просыпается раньше), в котором тоже пометим на удаление.
-    // 5 мин — компромисс между приватностью (cron не держит plaintext)
-    // и доставкой (peer успеет зайти).
-    if let Some(store) = store {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        let short_ttl = now + 300; // 5 minutes
+    // v160m (решение Олега 2026-09-02): honest relay v2 — TTL 24h держится,
+    // пока получатель НЕ забрал сообщение. Сокращаем до 5 минут только при
+    // реальной доставке: (а) WS-подписчик получил live (n > 0), либо
+    // (б) получатель забрал через /api/history (см. push.rs). Раньше
+    // сокращение было безусловным сразу после broadcast — offline-получатель
+    // терял сообщение через 5–13 мин (TTL-cron): видео Олега 06:35 удалено
+    // в 06:48, пока Mac спал.
+    if n > 0 {
+        if let Some(store) = store {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let short_ttl = now + 300; // 5 minutes после live-доставки
 
-        if let Err(e) = store.shorten_expires_at(&hash_hex, short_ttl) {
-            warn!(err=%e, "shorten_expires_at failed");
+            if let Err(e) = store.shorten_expires_at(&hash_hex, short_ttl) {
+                warn!(err=%e, "shorten_expires_at failed");
+            }
         }
     }
 
