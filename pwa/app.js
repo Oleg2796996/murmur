@@ -1928,7 +1928,28 @@ async function loadContacts() {
             contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: getUnread(peer) };
             addedAny = true;
         }
-        if (addedAny) {
+        // v160k6 (Олег 2026-09-03 19:00 «превью «Нет сообщений» после перезапуска):
+        // Восстановленные контакты имеют пустой preview; resyncSidebarPreviews
+        // ходит только по in-memory messages[peer], не по кэшу. Берём последнюю
+        // кэш-запись из IDB и строим превью сразу — до проваливания в чат.
+        try {
+            if (window.appStore && window.appStore.chats.getMessages) {
+                for (const peer of Object.keys(contacts)) {
+                    const np = normalizePeer(peer);
+                    const rec = await window.appStore.chats.getMessages(np);
+                    if (Array.isArray(rec) && rec.length > 0) {
+                        const last = rec[rec.length - 1];
+                        const prev = sanitizePreview(previewForMsg(last));
+                        const cur = contacts[peer];
+                        if (!cur.lastMessagePreview && prev && prev !== "🔒 зашифрованное сообщение") {
+                            cur.lastMessagePreview = prev;
+                            cur.lastTs = last.ts || last.created_at_ts || cur.lastTs || 0;
+                        }
+                    }
+                }
+            }
+        } catch (e) { /* кэш не готов — превью придёт через resync/pollHist */ }
+        if (addedAny || true) {
             console.log("[murmur] restored", localPeers.size, "local peers into contacts");
             renderChatList();
         }
