@@ -107,13 +107,25 @@ async function renderAttachment(att, containerEl, abortSignal) {
 
     const placeholder = document.createElement("div");
     placeholder.className = "attach-decrypting";
-    placeholder.textContent = "🔓 расшифровка…";
+    // v160ka: для больших файлов показываем размер — юзер понимает что это fetch,
+    // не зависший decrypt.
+    const _fmt = (n) => n < 1024 ? n + " B" : (n < 1024*1024*1024 ? (n/(1024*1024)).toFixed(1) + " MB" : (n/(1024*1024*1024)).toFixed(2) + " GB");
+    const _sz = att._plainSize || att.size || 0;
+    const _szTxt = _sz > 1024*1024 ? " (" + _fmt(_sz) + ")" : "";
+    placeholder.textContent = "🔓 расшифровка…" + _szTxt;
     containerEl.appendChild(placeholder);
 
     // Lesson #318 (Олег 2026-08-28 06:42 MSK): 12s safety net — если placeholder
     // висит дольше 12s (fetch + decrypt через CF tunnel), заменить на
     // "retry" вместо зависшего "🔓 расшифровка…". Это не убивает основной
     // renderAttachment (тот продолжает до 45s+15s), но юзер видит retry.
+    // v160ka (Олег 2026-09-03 20:50 «файлы под 35 мб плохо ходят»: скрин
+    // «расшифровка идёт долго… ↻ повторить» на 35.2 MB видео). 12s safety net
+    // fires MID-download на больших файлах → юзер видет «повторить», хотя
+    // decrypt жив и прогресс идёт. Safety net теперь proportional to size:
+    //   <1MB  → 12s (было), 1–5MB → 30s, >5MB → 60s (fetch 45s + decrypt).
+    const _sizeBytes = att._plainSize || att.size || 0;
+    const safetyMs = _sizeBytes > 5*1024*1024 ? 60000 : (_sizeBytes > 1024*1024 ? 30000 : 12000);
     const safetyNetId = setTimeout(() => {
         if (!placeholder.isConnected) return; // уже заменили — ок
         if (placeholder.parentNode) {
@@ -137,7 +149,7 @@ async function renderAttachment(att, containerEl, abortSignal) {
                 }
             });
         }
-    }, 12000);
+    }, safetyMs);
 
     let blobUrl = null;
     try {
@@ -170,7 +182,10 @@ async function renderAttachment(att, containerEl, abortSignal) {
         // CF tunnel cold-start на медленном инете может быть 30-40s.
         // Плюс — уже cache HIT выше (строка 95-105), если blob в IndexedDB,
         // fetch не вызывается ВООБЩЕ. Это решает "3+ фото + reload не видны".
-        const ct = await withTimeout(fetchBlob(att.blob_id, abortSignal), 45000, "fetchBlob");
+        // v160ka: 45s hard cap fails mid-download на 35MB через CF tunnel.
+        // >5MB → 90s fetch window.
+        const fetchMs = _sz > 5*1024*1024 ? 90000 : 45000;
+        const ct = await withTimeout(fetchBlob(att.blob_id, abortSignal), fetchMs, "fetchBlob");
         if (abortSignal && abortSignal.aborted) { clearTimeout(safetyNetId); placeholder.remove(); return null; }
         // b. Unwrap AES key (ECIES)
         const key = await withTimeout(eciesUnwrapKey(att.wrapped_key, { self: !!(att && att._selfKey) }), 15000, "eciesUnwrap");
