@@ -2476,6 +2476,13 @@ async function loadHistory(peer, beforeTs) {
         const j = await r.json();
         console.log("[murmur] loadHistory:", peer.slice(0, 12), "got", (j.messages || []).length, "messages");
         loadingEl.remove();
+        // v160ke (Олег 23:03 «vanishes AGAIN, 3-раз ловим»): save cache СРАЗУ
+        // после fetch, ДО decrypt race. BATCH_TIMEOUT 20000ms + WASM cold-start
+        // 20-25s → race reject → catch → saveMessagesCacheForPeer не вызывается
+        // → кэш не persists → при reload кэш пуст + сервер TTL снес строки =
+        // vanishes целиком. Raw rows сохраняются мгновенно; async decrypt
+        // обновляет кэш инcrementally (decryptEncRow / pollHist paths).
+        saveMessagesCacheForPeer(peer);
         if (j.messages && j.messages.length > 0) {
             if (!messages[peer]) messages[peer] = [];
             // Lesson #128: дедуп по envelope_hash (если есть) или по ts.

@@ -227,7 +227,35 @@ const chats = {
             const req = store.put(record);
             req.onsuccess = () => resolve();
             req.onerror = () => reject(req.error);
-        }));
+        })).catch((err) => {
+            // v160ke (Олег 23:03 «vanishes AGAIN»): batch put fail = весь peer-кэш
+            // пропадает. Fallback: drop attachments (plaintext_b64, big base64)
+            // из всех messages и retry batch once — history persists, attachments
+            // перезагружаются через blob-fetch при просмотре.
+            console.warn("[appStore] batch save failed:", err, "→ retry without attachments");
+            const slim = trimmed.map((m) => {
+                if (!m || typeof m !== "object") return m;
+                const cm = Object.assign({}, m);
+                delete cm._server_msg;
+                delete cm.attachments;
+                delete cm.ct;
+                delete cm.body_base64;
+                if (Array.isArray(cm.attachments_meta)) {
+                    cm.attachments_meta = cm.attachments_meta.map((a) => {
+                        const ca = Object.assign({}, a);
+                        delete ca.plaintext_b64;
+                        return ca;
+                    });
+                }
+                return cm;
+            });
+            const slimRecord = { peer, messages: slim, updatedAt: Date.now() };
+            return _tx(STORE_CHATS, "readwrite", (store) => new Promise((resolve) => {
+                const putReq = store.put(slimRecord);
+                putReq.onsuccess = () => resolve();
+                putReq.onerror = () => resolve(); // even if fails, don't lose everything
+            }));
+        });
     },
     async appendMessage(peer, msg) {
         return _tx(STORE_CHATS, "readwrite", (store, tx) => new Promise(async (resolve, reject) => {
