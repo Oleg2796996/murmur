@@ -157,7 +157,7 @@ async function renderAttachment(att, containerEl, abortSignal) {
                 // neutral f-…bin otherwise.
                 const displayName = att._plainName || att.name;
                 const mime = att._plainMime || att.mime || cachedBlob.type || "application/octet-stream";
-                const el = renderByMime({ mime, name: displayName, blobUrl, size: cachedBlob.size, poster: att._plainPoster || att.poster_data_url || posterFromCache(att.blob_id) || null });
+                const el = renderByMime({ mime, name: displayName, blobUrl, size: cachedBlob.size, poster: att._plainPoster || att.poster_data_url || posterFromCache(att.blob_id) || null, att });
                 placeholder.replaceWith(el);
                 clearTimeout(safetyNetId); // Lesson #319: safety net отработал — снимаем
                 console.log("[attach-cache] HIT", att.blob_id.slice(0, 8), "size=", cachedBlob.size);
@@ -191,7 +191,7 @@ async function renderAttachment(att, containerEl, abortSignal) {
         }
         blobUrl = URL.createObjectURL(blob);
         // e. Render based on mime
-        const el = renderByMime({ mime, name: att._plainName || att.name, blobUrl, size: plain.length, poster: att._plainPoster || att.poster_data_url || posterFromCache(att.blob_id) || null });
+        const el = renderByMime({ mime, name: att._plainName || att.name, blobUrl, size: plain.length, poster: att._plainPoster || att.poster_data_url || posterFromCache(att.blob_id) || null, att });
         placeholder.replaceWith(el);
         clearTimeout(safetyNetId); // Lesson #319: safety net отработал — снимаем
         return el;
@@ -240,7 +240,7 @@ async function renderAttachment(att, containerEl, abortSignal) {
     // revoke when element is removed from DOM (e.g., message deletion).
 }
 
-function renderByMime({ mime, name, blobUrl, size, poster }) {
+function renderByMime({ mime, name, blobUrl, size, poster, att }) {
     const figure = document.createElement("figure");
     figure.className = "attach-figure";
     if (mime.startsWith("image/")) {
