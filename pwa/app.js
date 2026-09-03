@@ -187,7 +187,13 @@ async function saveMessagesCacheForPeer(peer) {
                     trimmed.push(cm);
                     continue;
                 }
-            } catch (e) { /* decrypt failed — выкинуть 🔒 из кэша */ }
+            } catch (e) { /* decrypt failed — keep 🔒 row with _ct/body_base64 */ }
+            // v160k4: 🔒 KEEP (не выкидывать). 🔒 row carries _ct/body_base64 —
+            // loadMessagesCacheForPeer расшифрует её локально после WASM init,
+            // даже OFFLINE. Раньше выкидывали → после reload pollHist берет
+            // fresh строку, но server TTL уже снес строки (privacy) → 🔒
+            // навсегда + offline нечего расшифровать.
+            trimmed.push(_sanitizeMessageForStorage(m));
             continue;
         }
         trimmed.push(_sanitizeMessageForStorage(m));
@@ -264,7 +270,23 @@ async function loadMessagesCacheForPeer(peer) {
                 m.attachments_meta = local.attachments_meta;
             }
         }
+        // v160k4 (Олег 2026-09-03 18:23): offline-decrypt 🔒 rows из кэша.
+        // 🔒 rows carry _ct/body_base64. Decrypt локально после WASM init,
+        // даже OFFLINE (server TTL privacy — строки уже снесены).
+        const encRows = arr.filter(m => typeof m.body === "string" &&
+            (m.body.includes("🔒") || m.body.includes("шифрованное")));
         messages[peer] = arr;
+        const decryptEncRow = async (em) => {
+            try {
+                const d = await decryptWithTimeout(em);
+                if (d && d.text && d.text !== "__DECRYPT_FAILED__" && !d.text.includes("🔒")) {
+                    em.body = d.text;
+                    if (activePeer === peer) renderMessages();
+                    saveMessagesCacheForPeer(peer);
+                }
+            } catch (e) { /* offline / WASM not ready — 🔒 stays until next poll */ }
+        };
+        encRows.forEach(decryptEncRow);
         // Если есть blob-cache HIT для attachments_meta, рендер сразу покажет <img>.
         // Если нет — будет placeholder пока decrypt идёт.
         renderMessages();
