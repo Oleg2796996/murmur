@@ -887,7 +887,7 @@ function applyReceipts(peer, hashes) {
 }
 // ═══ конец v158 helpers ═══
 
-function decryptWithTimeout(m) {
+async function decryptWithTimeout(m) {
     // Lesson #228 (Олег 2026-08-26 16:42): MEMOIZE per server message.
     // Без этого каждый renderMessages() call → новый decryptWithTimeout → новый
     // fetch+decrypt → 2-4 MISS подряд на cache → photo A bubble рендерится
@@ -895,6 +895,15 @@ function decryptWithTimeout(m) {
     // Диагностика v89: 4 renderMessages() calls для 1 message, 2 attach-cache MISS подряд.
     // Memoization: первый вызов создаёт Promise, все последующие возвращают тот же.
     if (m && m._decrypt_promise) return m._decrypt_promise;
+    // v160k2 (Олег 2026-09-03 17:12 « шифровки нестабильные, иногда после
+    // следующих обновлений появляется нормальный текст"): WASM init после
+    // reload занимает 20-25s на Safari/iPhone (Lesson #308), а per-decrypt
+    // race timeout = 8000ms. Race fires BEFORE wasm init → decrypt timeout →
+    // 🔒 остаётся в кэш. Следующий reload: wasm уже init (быстрый) → decrypt
+    // успевает → нормальный текст. Инстабилити = race × WASM init.
+    // Fix: await ensureWasm() OUT of the race — 8000ms отсчитывается только
+    // после готовности WASM (реальный decrypt ~0-2s).
+    await ensureWasm();
     const p = Promise.race([
         decryptEnvelopeForRender(m),
         new Promise((_, rej) => setTimeout(() => rej(new Error("decrypt timeout " + DECRYPT_TIMEOUT_MS + "ms")), DECRYPT_TIMEOUT_MS)),
