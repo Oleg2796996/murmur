@@ -168,7 +168,30 @@ function _sanitizeAttachmentNeedsCopy(att) {
 async function saveMessagesCacheForPeer(peer) {
     const arr = messages[peer] || [];
     if (arr.length === 0) return;
-    const trimmed = arr.slice(-MESSAGES_CACHE_MAX_PER_PEER).map(_sanitizeMessageForStorage);
+    // v160k3 (Олег 2026-09-03 17:44): 🔒 NEVER в кэш. Идея Олега: кэш должен
+    // хранить только расшифрованное. 🔒 placeholder — это render-заглушка,
+    // не данные. Если decrypt не успел до saveMessagesCacheForPeer —
+    // (1) расшифровать сейчас (body_base64 в cached msg retained),
+    // (2) если decrypt снова fails — выкинуть 🔒 msg из кэша целиком:
+    // после reload pollHist возьмет свежую серверную строку и decrypted
+    // plaintext попадает в кэш через нормальный path.
+    const trimmed = [];
+    for (const m of arr.slice(-MESSAGES_CACHE_MAX_PER_PEER)) {
+        const isEnc = m && typeof m.body === "string" &&
+            (m.body.includes("🔒") || m.body.includes("шифрованное"));
+        if (isEnc) {
+            try {
+                const d = await decryptEnvelopeForRender(m);
+                if (d && d.text && d.text !== "__DECRYPT_FAILED__" && !d.text.includes("🔒")) {
+                    const cm = _sanitizeMessageForStorage(Object.assign({}, m, { body: d.text }));
+                    trimmed.push(cm);
+                    continue;
+                }
+            } catch (e) { /* decrypt failed — выкинуть 🔒 из кэша */ }
+            continue;
+        }
+        trimmed.push(_sanitizeMessageForStorage(m));
+    }
     if (!window.appStore) {
         try {
             const cache = JSON.parse(localStorage.getItem(LS_MESSAGES_CACHE) || "{}");
