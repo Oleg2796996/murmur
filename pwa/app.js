@@ -1938,7 +1938,13 @@ async function loadContacts() {
                     const np = normalizePeer(peer);
                     const rec = await window.appStore.chats.getMessages(np);
                     if (Array.isArray(rec) && rec.length > 0) {
-                        const last = rec[rec.length - 1];
+                        // v160k7 (Олег 19:19 «показывается первое, а не последнее»: кэш
+                        // arr НЕ сортирован по ts (id-порядок загрузки). Берем msg
+                        // с МАКСимальным ts — это последнее сообщение.
+                        const withTs = rec.filter(m => m && (m.ts || m.created_at_ts || 0));
+                        const last = withTs.length
+                            ? withTs.reduce((a, b) => ((b.ts || b.created_at_ts || 0) > (a.ts || a.created_at_ts || 0) ? b : a))
+                            : rec[rec.length - 1];
                         const prev = sanitizePreview(previewForMsg(last));
                         const cur = contacts[peer];
                         if (!cur.lastMessagePreview && prev && prev !== "🔒 зашифрованное сообщение") {
