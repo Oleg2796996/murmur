@@ -1098,6 +1098,17 @@ function truncateNpub(npub) {
 // Защита от утечки JSON envelope в preview sidebar:
 // сервер для зашифрованных сообщений должен присылать «🔒 ...», но
 // старые preview в БД или кэше могут содержать сырой JSON. Заменяем на placeholder.
+// v160kd friendlyPreviewName — friendly mime-derived name when _plainName missing
+function friendlyPreviewName(att) {
+    if (!att || typeof att !== "object") return "";
+    const n = (att._plainName || att.name || "");
+    const mime = att.mime || att._plainMime || "";
+    if (n && !n.endsWith(".bin") && n.includes(".")) return n;
+    const extMap = { "application/pdf": "pdf", "text/plain": "txt", "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "application/msword": "doc", "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx", "application/vnd.ms-excel": "xls", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx", "application/vnd.ms-powerpoint": "ppt", "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx", "application/zip": "zip", "application/json": "json", "text/csv": "csv", "application/epub+zip": "epub", "application/rtf": "rtf", "video/mp4": "mp4", "video/webm": "webm", "audio/mpeg": "mp3", "audio/mp4": "mp3" };
+    const ext = extMap[mime] || (mime.split("/")[1] || "file").replace(/[^a-z0-9]/gi, "") || "file";
+    const base = (n.replace(/\.bin$/i, "") || "file");
+    return base + "." + ext;
+}
 function sanitizePreview(p) {
     if (!p) return "";
     const s = String(p);
@@ -1111,7 +1122,7 @@ function previewForMsg(m) {
     try {
         if (!m) return "";
         const am = (Array.isArray(m.attachments_meta) && m.attachments_meta.length) ? m.attachments_meta : (Array.isArray(m.attachments) ? m.attachments : []);
-        const names = am.map(a => (a && (a._plainName || a.name)) || "").filter(Boolean);
+        const names = am.map(a => friendlyPreviewName(a)).filter(Boolean);
         const attLabel = am.length ? "📎 " + (names[0] || "файл") + (am.length > 1 ? " +" + (am.length - 1) : "") : "";
         let t = String(m.body || m.resolvedBody || m.outbox_body || "").trim();
         if (t.startsWith("{")) t = ""; // сырой envelope — считаем нерасшифрованным
@@ -2734,7 +2745,13 @@ async function loadHistory(peer, beforeTs) {
                 for (const m of messages[peer]) {
                     if (!newest || (m.ts || 0) > (newest.ts || 0)) newest = m;
                 }
-                if (newest && newest.body) {
+                // v160kd (Олег 22:41 «сначала из середины, потом последнее»):
+                // если contacts.lastTs уже новее — newest СТАРое (pagination),
+                // preview НЕ перетирать, else LAST меняется на mid-msg и
+                // мерцает до следующего pollHist.
+                const shownTs = contacts[peer] ? (contacts[peer].lastTs || 0) : 0;
+                const staleNewest = newest && (newest.ts || 0) < shownTs;
+                if (newest && !staleNewest && newest.body) {
                     if (!contacts[peer]) contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
                     contacts[peer].lastTs = newest.ts;
                     // Lesson #241: НЕ обновлять preview здесь, если body
@@ -4347,6 +4364,13 @@ function resyncSidebarPreviews() {
         const fallbackish = (preview === "🔒 зашифрованное сообщение");
         const cur = contacts[peer] ? contacts[peer].lastMessagePreview : "";
         if (fallbackish && cur && cur !== "🔒 зашифрованное сообщение") continue;
+        // v160kd (Олег 22:41 «сначала сообщение из середины, потом последнее»):
+        // resync ходит по messages[peer], который при pagination содержит только
+        // ЧАСТЬ истории — mid-conversation msg перетирает честное LAST.
+        // Fix: если newest из массива СТАРое (ts < contacts.lastTs) — это не
+        // последнее сообщение, preview НЕ менять.
+        const shownTs = contacts[peer] ? (contacts[peer].lastTs || 0) : 0;
+        if ((newest.ts || 0) < shownTs) continue;
         if (!contacts[peer]) contacts[peer] = { peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
         if (preview && contacts[peer].lastMessagePreview !== preview) {
             contacts[peer].lastMessagePreview = preview;
