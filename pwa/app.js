@@ -274,17 +274,23 @@ async function loadMessagesCacheForPeer(peer) {
         // 🔒 rows carry _ct/body_base64. Decrypt локально после WASM init,
         // даже OFFLINE (server TTL privacy — строки уже снесены).
         const encRows = arr.filter(m => typeof m.body === "string" &&
-            (m.body.includes("🔒") || m.body.includes("шифрованное")));
+            (m.body.includes("🔒") || m.body.includes("шифрованное") || m._ct));
+        // v160k5 (Олег 2026-09-03 18:34 «iPhone offline = белый экран»: 🔒 rows
+        // с _ct/body_base64 = данные. Decrypt локально после WASM init — works
+        // OFFLINE. Раньше decryptWithTimeout memoized на em._decrypt_promise,
+        // но 🔒 rows из кэша не имеют _decrypt_promise → decrypt НЕ запускался.
         messages[peer] = arr;
         const decryptEncRow = async (em) => {
             try {
                 const d = await decryptWithTimeout(em);
                 if (d && d.text && d.text !== "__DECRYPT_FAILED__" && !d.text.includes("🔒")) {
                     em.body = d.text;
+                    em._ct = null; // decrypted — 🔒 заглушка не нужна
+                    em._decryptedOffline = true;
                     if (activePeer === peer) renderMessages();
                     saveMessagesCacheForPeer(peer);
                 }
-            } catch (e) { /* offline / WASM not ready — 🔒 stays until next poll */ }
+            } catch (e) { /* offline / WASM not ready — 🔒 stays until WASM ready */ }
         };
         encRows.forEach(decryptEncRow);
         // Если есть blob-cache HIT для attachments_meta, рендер сразу покажет <img>.
