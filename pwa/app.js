@@ -181,7 +181,10 @@ async function saveMessagesCacheForPeer(peer) {
             (m.body.includes("🔒") || m.body.includes("шифрованное"));
         if (isEnc) {
             try {
-                const d = await decryptEnvelopeForRender(m);
+                // v160k9: ciphertext lives in _server_msg.body_base64 (not on row) —
+                // decrypt raw server row, otherwise ct=null → 🔒 stays forever.
+                const raw = m._server_msg || m;
+                const d = await decryptEnvelopeForRender(raw);
                 if (d && d.text && d.text !== "__DECRYPT_FAILED__" && !d.text.includes("🔒")) {
                     const cm = _sanitizeMessageForStorage(Object.assign({}, m, { body: d.text }));
                     trimmed.push(cm);
@@ -282,7 +285,12 @@ async function loadMessagesCacheForPeer(peer) {
         messages[peer] = arr;
         const decryptEncRow = async (em) => {
             try {
-                const d = await decryptWithTimeout(em);
+                // v160k9: �🔒 row carries ciphertext in _server_msg.body_base64,
+                // NOT on the row itself. decryptEnvelopeForRender checks env.ct /
+                // env.body_base64 only → ct=null → plaintext fallback → 🔒 stays
+                // навсегда. Pass _server_msg (fresh object, no memoized promise).
+                const raw = em._server_msg || em;
+                const d = await decryptWithTimeout(raw);
                 if (d && d.text && d.text !== "__DECRYPT_FAILED__" && !d.text.includes("🔒")) {
                     em.body = d.text;
                     em._ct = null; // decrypted — 🔒 заглушка не нужна
