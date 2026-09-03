@@ -471,6 +471,7 @@ window.__murmurTestHooks = {
     allMessages: () => messages,
     activePeer: () => activePeer,
     contacts: () => Object.keys(contacts || {}),
+    contactList: () => contacts || {},
 };
 let pollTimer = null;
 // Attachments (Олег 2026-08-24 11:00 MSK) — файлы прикрепленные к текущему сообщению.
@@ -1955,9 +1956,20 @@ async function loadContacts() {
                             : rec[rec.length - 1];
                         const prev = sanitizePreview(previewForMsg(last));
                         const cur = contacts[peer];
-                        if (!cur.lastMessagePreview && prev && prev !== "🔒 зашифрованное сообщение") {
+                        // v160kb (Олег 21:06 «в превью сначала первое, через пару
+                        // секунд меняется на последнее — пользователь видит что
+                        // под капотом»: кэш-снапшот писался ДО прихода нового
+                        // сообщения на сервер → restore показывает СТАРое
+                        // «FIRST msg», poll через пару секунд меняет на LAST.
+                        // Fix: если сервер lastTs новее кэш-msg — кэш СТАРой,
+                        // НЕ показывать (leave �🔒 placeholder, pollHist даст
+                        // LAST после decrypt). Если кэш синхронный (lastTs ==
+                        // cached ts) — показываем мгновенно, это честное LAST.
+                        const cachedTs = last.ts || last.created_at_ts || 0;
+                        const stale = cur.lastTs > cachedTs;
+                        if (!cur.lastMessagePreview && prev && prev !== "🔒 зашифрованное сообщение" && !stale) {
                             cur.lastMessagePreview = prev;
-                            cur.lastTs = last.ts || last.created_at_ts || cur.lastTs || 0;
+                            cur.lastTs = cachedTs || cur.lastTs || 0;
                         }
                     }
                 }
@@ -3925,6 +3937,18 @@ async function pollHistoryForPeer(peer) {
                             .then(({ text: newBody, attachmentsMeta: newMeta }) => {
                                 if (newBody && newBody !== "__DECRYPT_FAILED__") cachedMsg.body = newBody;
                                 if (newMeta && newMeta.length) cachedMsg.attachments_meta = newMeta;
+                                // v160kb: decrypt у freshness for newest msg —
+                                // sidebar preview обновить мгновенно, не через 5s
+                                // resync (Олег: «сначала первое, через пару секунд
+                                // меняется на последнее»).
+                                if (contacts && contacts[peer]) {
+                                    const prev = sanitizePreview(previewForMsg(cachedMsg));
+                                    if (prev && prev !== "🔒 зашифрованное сообщение" && contacts[peer].lastMessagePreview !== prev) {
+                                        contacts[peer].lastMessagePreview = prev;
+                                        contacts[peer].lastTs = cachedMsg.ts || contacts[peer].lastTs || 0;
+                                        renderChatList();
+                                    }
+                                }
                                 if (activePeer === peer) renderMessages();
                             });
                     }
