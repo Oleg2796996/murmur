@@ -3809,7 +3809,23 @@ async function pollHistoryForPeer(peer) {
             } else {
                 exists = messages[peer].some(m => m._sig === sigKey);
             }
-            if (exists) continue;
+            if (exists) {
+                // v160k: cached 🔒 incoming — decrypt even when exists.
+                if (fromNpub !== myNpub && (hash || msg.body_base64)) {
+                    const cachedMsg = messages[peer].find(m => (hash ? m._hash === hash : m._sig === sigKey));
+                    const staleBody = cachedMsg && cachedMsg.body &&
+                        (cachedMsg.body.includes("🔒") || cachedMsg.body.includes("шифрованное"));
+                    if (cachedMsg && staleBody && !cachedMsg._decrypt_promise) {
+                        cachedMsg._decrypt_promise = decryptWithTimeout(msg)
+                            .then(({ text: newBody, attachmentsMeta: newMeta }) => {
+                                if (newBody && newBody !== "__DECRYPT_FAILED__") cachedMsg.body = newBody;
+                                if (newMeta && newMeta.length) cachedMsg.attachments_meta = newMeta;
+                                if (activePeer === peer) renderMessages();
+                            });
+                    }
+                }
+                continue;
+            }
 
             // Lesson #350 (Олег 2026-08-30 18:21 «фотки задваиваются»): race
             // sendMessage × poll — оптимистичная копия ждёт ответ POST /envelope
