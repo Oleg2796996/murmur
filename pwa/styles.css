@@ -901,3 +901,13 @@ button.small { padding: 8px 12px; font-size: 13px; }
     max-height: 96vh;
     border-radius: 6px;
 }
+
+/* v160k8 (Олег 19:23): галочки красятся когда прочитано.
+   ✓✓ (msg-read-check) — цветная (читано), ✓ (msg-sent-check) — muted (отправлено). */
+.msg-read-check {
+    color: #4ade80;
+    font-weight: 600;
+}
+.msg-sent-check {
+    color: var(--text-muted);
+}

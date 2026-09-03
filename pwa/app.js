@@ -929,7 +929,7 @@ function applyReceipts(peer, hashes) {
                 const el = messagesArea.querySelector(`.bubble[data-sig="${escR(sig)}"] .bubble-time`);
                 if (el && el.textContent.indexOf("✓✓") === -1) {
                     const base = el.textContent.replace(/\s*[✓⏳]+\s*$/, "").trimEnd();
-                    el.textContent = base + " ✓✓";
+                    el.innerHTML = base + " <span class='msg-read-check'>✓✓</span>";
                 }
             } catch (e) {}
         }
@@ -2853,9 +2853,19 @@ function renderMessages() {
             }
             const bodyText = m.body || "";
             let bodyHtml = escapeHtml(bodyText);
+            // v160k8 (Олег 19:23 «галочки красятся когда прочитано): ✓✓ —
+            // цветная галочка (читано), ✓ — muted (отправлено, не читано).
+            let statusHtml = "";
+            if (statusGlyph === "\u2713\u2713") {
+                statusHtml = " <span class='msg-read-check'>\u2713\u2713</span>";
+            } else if (statusGlyph === "\u2713") {
+                statusHtml = " <span class='msg-sent-check'>\u2713</span>";
+            } else if (statusGlyph) {
+                statusHtml = " " + statusGlyph;
+            }
             div.innerHTML =
                 "<div class='msg-body'>" + bodyHtml + "</div>" +
-                "<span class='bubble-time'>" + formatTime(m.ts) + (statusGlyph ? " " + statusGlyph : "") + "</span>";
+                "<span class='bubble-time'>" + formatTime(m.ts) + statusHtml + "</span>";
             messagesArea.appendChild(div);
             renderedSigs.add(sig);
         }
