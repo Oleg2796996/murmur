@@ -157,6 +157,20 @@ function _sanitizeMessageForStorage(m) {
     const cm = Object.assign({}, m);
     delete cm._decrypt_promise;
     if (Array.isArray(cm.attachments_meta)) cm.attachments_meta = cm.attachments_meta.map(_sanitizeAttachmentForStorage);
+    // v160kc (Олег 2026-09-03 22:07 «переписка исчезает»): _server_msg может
+    // carry большие body_base64/attachments (35MB видео) → IDB put падает
+    // молча (catch → console.warn) → весь peer-кэш пропадает. Стримаем
+    // _server_msg: для больших (>1.5MB) вырезаем body_base64/ct/attachments
+    // (decrypt через blob-fetch, _server_msg для них не нужен), мелкие
+    // (text �🔒) сохраняем — offline-decrypt по _server_msg работает.
+    if (cm._server_msg && typeof cm._server_msg === "object") {
+        const sm = Object.assign({}, cm._server_msg);
+        const bigAtt = Array.isArray(sm.attachments) && sm.attachments.some(a => (a && (a.size || 0) > 1.5 * 1024 * 1024));
+        const bigBody = typeof sm.body_base64 === "string" && sm.body_base64.length > 1.5 * 1024 * 1024;
+        delete sm._decrypt_promise;
+        if (bigAtt || bigBody) { delete sm.body_base64; delete sm.ct; delete sm.attachments; }
+        cm._server_msg = sm;
+    }
     return cm;
 }
 window._murmurSanitizeMessageForStorage = _sanitizeMessageForStorage; // v160s: app-store.js IDB put
