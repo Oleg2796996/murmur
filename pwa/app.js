@@ -3060,6 +3060,13 @@ async function encryptForRecipient(recipientNpub, plainObj) {
 
 /// ECIES decrypt a base64 sealed envelope to original plain object.
 async function decryptEnvelope(sealedB64) {
+    // v160y (Олег 2026-09-03 «после перезапуска PWA видео перестало играть):
+    // render-attachments.js зовёт window.decryptEnvelope(target) в eciesUnwrapKey
+    // (L64), но app.js никогда не экспортил decryptEnvelope на window.
+    // До перезапуска remote-decrypt мог работать из кэша blob-кэша, но
+    // после reload кэш пуст → eciesUnwrapKey → window.decryptEnvelope → undefined
+    // → «ECIES unwrap failed» → видео не расшифруется/не играет.
+    window.decryptEnvelope = decryptEnvelope; // экспорт для render-attachments.js
     const mod = await loadWasmModule();
     try {
         const r = unwrap(mod.decrypt_envelope(sealedB64));
