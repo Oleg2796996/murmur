@@ -4217,10 +4217,20 @@ async function pollHistoryForPeer(peer) {
             const { text: bodyText, isBinary } = extractMessageText(msg);
             // Lesson #199 (Олег 2026-08-26): для исходящих — идти в outbox вместо
             // "🔒 шифрованное сообщение", иначе UI покажет placeholder + decrypt errors.
-            // v162f: outgoing 🔒 row = echo квитанции (decrypt-failed receipt,
-            // isReceiptRow не распознал sealed ct) — скипнуть тихо, не рендерить.
+            // v162g2: 🔒-echo = квитанция (decrypt-failed receipt) — скипнуть в
+            // BOTH paths: pollHist (outgoing) AND loadHistory fresh-load (incoming 🔒
+            // от peer's receipt echo тоже не рендерить — Олег-скрин 09:45).
             if (fromNpub === myNpub && bodyText && bodyText.includes("🔒")) {
                 continue;
+            }
+            // 🔒 row от peer без decrypt = может быть real msg (needs retry) OR
+            // peer's receipt echo (🔒 навсегда, ct encrypted to peer, not me).
+            // Precise check: _sig совпадает с receipt в OUR outbox → echo, skip.
+            const ctLen = (msg.ct || msg.body_base64 || "").length;
+            if (fromNpub !== myNpub && ctLen > 0 && !msg.attachments && msg.body === "🔒 зашифрованное сообщение") {
+                const myOutbox = loadOutboxForPeer(peer);
+                const sigMatch = myOutbox.some(o => o._sig && o._sig === sigKey && (o._kind === "receipt" || o._kind === "read_receipt" || o.isReceipt));
+                if (sigMatch) continue;
             }
             let resolvedBody = bodyText;
             let resolvedAttachments = msg.attachments || [];
