@@ -3058,8 +3058,10 @@ function renderMessages() {
             // v160k8 (Олег 19:23 «галочки красятся когда прочитано): ✓✓ —
             // цветная галочка (читано), ✓ — muted (отправлено, не читано).
             let statusHtml = "";
-            if (statusGlyph === "read" || statusGlyph === "delivered") {
+            if (statusGlyph === "read") {
                 statusHtml = " <span class='msg-read-check'>✓✓</span>";
+            } else if (statusGlyph === "delivered") {
+                statusHtml = " <span class='msg-delivered-check'>✓✓</span>";
             } else if (statusGlyph === "sent") {
                 statusHtml = " <span class='msg-sent-check'>✓</span>";
             } else if (statusGlyph) {
