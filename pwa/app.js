@@ -1490,13 +1490,8 @@ function enterMessenger() {
     // display name), otherwise fall back to npub for first-run. We then
     // upsert the canonical alias under both names so the relay can find us
     // regardless of whether the sender typed our display name or our npub.
-    const preferredAlias = myAlias || myNpub;
-    fetch(RELAY + "/api/register_alias", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ alias: preferredAlias, npub: myNpub })
-    }).then(r => r.json().then(j => console.log("register_alias on enter:", j)))
-      .catch(e => console.warn("register_alias on enter failed:", e));
+    // v162e: /api/register_alias удалён на релей (v149 npub-only, 404).
+    // alias-lookup removed — npub-only contacts из envelopes.
     const copyBtn = $("btn-copy-npub");
     if (copyBtn && !copyBtn.dataset.bound) {
         copyBtn.dataset.bound = "1";
@@ -3922,16 +3917,6 @@ function connectWS() {
         ws.send(JSON.stringify({ type: "subscribe", alias: myAlias, npub: myNpub }));
     };
 
-    // Register alias→npub mapping via HTTP (works even if WS tunnel is down).
-    // This is what allows /api/history and /api/inbox to find messages for us.
-    if (myNpub && myAlias) {
-        fetch(RELAY + "/api/register_alias", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ alias: myAlias, npub: myNpub })
-        }).then(r => r.json().then(j => console.log("register_alias:", j)))
-          .catch(e => console.warn("register_alias failed:", e));
-    }
 
     ws.onmessage = (evt) => {
         try {
