@@ -9,7 +9,7 @@
 // 4. When a new SW is activated, it cleans up old caches but doesn't force a page refresh.
 //    The user gets the new version on the next natural load or manual refresh.
 
-const SW_VERSION = "murmur-sw-offline-v1";
+const SW_VERSION = "murmur-sw-offline-v2";
 const CACHE_NAME = `murmur-shell-${SW_VERSION}`;
 
 // Core assets required for the app to boot offline.
