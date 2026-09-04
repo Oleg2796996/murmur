@@ -66,6 +66,22 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  // v162c (Олег 04.09 «не ломать UX при обновлениях»): index.html — NETWORK-FIRST,
+  // не SWR. SWR отдывал stale index.html с старыми app.js?v=N → iPhone mix
+  // старый app-store.js?v=160ke с новым app.js?v=162 = пропажа истории после
+  // refresh. Network-first: fresh index.html всегда, cache = offline fallback.
+  if (url.pathname === "/" || url.pathname === "/index.html") {
+    event.respondWith(
+      fetch(event.request).then((networkResponse) => {
+        if (networkResponse.ok) {
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse.clone()));
+        }
+        return networkResponse;
+      }).catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
   // Define which patterns we want to cache offline (The Shell)
   const isShellAsset = 
     url.pathname === "/" || 
