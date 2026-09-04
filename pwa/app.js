@@ -760,13 +760,13 @@ function isReceiptRow(m) {
         if (m._kind === "receipt" || m._kind === "read_receipt") return true;
         if (typeof m.body === "string" && m.body.indexOf("\"_kind\"") !== -1) {
             const p = JSON.parse(m.body);
-            if (p && p._kind === "receipt") return true;
+            if (p && (p._kind === "receipt" || p._t === "read_receipt")) return true;
         }
         if (typeof m.body_base64 === "string" && m.body_base64.length > 0) {
             const inner = decodeBody(m.body_base64);
             if (inner && inner.text) {
                 const p = JSON.parse(inner.text);
-                if (p && (p._kind === "receipt" || p.rt === 1)) return true;
+                if (p && (p._kind === "receipt" || p._t === "read_receipt" || p.rt === 1)) return true;
             }
         }
     } catch (e) { /* обычный конверт — не квитанция */ }
@@ -4277,7 +4277,16 @@ async function pollHistoryForPeer(peer) {
                             size: a.size,
                         }));
                     } else {
-                        // Текстовое исходящее без outbox
+                        // Текстовое исходящее без outbox.
+                        // v162e: если hash уже в messages[peer] — это echo自己的
+                        // сообщения (dedup'd), не плейсхолдер. Если NOT in messages[peer]
+                        // и NOT receipt — квитанция-echo или deleted msg: скипнуть тихо,
+                        // не "[исходящее сообщение]" с ✓✓ (Олег-скрин 09:43).
+                        const isEcho = hash && (messages[peer] || []).some(x => x._hash === hash);
+                        const sb = isReceiptRow(msg);
+                        if (sb || isEcho) {
+                            continue;
+                        }
                         resolvedBody = "[исходящее сообщение]";
                     }
                     console.warn("[pollHist] outgoing NOT resolved via outbox", peer.slice(0, 12), "msg_hash=", hash, "msg_ts=", msg.ts, "outbox_count=", outbox.length, "fallback_body=", resolvedBody.slice(0, 20));
