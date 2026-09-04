@@ -315,6 +315,8 @@ async function loadMessagesCacheForPeer(peer) {
             } catch (e) { /* offline / WASM not ready — 🔒 stays until WASM ready */ }
         };
         encRows.forEach(decryptEncRow);
+        // v162f: module-level retry hook — pollHistoryForPeer 🔒 retry uses it.
+        window.__decryptEncRowRetry = (peer2, em) => decryptEncRow(em);
         // Если есть blob-cache HIT для attachments_meta, рендер сразу покажет <img>.
         // Если нет — будет placeholder пока decrypt идёт.
         renderMessages();
@@ -2632,7 +2634,10 @@ async function loadHistory(peer, beforeTs) {
                 // В чат их НЕ рендерим: чужие — помечают наши сообщения доставленными,
                 // свои (echo) — молча скипаем ДО outbox-resolution и дедупа.
                 if (isReceiptRow(m)) {
-                    if (fromNpub !== myNpub) { if (parsedBody && parsedBody._t === "read_receipt") consumeReadReceiptRow(m, hash, fromNpub); else consumeReceiptRow(m, hash, fromNpub); }
+                    // v162f: parsedBody не определён в этом scope — parse locally (was undefined → FAILED).
+                    let rcBody = null;
+                    try { rcBody = JSON.parse(m.body); } catch (_e) {}
+                    if (fromNpub !== myNpub) { if (rcBody && rcBody._t === "read_receipt") consumeReadReceiptRow(m, hash, fromNpub); else consumeReceiptRow(m, hash, fromNpub); }
                     continue;
                 }
                 // v158: входящие hash'и → в очередь квитанций (backlog при первом
@@ -2648,7 +2653,11 @@ async function loadHistory(peer, beforeTs) {
                     // v162d: 🔒 row (decrypt падал/timed out) — retry decrypt.
                     // WASM cold-start race → 🔒 навсегда. Retry при каждом pollHist.
                     if (cachedMsg && (cachedMsg._ct || cachedMsg.body && (cachedMsg.body.includes("🔒") || cachedMsg.body.includes("шифрованное"))) && !cachedMsg._decryptedOffline) {
-                        pDecrypt.push(decryptEncRow(peer, cachedMsg));
+                        // v162f: decryptEncRow lives in loadHistory local scope — guard
+                            // (was undefined → loadHistory FAILED → empty chat).
+                            if (typeof window.__decryptEncRowRetry === "function") {
+                                window.__decryptEncRowRetry(peer, cachedMsg);
+                            }
                     }
                     // Lesson #338 (Олег 2026-08-28 15:38 MSK): расширяем fix #333
                     // на оба направления. Cached msg мог быть сохранён со СТАРЫМ
@@ -4208,6 +4217,11 @@ async function pollHistoryForPeer(peer) {
             const { text: bodyText, isBinary } = extractMessageText(msg);
             // Lesson #199 (Олег 2026-08-26): для исходящих — идти в outbox вместо
             // "🔒 шифрованное сообщение", иначе UI покажет placeholder + decrypt errors.
+            // v162f: outgoing 🔒 row = echo квитанции (decrypt-failed receipt,
+            // isReceiptRow не распознал sealed ct) — скипнуть тихо, не рендерить.
+            if (fromNpub === myNpub && bodyText && bodyText.includes("🔒")) {
+                continue;
+            }
             let resolvedBody = bodyText;
             let resolvedAttachments = msg.attachments || [];
             let resolvedAttachmentsMeta = msg.attachments || [];
