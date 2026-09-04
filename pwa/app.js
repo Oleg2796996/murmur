@@ -757,7 +757,7 @@ const DECRYPT_TIMEOUT_MS = 8000;
 function isReceiptRow(m) {
     if (!m || typeof m !== "object") return false;
     try {
-        if (m._kind === "receipt") return true; // WS-путь или уже распарсено
+        if (m._kind === "receipt" || m._kind === "read_receipt") return true;
         if (typeof m.body === "string" && m.body.indexOf("\"_kind\"") !== -1) {
             const p = JSON.parse(m.body);
             if (p && p._kind === "receipt") return true;
@@ -2650,6 +2650,11 @@ async function loadHistory(peer, beforeTs) {
                 // каждом loadHistory (msg без plaintext перезаписывается).
                 if (hash && existingHashSet.has(hash)) {
                     const cachedMsg = messages[peer].find(x => x._hash === hash);
+                    // v162d: 🔒 row (decrypt падал/timed out) — retry decrypt.
+                    // WASM cold-start race → 🔒 навсегда. Retry при каждом pollHist.
+                    if (cachedMsg && (cachedMsg._ct || cachedMsg.body && (cachedMsg.body.includes("🔒") || cachedMsg.body.includes("шифрованное"))) && !cachedMsg._decryptedOffline) {
+                        pDecrypt.push(decryptEncRow(peer, cachedMsg));
+                    }
                     // Lesson #338 (Олег 2026-08-28 15:38 MSK): расширяем fix #333
                     // на оба направления. Cached msg мог быть сохранён со СТАРЫМ
                     // direction (in вместо out) из-за pre-v133 bug в loadOutboxForPeer.
@@ -2926,7 +2931,18 @@ async function loadHistory(peer, beforeTs) {
 function renderMessages() {
     if (!activePeer) return;
     const all = messages[activePeer] || [];
-    const msgs = [...all].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    // v162d (Олег 09:23 «цикл непонятных сообщений»): dedup по _hash.
+    // messages[peer] мог содержать дубли (poll echo + optimistic copy + cache
+    // restore). Без dedup: same ts ×4, duplicate «Сегодня» dividers.
+    const seen = new Set();
+    const uniq = [];
+    for (const m of all) {
+        const key = m._hash || (m._sig || (m.from || "") + m.ts);
+        if (key && seen.has(key)) continue;
+        if (key) seen.add(key);
+        uniq.push(m);
+    }
+    const msgs = uniq.sort((a, b) => (a.ts || 0) - (b.ts || 0));
     // Lesson #227 (Олег 2026-08-26 16:25): DIAGNOSTIC instrumentation —
     // record every renderMessages call with stack + DOM diff.
     if (typeof window.__MURMUR_DIAG__ === "undefined") {
@@ -3959,8 +3975,8 @@ function handleIncomingEnvelope(env) {
     const hash = env.envelope_hash_hex || (env.envelope && env.envelope.envelope_hash_hex) || null;
     // v158: служебные конверты не рендерим (WS в prod мёртв, но защита на
     // будущее). Чужая квитанция — тоже ✓✓; своя — молча скип.
-    if (env._kind === "receipt" || isReceiptRow(env)) {
-        if (fromNpub !== myNpub) consumeReadReceiptRow(env, hash, peer);
+    if (env._kind === "receipt" || env._kind === "read_receipt" || isReceiptRow(env)) {
+        if (fromNpub !== myNpub) { if (env._kind === "read_receipt") consumeReadReceiptRow(env, hash, peer); else consumeReceiptRow(env, hash, peer); }
         return;
     }
     if (fromNpub !== myNpub && hash) queueReceiptsForPeer(peer, [hash]);
