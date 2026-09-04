@@ -852,6 +852,143 @@ function scheduleReceiptFlush(peer) {
     }, RECEIPT_FLUSH_DELAY_MS);
     window.__murmurReceiptState.timers.set(peer, t);
 }
+// ═══ v162: READ receipts (Олег 04.09.2026) ═══
+// 1 галочка ✓ — отправлено, ✓� серые — доставлено, ✓� зелёные — прочитано
+// (чат открыт на экране; фоновая доставка в IDB НЕ «прочитано»).
+const LS_READ = "murmur.read.v1";           // { [envelope_hash]: ts } — ✓� зелёные от получателя
+const LS_READ_DONE = "murmur.read_done.v1"; // { [envelope_hash]: ts } — уже отчитались READ
+const READ_ACKS_CAP = 500;
+const READ_FLUSH_DELAY_MS = 1500;
+
+function loadReadAcks() { return receiptLsRead(LS_READ, READ_ACKS_CAP); }
+function isReadAcked(hash) { return !!hash && !!receiptLsRead(LS_READ, READ_ACKS_CAP)[hash]; }
+function markReadAcked(hash, ts) {
+    if (!hash) return false;
+    const readAcks = loadReadAcks();
+    if (readAcks[hash]) return false;
+    readAcks[hash] = ts || Math.floor(Date.now() / 1000);
+    receiptLsWrite(LS_READ, readAcks);
+    return true;
+}
+
+function isAlreadyReadReceipted(hash) { return !!receiptLsRead(LS_READ_DONE, READ_ACKS_CAP)[hash]; }
+function markReadReceipted(hashes) {
+    if (!hashes || !hashes.length) return;
+    const store = receiptLsRead(LS_READ_DONE, READ_ACKS_CAP);
+    let changed = false;
+    for (const h of hashes) {
+        if (h && !store[h]) { store[h] = Math.floor(Date.now() / 1000); changed = true; }
+    }
+    if (changed) receiptLsWrite(LS_READ_DONE, store);
+}
+
+if (typeof window !== "undefined" && !window.__murmurReadReceiptState) {
+    window.__murmurReadReceiptState = { queue: new Map(), inflight: new Set(), timers: new Map(), seen: new Set() };
+}
+
+// Bob: hash'и входящих в очередь READ-квитанции. Только когда чат реально
+// открыт (activePeer === peer) — фоновая доставка НЕ считается «прочитано».
+function queueReadReceiptsForPeer(peer, hashes) {
+    if (!myNpub || !peer || peer === myNpub) return;
+    if (typeof activePeer === "undefined" || activePeer !== peer) return;
+    if (!hashes || !hashes.length) return;
+    const st = window.__murmurReadReceiptState;
+    const fresh = hashes.filter(h => h && !isAlreadyReadReceipted(h) && !st.seen.has(peer + "|" + h));
+    if (!fresh.length) return;
+    for (const h of fresh) st.seen.add(peer + "|" + h);
+    if (!st.queue.has(peer)) st.queue.set(peer, new Set());
+    const set = st.queue.get(peer);
+    for (const h of fresh) set.add(h);
+    scheduleReadReceiptFlush(peer);
+}
+
+function scheduleReadReceiptFlush(peer) {
+    if (window.__murmurReadReceiptState.timers.has(peer)) return;
+    const t = setTimeout(() => {
+        window.__murmurReadReceiptState.timers.delete(peer);
+        flushReadReceiptsForPeer(peer);
+    }, READ_FLUSH_DELAY_MS);
+    window.__murmurReadReceiptState.timers.set(peer, t);
+}
+
+// READ-квитанция: конверт Bob→Alice с _kind:"read_receipt",
+// внутри ct: {v:1,_t:"read_receipt",msgs:[hash,...],pad}.
+async function flushReadReceiptsForPeer(peer) {
+    const st = window.__murmurReadReceiptState;
+    const pending = st.queue.get(peer);
+    if (!pending || pending.size === 0 || st.inflight.has(peer)) return;
+    const hashes = Array.from(pending);
+    st.inflight.add(peer);
+    try {
+        const peerKey = await resolvePeerKey(peer);
+        if (!peerKey) { console.warn("[readreceipt] no peer key for", peer.slice(0, 12)); return; }
+        const padLen = 96 + Math.floor(Math.random() * 384);
+        const pad = new Array(padLen).fill(0).map(() => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join("");
+        const plain = { v: 1, _t: "read_receipt", msgs: hashes, pad: pad };
+        const sealedB64 = await encryptForRecipient(peerKey.npub, plain);
+        const ts = Math.floor(Date.now() / 1000);
+        const wireMsg = { from: myNpub, to: peer, ct: sealedB64, attachments_meta: [], ts, _kind: "read_receipt" };
+        const mod = await loadWasmModule();
+        const signedPayload = wireMsg.from + "|" + wireMsg.to + "|" + wireMsg.ts + "|" + wireMsg.ct;
+        const sigBytes = new TextEncoder().encode(signedPayload);
+        const sig = unwrap(mod.sign_envelope(wireMsg.from, sigBytes));
+        if (!sig.ok) { console.error("[readreceipt] sign error:", sig.error); return; }
+        wireMsg.sig = sig.data;
+        let binStr = "";
+        const CHUNK = 0x8000;
+        for (let i = 0; i < sigBytes.length; i += CHUNK) {
+            binStr += String.fromCharCode.apply(null, sigBytes.subarray(i, i + CHUNK));
+        }
+        wireMsg.signed_payload = btoa(binStr);
+        const r = await fetch(RELAY + "/envelope?to=" + encodeURIComponent(peer), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(wireMsg),
+        });
+        if (r.ok) {
+            for (const h of hashes) pending.delete(h);
+            markReadReceipted(hashes);
+            console.log("[readreceipt] sent READ", hashes.length, "hash(es) →", peer.slice(0, 12));
+        } else {
+            console.warn("[readreceipt] POST failed, HTTP", r.status);
+        }
+    } catch (e) {
+        console.warn("[readreceipt] flush failed:", e.message);
+    } finally {
+        st.inflight.delete(peer);
+        if (pending && pending.size > 0) scheduleReadReceiptFlush(peer);
+    }
+}
+
+// Алиса: разобрать чужую READ-квитанцию → ✓� зелёные на наших исходящих.
+async function consumeReadReceiptRow(m, hash, fromPeer) {
+    try {
+        let ct = null;
+        if (m._server_msg && typeof m._server_msg.ct === "string") ct = m._server_msg.ct;
+        if (!ct && typeof m.body_base64 === "string" && m.body_base64.length > 0) {
+            try {
+                const inner = JSON.parse(atob(m.body_base64));
+                if (inner && typeof inner.ct === "string") ct = inner.ct;
+            } catch (e) {}
+        }
+        if (!ct) return;
+        const plain = await decryptEnvelope(ct);
+        applyReadReceipts(fromPeer, (plain && plain.msgs) || []);
+    } catch (e) {}
+}
+
+function applyReadReceipts(peer, hashes) {
+    if (!hashes || !hashes.length) return;
+    let changed = false;
+    for (const h of hashes) {
+        if (!h) continue;
+        if (markReadAcked(h)) changed = true;
+    }
+    if (!changed) return;
+    console.log("[readreceipt] applied ✓� to", hashes.length, "msg(s) from", peer.slice(0, 12));
+    if (activePeer === peer) renderMessages();
+}
+
 
 // Отправка квитанции: обычный подписанный конверт Bob→Alice, POST /envelope?to=<peer>
 // со служебным полем _kind:"receipt" в wire JSON (relay хранит тело как есть →
@@ -2500,12 +2637,13 @@ async function loadHistory(peer, beforeTs) {
                 // В чат их НЕ рендерим: чужие — помечают наши сообщения доставленными,
                 // свои (echo) — молча скипаем ДО outbox-resolution и дедупа.
                 if (isReceiptRow(m)) {
-                    if (fromNpub !== myNpub) consumeReceiptRow(m, hash, fromNpub);
+                    if (fromNpub !== myNpub) { if (parsedBody && parsedBody._t === "read_receipt") consumeReadReceiptRow(m, hash, fromNpub); else consumeReceiptRow(m, hash, fromNpub); }
                     continue;
                 }
                 // v158: входящие hash'и → в очередь квитанций (backlog при первом
                 // открытии чата тоже квитуется; дубли фильтрует receipted-store).
                 if (fromNpub !== myNpub && hash) queueReceiptsForPeer(peer, [hash]);
+                if (fromNpub !== myNpub && hash) queueReadReceiptsForPeer(peer, [hash]);
                 // Lesson #333 (Олег 2026-08-28 14:36 MSK): если hash в existingHashSet
                 // но cached msg имеет body "🔒 шифрованное сообщение" — запускаем
                 // decrypt для обновления body. Без этого кэш сам себя портит при
@@ -2904,7 +3042,13 @@ function renderMessages() {
                 // v158: ✓✓ только по реальной квитанции получателя (acks);
                 // POST 200 больше не «доставлено» — это просто «отправлено» ✓.
                 const acked = m._hash && isAcked(m._hash);
-                statusGlyph = acked ? "✓✓" : ((m.status === "delivered" || m.status === "sent") ? "✓" : "");
+                const readAcked = m._hash && isReadAcked(m._hash);
+                // v162: green checks only on READ receipt (chat open & read);
+                // grey double-check = delivery acked; single check = sent.
+                const isRead = readAcked;
+                const isDelivered = acked;
+                // v162: green ✓✓ = READ receipt (chat open & read); grey ✓✓ = delivered; ✓ = sent.
+                statusGlyph = isRead ? "read" : (isDelivered ? "delivered" : ((m.status === "delivered" || m.status === "sent") ? "sent" : ""));
             }
             if (isSystem) {
                 statusGlyph = "⏳";
@@ -2914,10 +3058,10 @@ function renderMessages() {
             // v160k8 (Олег 19:23 «галочки красятся когда прочитано): ✓✓ —
             // цветная галочка (читано), ✓ — muted (отправлено, не читано).
             let statusHtml = "";
-            if (statusGlyph === "\u2713\u2713") {
-                statusHtml = " <span class='msg-read-check'>\u2713\u2713</span>";
-            } else if (statusGlyph === "\u2713") {
-                statusHtml = " <span class='msg-sent-check'>\u2713</span>";
+            if (statusGlyph === "read" || statusGlyph === "delivered") {
+                statusHtml = " <span class='msg-read-check'>✓✓</span>";
+            } else if (statusGlyph === "sent") {
+                statusHtml = " <span class='msg-sent-check'>✓</span>";
             } else if (statusGlyph) {
                 statusHtml = " " + statusGlyph;
             }
@@ -3814,10 +3958,11 @@ function handleIncomingEnvelope(env) {
     // v158: служебные конверты не рендерим (WS в prod мёртв, но защита на
     // будущее). Чужая квитанция — тоже ✓✓; своя — молча скип.
     if (env._kind === "receipt" || isReceiptRow(env)) {
-        if (fromNpub !== myNpub) consumeReceiptRow(env, hash, peer);
+        if (fromNpub !== myNpub) consumeReadReceiptRow(env, hash, peer);
         return;
     }
     if (fromNpub !== myNpub && hash) queueReceiptsForPeer(peer, [hash]);
+    if (fromNpub !== myNpub && hash) queueReadReceiptsForPeer(peer, [hash]);
     let exists = false;
     if (hash) {
         exists = messages[peer].some(m => m._hash === hash);
@@ -3958,6 +4103,7 @@ async function pollHistoryForPeer(peer) {
             // ДО exists-дедупа: первый poll приносит ВСЮ историю, надо отчитаться
             // и по backlog'у. Дубли отфильтровывают seen/receipted-хранилища.
             if (fromNpub !== myNpub && hash) queueReceiptsForPeer(peer, [hash]);
+            if (fromNpub !== myNpub && hash) queueReadReceiptsForPeer(peer, [hash]);
             let exists = false;
             if (hash) {
                 exists = messages[peer].some(m => m._hash === hash);
