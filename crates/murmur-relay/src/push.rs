@@ -249,18 +249,23 @@ impl PushPayload {
             from_npub: entry.from_npub.clone(),
             ts: entry.ts,
             envelope_hash_hex: entry.envelope_hash_hex.clone(),
-            // "Murmur" == manifest.name → iOS не вставляет auto-line
-            // "from murmur" (Олег 2026-08-24 11:55 MSK). С реальными именами
-            // отправителя на ролее больше не работаем (npub-only).
-            title: "Murmur".to_string(),
-            subtitle: short_npub(&entry.from_npub),
-            // Body is intentionally generic — relay never sees plaintext
-            // (end-to-end encryption), so we cannot show the message text.
-            // We phrase it as an action ("Откройте, чтобы прочитать") so iOS
-            // Web Push does NOT prepend "from murmur" (which it does for
-            // very short bodies that look like notifications from the app
-            // itself).
-            body: "Откройте murmur, чтобы прочитать сообщение".to_string(),
+            // Олег 2026-09-06 10:05 (v160k9c): пустой title чтобы Safari
+            // (macOS) не подставлял "Murmur from murmur" поверх body.
+            // iOS показывает только body если title пустой.
+            title: "".to_string(),
+            // Олег 2026-09-05 23:46 (v160k9a): поменяли body на «murmur:
+            // новое сообщение» — iOS Web Push для generic self-notification
+            // (без двоеточия) prepends «from murmur», для нормального текста —
+            // нет. Теперь title=Murmur, body=murmur: новое сообщение.
+            // Subtitle пустой (без превью sender). E2E ciphertext на relay не
+            // расшифровывается, показывать нечего.
+            // Олег 2026-09-06 09:31 (v160k9b): Safari (Mac) парсит body, начинающийся
+            // с "murmur: …", как формат "App: text" → рендерит "Murmur from murmur
+            // новое сообщение". Заглавная M ("Murmur: …") не мачится с
+            // lowercase app-name "murmur" → auto-line "from murmur" не вставляется.
+            // iOS парсинг Case-sensitive — на iPhone тоже норм.
+            subtitle: "".to_string(),
+            body: "Murmur: новое сообщение".to_string(),
         }
     }
 

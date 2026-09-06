@@ -99,6 +99,11 @@ const LS_OUTBOX = "murmur.outbox";
 // параллельно идёт fetch только новых сообщений.
 const LS_MESSAGES_CACHE = "murmur.messages_cache";
 const LS_MESSAGES_MAX_TS = "murmur.messages_max_ts";
+// v160k9c (Олег 2026-09-06 10:05): race openChat → loadHistory приходит раньше
+// loadMessagesCacheForPeer и делает messages[peer] = newMsgs.concat([]) = только
+// newMsgs. Потом cache-load догружает устаревший массив и перетирает новые.
+// Фикс: loadHistory ждёт завершения cache-load для того же peer.
+const __murmurCacheLoading = new Map(); // peer → Promise<messages[peer] resolved>
 // v158 (Олег 2026-08-31 19:16): квитанции доставки ✓✓ — клиент-only, БЕЗ «прочитано».
 const LS_ACKS = "murmur.acks.v1";           // { [envelope_hash]: ts } — ✓✓ от получателя
 const LS_RECEIPTED = "murmur.receipted.v1"; // { ["peer|hash"]: ts } — уже отчитались (анти-шторм)
@@ -157,20 +162,6 @@ function _sanitizeMessageForStorage(m) {
     const cm = Object.assign({}, m);
     delete cm._decrypt_promise;
     if (Array.isArray(cm.attachments_meta)) cm.attachments_meta = cm.attachments_meta.map(_sanitizeAttachmentForStorage);
-    // v160kc (Олег 2026-09-03 22:07 «переписка исчезает»): _server_msg может
-    // carry большие body_base64/attachments (35MB видео) → IDB put падает
-    // молча (catch → console.warn) → весь peer-кэш пропадает. Стримаем
-    // _server_msg: для больших (>1.5MB) вырезаем body_base64/ct/attachments
-    // (decrypt через blob-fetch, _server_msg для них не нужен), мелкие
-    // (text �🔒) сохраняем — offline-decrypt по _server_msg работает.
-    if (cm._server_msg && typeof cm._server_msg === "object") {
-        const sm = Object.assign({}, cm._server_msg);
-        const bigAtt = Array.isArray(sm.attachments) && sm.attachments.some(a => (a && (a.size || 0) > 1.5 * 1024 * 1024));
-        const bigBody = typeof sm.body_base64 === "string" && sm.body_base64.length > 1.5 * 1024 * 1024;
-        delete sm._decrypt_promise;
-        if (bigAtt || bigBody) { delete sm.body_base64; delete sm.ct; delete sm.attachments; }
-        cm._server_msg = sm;
-    }
     return cm;
 }
 window._murmurSanitizeMessageForStorage = _sanitizeMessageForStorage; // v160s: app-store.js IDB put
@@ -241,6 +232,19 @@ async function saveMessagesCacheForPeer(peer) {
 }
 
 async function loadMessagesCacheForPeer(peer) {
+    // v160k9c: expose this promise so loadHistory can await it (anti-race).
+    let resolveCache;
+    const cacheP = new Promise(r => { resolveCache = r; });
+    __murmurCacheLoading.set(peer, cacheP);
+    try {
+        return await _loadMessagesCacheForPeerImpl(peer, resolveCache);
+    } finally {
+        __murmurCacheLoading.delete(peer);
+        resolveCache();
+    }
+}
+
+async function _loadMessagesCacheForPeerImpl(peer, resolveCache) {
     let arr = null;
     if (window.appStore) {
         try {
@@ -315,8 +319,6 @@ async function loadMessagesCacheForPeer(peer) {
             } catch (e) { /* offline / WASM not ready — 🔒 stays until WASM ready */ }
         };
         encRows.forEach(decryptEncRow);
-        // v162f: module-level retry hook — pollHistoryForPeer 🔒 retry uses it.
-        window.__decryptEncRowRetry = (peer2, em) => decryptEncRow(em);
         // Если есть blob-cache HIT для attachments_meta, рендер сразу покажет <img>.
         // Если нет — будет placeholder пока decrypt идёт.
         renderMessages();
@@ -487,7 +489,6 @@ window.__murmurTestHooks = {
     allMessages: () => messages,
     activePeer: () => activePeer,
     contacts: () => Object.keys(contacts || {}),
-    contactList: () => contacts || {},
 };
 let pollTimer = null;
 // Attachments (Олег 2026-08-24 11:00 MSK) — файлы прикрепленные к текущему сообщению.
@@ -759,16 +760,16 @@ const DECRYPT_TIMEOUT_MS = 8000;
 function isReceiptRow(m) {
     if (!m || typeof m !== "object") return false;
     try {
-        if (m._kind === "receipt" || m._kind === "read_receipt") return true;
+        if (m._kind === "receipt") return true; // WS-путь или уже распарсено
         if (typeof m.body === "string" && m.body.indexOf("\"_kind\"") !== -1) {
             const p = JSON.parse(m.body);
-            if (p && (p._kind === "receipt" || p._t === "read_receipt")) return true;
+            if (p && p._kind === "receipt") return true;
         }
         if (typeof m.body_base64 === "string" && m.body_base64.length > 0) {
             const inner = decodeBody(m.body_base64);
             if (inner && inner.text) {
                 const p = JSON.parse(inner.text);
-                if (p && (p._kind === "receipt" || p._t === "read_receipt" || p.rt === 1)) return true;
+                if (p && (p._kind === "receipt" || p.rt === 1)) return true;
             }
         }
     } catch (e) { /* обычный конверт — не квитанция */ }
@@ -854,143 +855,6 @@ function scheduleReceiptFlush(peer) {
     }, RECEIPT_FLUSH_DELAY_MS);
     window.__murmurReceiptState.timers.set(peer, t);
 }
-// ═══ v162: READ receipts (Олег 04.09.2026) ═══
-// 1 галочка ✓ — отправлено, ✓� серые — доставлено, ✓� зелёные — прочитано
-// (чат открыт на экране; фоновая доставка в IDB НЕ «прочитано»).
-const LS_READ = "murmur.read.v1";           // { [envelope_hash]: ts } — ✓� зелёные от получателя
-const LS_READ_DONE = "murmur.read_done.v1"; // { [envelope_hash]: ts } — уже отчитались READ
-const READ_ACKS_CAP = 500;
-const READ_FLUSH_DELAY_MS = 1500;
-
-function loadReadAcks() { return receiptLsRead(LS_READ, READ_ACKS_CAP); }
-function isReadAcked(hash) { return !!hash && !!receiptLsRead(LS_READ, READ_ACKS_CAP)[hash]; }
-function markReadAcked(hash, ts) {
-    if (!hash) return false;
-    const readAcks = loadReadAcks();
-    if (readAcks[hash]) return false;
-    readAcks[hash] = ts || Math.floor(Date.now() / 1000);
-    receiptLsWrite(LS_READ, readAcks);
-    return true;
-}
-
-function isAlreadyReadReceipted(hash) { return !!receiptLsRead(LS_READ_DONE, READ_ACKS_CAP)[hash]; }
-function markReadReceipted(hashes) {
-    if (!hashes || !hashes.length) return;
-    const store = receiptLsRead(LS_READ_DONE, READ_ACKS_CAP);
-    let changed = false;
-    for (const h of hashes) {
-        if (h && !store[h]) { store[h] = Math.floor(Date.now() / 1000); changed = true; }
-    }
-    if (changed) receiptLsWrite(LS_READ_DONE, store);
-}
-
-if (typeof window !== "undefined" && !window.__murmurReadReceiptState) {
-    window.__murmurReadReceiptState = { queue: new Map(), inflight: new Set(), timers: new Map(), seen: new Set() };
-}
-
-// Bob: hash'и входящих в очередь READ-квитанции. Только когда чат реально
-// открыт (activePeer === peer) — фоновая доставка НЕ считается «прочитано».
-function queueReadReceiptsForPeer(peer, hashes) {
-    if (!myNpub || !peer || peer === myNpub) return;
-    if (typeof activePeer === "undefined" || activePeer !== peer) return;
-    if (!hashes || !hashes.length) return;
-    const st = window.__murmurReadReceiptState;
-    const fresh = hashes.filter(h => h && !isAlreadyReadReceipted(h) && !st.seen.has(peer + "|" + h));
-    if (!fresh.length) return;
-    for (const h of fresh) st.seen.add(peer + "|" + h);
-    if (!st.queue.has(peer)) st.queue.set(peer, new Set());
-    const set = st.queue.get(peer);
-    for (const h of fresh) set.add(h);
-    scheduleReadReceiptFlush(peer);
-}
-
-function scheduleReadReceiptFlush(peer) {
-    if (window.__murmurReadReceiptState.timers.has(peer)) return;
-    const t = setTimeout(() => {
-        window.__murmurReadReceiptState.timers.delete(peer);
-        flushReadReceiptsForPeer(peer);
-    }, READ_FLUSH_DELAY_MS);
-    window.__murmurReadReceiptState.timers.set(peer, t);
-}
-
-// READ-квитанция: конверт Bob→Alice с _kind:"read_receipt",
-// внутри ct: {v:1,_t:"read_receipt",msgs:[hash,...],pad}.
-async function flushReadReceiptsForPeer(peer) {
-    const st = window.__murmurReadReceiptState;
-    const pending = st.queue.get(peer);
-    if (!pending || pending.size === 0 || st.inflight.has(peer)) return;
-    const hashes = Array.from(pending);
-    st.inflight.add(peer);
-    try {
-        const peerKey = await resolvePeerKey(peer);
-        if (!peerKey) { console.warn("[readreceipt] no peer key for", peer.slice(0, 12)); return; }
-        const padLen = 96 + Math.floor(Math.random() * 384);
-        const pad = new Array(padLen).fill(0).map(() => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join("");
-        const plain = { v: 1, _t: "read_receipt", msgs: hashes, pad: pad };
-        const sealedB64 = await encryptForRecipient(peerKey.npub, plain);
-        const ts = Math.floor(Date.now() / 1000);
-        const wireMsg = { from: myNpub, to: peer, ct: sealedB64, attachments_meta: [], ts, _kind: "read_receipt" };
-        const mod = await loadWasmModule();
-        const signedPayload = wireMsg.from + "|" + wireMsg.to + "|" + wireMsg.ts + "|" + wireMsg.ct;
-        const sigBytes = new TextEncoder().encode(signedPayload);
-        const sig = unwrap(mod.sign_envelope(wireMsg.from, sigBytes));
-        if (!sig.ok) { console.error("[readreceipt] sign error:", sig.error); return; }
-        wireMsg.sig = sig.data;
-        let binStr = "";
-        const CHUNK = 0x8000;
-        for (let i = 0; i < sigBytes.length; i += CHUNK) {
-            binStr += String.fromCharCode.apply(null, sigBytes.subarray(i, i + CHUNK));
-        }
-        wireMsg.signed_payload = btoa(binStr);
-        const r = await fetch(RELAY + "/envelope?to=" + encodeURIComponent(peer), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(wireMsg),
-        });
-        if (r.ok) {
-            for (const h of hashes) pending.delete(h);
-            markReadReceipted(hashes);
-            console.log("[readreceipt] sent READ", hashes.length, "hash(es) →", peer.slice(0, 12));
-        } else {
-            console.warn("[readreceipt] POST failed, HTTP", r.status);
-        }
-    } catch (e) {
-        console.warn("[readreceipt] flush failed:", e.message);
-    } finally {
-        st.inflight.delete(peer);
-        if (pending && pending.size > 0) scheduleReadReceiptFlush(peer);
-    }
-}
-
-// Алиса: разобрать чужую READ-квитанцию → ✓� зелёные на наших исходящих.
-async function consumeReadReceiptRow(m, hash, fromPeer) {
-    try {
-        let ct = null;
-        if (m._server_msg && typeof m._server_msg.ct === "string") ct = m._server_msg.ct;
-        if (!ct && typeof m.body_base64 === "string" && m.body_base64.length > 0) {
-            try {
-                const inner = JSON.parse(atob(m.body_base64));
-                if (inner && typeof inner.ct === "string") ct = inner.ct;
-            } catch (e) {}
-        }
-        if (!ct) return;
-        const plain = await decryptEnvelope(ct);
-        applyReadReceipts(fromPeer, (plain && plain.msgs) || []);
-    } catch (e) {}
-}
-
-function applyReadReceipts(peer, hashes) {
-    if (!hashes || !hashes.length) return;
-    let changed = false;
-    for (const h of hashes) {
-        if (!h) continue;
-        if (markReadAcked(h)) changed = true;
-    }
-    if (!changed) return;
-    console.log("[readreceipt] applied ✓� to", hashes.length, "msg(s) from", peer.slice(0, 12));
-    if (activePeer === peer) renderMessages();
-}
-
 
 // Отправка квитанции: обычный подписанный конверт Bob→Alice, POST /envelope?to=<peer>
 // со служебным полем _kind:"receipt" в wire JSON (relay хранит тело как есть →
@@ -1237,17 +1101,6 @@ function truncateNpub(npub) {
 // Защита от утечки JSON envelope в preview sidebar:
 // сервер для зашифрованных сообщений должен присылать «🔒 ...», но
 // старые preview в БД или кэше могут содержать сырой JSON. Заменяем на placeholder.
-// v160kd friendlyPreviewName — friendly mime-derived name when _plainName missing
-function friendlyPreviewName(att) {
-    if (!att || typeof att !== "object") return "";
-    const n = (att._plainName || att.name || "");
-    const mime = att.mime || att._plainMime || "";
-    if (n && !n.endsWith(".bin") && n.includes(".")) return n;
-    const extMap = { "application/pdf": "pdf", "text/plain": "txt", "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "application/msword": "doc", "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx", "application/vnd.ms-excel": "xls", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx", "application/vnd.ms-powerpoint": "ppt", "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx", "application/zip": "zip", "application/json": "json", "text/csv": "csv", "application/epub+zip": "epub", "application/rtf": "rtf", "video/mp4": "mp4", "video/webm": "webm", "audio/mpeg": "mp3", "audio/mp4": "mp3" };
-    const ext = extMap[mime] || (mime.split("/")[1] || "file").replace(/[^a-z0-9]/gi, "") || "file";
-    const base = (n.replace(/\.bin$/i, "") || "file");
-    return base + "." + ext;
-}
 function sanitizePreview(p) {
     if (!p) return "";
     const s = String(p);
@@ -1261,7 +1114,7 @@ function previewForMsg(m) {
     try {
         if (!m) return "";
         const am = (Array.isArray(m.attachments_meta) && m.attachments_meta.length) ? m.attachments_meta : (Array.isArray(m.attachments) ? m.attachments : []);
-        const names = am.map(a => friendlyPreviewName(a)).filter(Boolean);
+        const names = am.map(a => (a && (a._plainName || a.name)) || "").filter(Boolean);
         const attLabel = am.length ? "📎 " + (names[0] || "файл") + (am.length > 1 ? " +" + (am.length - 1) : "") : "";
         let t = String(m.body || m.resolvedBody || m.outbox_body || "").trim();
         if (t.startsWith("{")) t = ""; // сырой envelope — считаем нерасшифрованным
@@ -1492,8 +1345,13 @@ function enterMessenger() {
     // display name), otherwise fall back to npub for first-run. We then
     // upsert the canonical alias under both names so the relay can find us
     // regardless of whether the sender typed our display name or our npub.
-    // v162e: /api/register_alias удалён на релей (v149 npub-only, 404).
-    // alias-lookup removed — npub-only contacts из envelopes.
+    const preferredAlias = myAlias || myNpub;
+    fetch(RELAY + "/api/register_alias", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ alias: preferredAlias, npub: myNpub })
+    }).then(r => r.json().then(j => console.log("register_alias on enter:", j)))
+      .catch(e => console.warn("register_alias on enter failed:", e));
     const copyBtn = $("btn-copy-npub");
     if (copyBtn && !copyBtn.dataset.bound) {
         copyBtn.dataset.bound = "1";
@@ -2115,20 +1973,9 @@ async function loadContacts() {
                             : rec[rec.length - 1];
                         const prev = sanitizePreview(previewForMsg(last));
                         const cur = contacts[peer];
-                        // v160kb (Олег 21:06 «в превью сначала первое, через пару
-                        // секунд меняется на последнее — пользователь видит что
-                        // под капотом»: кэш-снапшот писался ДО прихода нового
-                        // сообщения на сервер → restore показывает СТАРое
-                        // «FIRST msg», poll через пару секунд меняет на LAST.
-                        // Fix: если сервер lastTs новее кэш-msg — кэш СТАРой,
-                        // НЕ показывать (leave �🔒 placeholder, pollHist даст
-                        // LAST после decrypt). Если кэш синхронный (lastTs ==
-                        // cached ts) — показываем мгновенно, это честное LAST.
-                        const cachedTs = last.ts || last.created_at_ts || 0;
-                        const stale = cur.lastTs > cachedTs;
-                        if (!cur.lastMessagePreview && prev && prev !== "🔒 зашифрованное сообщение" && !stale) {
+                        if (!cur.lastMessagePreview && prev && prev !== "🔒 зашифрованное сообщение") {
                             cur.lastMessagePreview = prev;
-                            cur.lastTs = cachedTs || cur.lastTs || 0;
+                            cur.lastTs = last.ts || last.created_at_ts || cur.lastTs || 0;
                         }
                     }
                 }
@@ -2569,6 +2416,12 @@ function openChat(peer) {
 // ── Load History ──
 async function loadHistory(peer, beforeTs) {
     if (!myNpub) return;
+    // v160k9c: ждём завершения loadMessagesCacheForPeer для того же peer, чтобы
+    // не перетереть кэш устаревшим результатом сервера.
+    const pendingCache = __murmurCacheLoading.get(peer);
+    if (pendingCache) {
+        try { await pendingCache; } catch (e) { /* ignore */ }
+    }
     // Cache-bust every /api/* request: bypass HTTP cache, Service Worker cache,
     // and Cloudflare edge cache. Without this, browsers serve stale responses
     // from earlier deploys (when /api/history returned empty) and the chat
@@ -2610,13 +2463,6 @@ async function loadHistory(peer, beforeTs) {
         const j = await r.json();
         console.log("[murmur] loadHistory:", peer.slice(0, 12), "got", (j.messages || []).length, "messages");
         loadingEl.remove();
-        // v160ke (Олег 23:03 «vanishes AGAIN, 3-раз ловим»): save cache СРАЗУ
-        // после fetch, ДО decrypt race. BATCH_TIMEOUT 20000ms + WASM cold-start
-        // 20-25s → race reject → catch → saveMessagesCacheForPeer не вызывается
-        // → кэш не persists → при reload кэш пуст + сервер TTL снес строки =
-        // vanishes целиком. Raw rows сохраняются мгновенно; async decrypt
-        // обновляет кэш инcrementally (decryptEncRow / pollHist paths).
-        saveMessagesCacheForPeer(peer);
         if (j.messages && j.messages.length > 0) {
             if (!messages[peer]) messages[peer] = [];
             // Lesson #128: дедуп по envelope_hash (если есть) или по ts.
@@ -2634,31 +2480,18 @@ async function loadHistory(peer, beforeTs) {
                 // В чат их НЕ рендерим: чужие — помечают наши сообщения доставленными,
                 // свои (echo) — молча скипаем ДО outbox-resolution и дедупа.
                 if (isReceiptRow(m)) {
-                    // v162f: parsedBody не определён в этом scope — parse locally (was undefined → FAILED).
-                    let rcBody = null;
-                    try { rcBody = JSON.parse(m.body); } catch (_e) {}
-                    if (fromNpub !== myNpub) { if (rcBody && rcBody._t === "read_receipt") consumeReadReceiptRow(m, hash, fromNpub); else consumeReceiptRow(m, hash, fromNpub); }
+                    if (fromNpub !== myNpub) consumeReceiptRow(m, hash, fromNpub);
                     continue;
                 }
                 // v158: входящие hash'и → в очередь квитанций (backlog при первом
                 // открытии чата тоже квитуется; дубли фильтрует receipted-store).
                 if (fromNpub !== myNpub && hash) queueReceiptsForPeer(peer, [hash]);
-                if (fromNpub !== myNpub && hash) queueReadReceiptsForPeer(peer, [hash]);
                 // Lesson #333 (Олег 2026-08-28 14:36 MSK): если hash в existingHashSet
                 // но cached msg имеет body "🔒 шифрованное сообщение" — запускаем
                 // decrypt для обновления body. Без этого кэш сам себя портит при
                 // каждом loadHistory (msg без plaintext перезаписывается).
                 if (hash && existingHashSet.has(hash)) {
                     const cachedMsg = messages[peer].find(x => x._hash === hash);
-                    // v162d: 🔒 row (decrypt падал/timed out) — retry decrypt.
-                    // WASM cold-start race → 🔒 навсегда. Retry при каждом pollHist.
-                    if (cachedMsg && (cachedMsg._ct || cachedMsg.body && (cachedMsg.body.includes("🔒") || cachedMsg.body.includes("шифрованное"))) && !cachedMsg._decryptedOffline) {
-                        // v162f: decryptEncRow lives in loadHistory local scope — guard
-                            // (was undefined → loadHistory FAILED → empty chat).
-                            if (typeof window.__decryptEncRowRetry === "function") {
-                                window.__decryptEncRowRetry(peer, cachedMsg);
-                            }
-                    }
                     // Lesson #338 (Олег 2026-08-28 15:38 MSK): расширяем fix #333
                     // на оба направления. Cached msg мог быть сохранён со СТАРЫМ
                     // direction (in вместо out) из-за pre-v133 bug в loadOutboxForPeer.
@@ -2899,13 +2732,7 @@ async function loadHistory(peer, beforeTs) {
                 for (const m of messages[peer]) {
                     if (!newest || (m.ts || 0) > (newest.ts || 0)) newest = m;
                 }
-                // v160kd (Олег 22:41 «сначала из середины, потом последнее»):
-                // если contacts.lastTs уже новее — newest СТАРое (pagination),
-                // preview НЕ перетирать, else LAST меняется на mid-msg и
-                // мерцает до следующего pollHist.
-                const shownTs = contacts[peer] ? (contacts[peer].lastTs || 0) : 0;
-                const staleNewest = newest && (newest.ts || 0) < shownTs;
-                if (newest && !staleNewest && newest.body) {
+                if (newest && newest.body) {
                     if (!contacts[peer]) contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
                     contacts[peer].lastTs = newest.ts;
                     // Lesson #241: НЕ обновлять preview здесь, если body
@@ -2935,18 +2762,7 @@ async function loadHistory(peer, beforeTs) {
 function renderMessages() {
     if (!activePeer) return;
     const all = messages[activePeer] || [];
-    // v162d (Олег 09:23 «цикл непонятных сообщений»): dedup по _hash.
-    // messages[peer] мог содержать дубли (poll echo + optimistic copy + cache
-    // restore). Без dedup: same ts ×4, duplicate «Сегодня» dividers.
-    const seen = new Set();
-    const uniq = [];
-    for (const m of all) {
-        const key = m._hash || (m._sig || (m.from || "") + m.ts);
-        if (key && seen.has(key)) continue;
-        if (key) seen.add(key);
-        uniq.push(m);
-    }
-    const msgs = uniq.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    const msgs = [...all].sort((a, b) => (a.ts || 0) - (b.ts || 0));
     // Lesson #227 (Олег 2026-08-26 16:25): DIAGNOSTIC instrumentation —
     // record every renderMessages call with stack + DOM diff.
     if (typeof window.__MURMUR_DIAG__ === "undefined") {
@@ -3062,28 +2878,23 @@ function renderMessages() {
                 // v158: ✓✓ только по реальной квитанции получателя (acks);
                 // POST 200 больше не «доставлено» — это просто «отправлено» ✓.
                 const acked = m._hash && isAcked(m._hash);
-                const readAcked = m._hash && isReadAcked(m._hash);
-                // v162: green checks only on READ receipt (chat open & read);
-                // grey double-check = delivery acked; single check = sent.
-                const isRead = readAcked;
-                const isDelivered = acked;
-                // v162: green ✓✓ = READ receipt (chat open & read); grey ✓✓ = delivered; ✓ = sent.
-                statusGlyph = isRead ? "read" : (isDelivered ? "delivered" : ((m.status === "delivered" || m.status === "sent") ? "sent" : ""));
+                statusGlyph = acked ? "✓✓" : ((m.status === "delivered" || m.status === "sent") ? "✓" : "");
             }
             if (isSystem) {
                 statusGlyph = "⏳";
             }
             const bodyText = m.body || "";
-            let bodyHtml = escapeHtml(bodyText);
+            // Олег 2026-09-05 20:40: linkify — после escape. В iOS PWA
+            // target=_blank открывает SFSafariViewController, в обычном
+            // браузере — новый таб. Не заменяем внутреннюю навигацию.
+            let bodyHtml = linkifyHtml(escapeHtml(bodyText));
             // v160k8 (Олег 19:23 «галочки красятся когда прочитано): ✓✓ —
             // цветная галочка (читано), ✓ — muted (отправлено, не читано).
             let statusHtml = "";
-            if (statusGlyph === "read") {
-                statusHtml = " <span class='msg-read-check'>✓✓</span>";
-            } else if (statusGlyph === "delivered") {
-                statusHtml = " <span class='msg-delivered-check'>✓✓</span>";
-            } else if (statusGlyph === "sent") {
-                statusHtml = " <span class='msg-sent-check'>✓</span>";
+            if (statusGlyph === "\u2713\u2713") {
+                statusHtml = " <span class='msg-read-check'>\u2713\u2713</span>";
+            } else if (statusGlyph === "\u2713") {
+                statusHtml = " <span class='msg-sent-check'>\u2713</span>";
             } else if (statusGlyph) {
                 statusHtml = " " + statusGlyph;
             }
@@ -3092,6 +2903,14 @@ function renderMessages() {
                 "<span class='bubble-time'>" + formatTime(m.ts) + statusHtml + "</span>";
             messagesArea.appendChild(div);
             renderedSigs.add(sig);
+            // v160k9a (Олег 2026-09-05 23:48): Link Unfurl. Если в body был URL,
+            // ниже первой ссылки подтянем og:image/title/description через
+            // microlink.io и вставим превью-карточку. Не передаём URL через
+            // relay — privacy: всё на клиенте. Кэш в IDB murmur.unfurl_cache,
+            // TTL 24ч.
+            if (window.attachUnfurlPreview) {
+                try { window.attachUnfurlPreview(div, bodyText, sig); } catch (e) { /* ignore */ }
+            }
         }
         // Phase 3: render attachments from outbox plaintext (own outgoing) or
         // decrypt via WASM (incoming) — both async, no inline data: URLs.
@@ -3871,6 +3690,86 @@ function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 }
 
+// Олег 2026-09-05 20:40: linkify поверх escapeHtml. Ищем URL на уже
+// экранированной строке — не ломаем HTML. Регекс берёт http/https/www
+// + опциональный путь/query/fragment. target=_blank + rel=noopener
+// noreferrer — в iOS PWA Safari открывает новый таб SFSafariViewController,
+// в обычном браузере — новый таб. Никакой internal-роутер не нужен.
+function linkifyHtml(escaped) {
+    if (!escaped) return "";
+    // (?:https?:\/\/|www\.)[^\s<]+  — после escape все < > и пробелы уже
+    // безопасны; \s достаточно для разрыва URL.
+    const re = /(https?:\/\/[^\s<]+|www\.[^\s<]+)/gi;
+    return escaped.replace(re, (m) => {
+        let href = m;
+        if (/^www\./i.test(href)) href = "https://" + href;
+        // Trailing punctuation (типа "." или "," в конце предложения) — частая
+        // грабля. URL.ы кончаются на ?!&,;:'.) — оставляем как есть (компромисс,
+        // но для мессенджера хватает; пользователь увидит «https://x.com.» и
+        // тапнет в зону «https://x.com»).
+        return "<a href=\"" + href + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + m + "</a>";
+    });
+}
+
+// v160k9a (Олег 2026-09-05 23:48): Link Unfurl — превью ссылок в чате.
+// Находим ПЕРВЫЙ URL в тексте сообщения, тянем OG-метаданные (og:image,
+// og:title, og:description) через microlink.io, вставляем карточку под
+// .msg-body. Кэш в IDB murmur.unfurl_cache (24ч TTL). Не передаём URL через
+// relay — privacy: всё на клиенте.
+window.attachUnfurlPreview = async function (bubbleDiv, bodyText, sig) {
+    if (!bubbleDiv || !bodyText) return;
+    // уже был превью для этого sig?
+    if (bubbleDiv.querySelector(".unfurl-card")) return;
+    const m = bodyText.match(/https?:\/\/[^\s<]+/i);
+    if (!m) return;
+    const url = m[0].replace(/[.,!?)]+$/, ""); // strip trailing punct
+    if (!/^https?:\/\/(www\.)?(youtube\.com|youtu\.be|youtu\.be|m\.youtube\.com)\//i.test(url)
+        && !/^https?:\/\/[^\s]+\.[^\s]+/i.test(url)) return;
+    // URL валидный — продолжаем.
+    const cacheKey = "murmur.unfurl_cache";
+    const cache = (window.appStore && await window.appStore.kv.get(cacheKey).catch(() => null)) || {};
+    const now = Date.now();
+    let meta = cache[url];
+    if (meta && now - meta._at > 24 * 3600 * 1000) meta = null; // TTL
+    if (!meta) {
+        try {
+            // microlink.io: бесплатный OG endpoint. Без API key 50 req/day,
+            // с ключом (в URL) — больше. Нам для beta хватит.
+            const r = await fetch("https://api.microlink.io/?url=" + encodeURIComponent(url)
+                + "&meta=true&screenshot=false&embed=screenshot.url");
+            if (!r.ok) return;
+            const j = await r.json();
+            if (!j || j.status !== "success" || !j.data) return;
+            meta = {
+                title: j.data.title || url,
+                description: j.data.description || "",
+                image: (j.data.image && j.data.image.url) || "",
+                siteName: j.data.publisher || j.data.title || "",
+            };
+            cache[url] = { ...meta, _at: now };
+            // Пишем обратно в кэш (kv store). Не критично если упало.
+            if (window.appStore) window.appStore.kv.set(cacheKey, cache).catch(() => {});
+        } catch (e) {
+            // CORS, offline, rate-limit — молча возвращаемся.
+            return;
+        }
+    }
+    if (!meta || (!meta.title && !meta.image)) return;
+    const card = document.createElement("a");
+    card.className = "unfurl-card";
+    card.href = url;
+    card.target = "_blank";
+    card.rel = "noopener noreferrer";
+    card.innerHTML =
+        (meta.image ? "<div class='unfurl-img'><img src=\"" + escapeHtml(meta.image) + "\" alt=\"\"></div>" : "") +
+        "<div class='unfurl-meta'>" +
+            (meta.siteName ? "<div class='unfurl-site'>" + escapeHtml(meta.siteName) + "</div>" : "") +
+            "<div class='unfurl-title'>" + escapeHtml(meta.title || "") + "</div>" +
+            (meta.description ? "<div class='unfurl-desc'>" + escapeHtml(meta.description) + "</div>" : "") +
+        "</div>";
+    bubbleDiv.appendChild(card);
+};
+
 btnBack?.addEventListener("click", () => {
     sidebar.classList.remove("hidden");
     chatPanel.classList.remove("active");
@@ -3926,6 +3825,16 @@ function connectWS() {
         ws.send(JSON.stringify({ type: "subscribe", alias: myAlias, npub: myNpub }));
     };
 
+    // Register alias→npub mapping via HTTP (works even if WS tunnel is down).
+    // This is what allows /api/history and /api/inbox to find messages for us.
+    if (myNpub && myAlias) {
+        fetch(RELAY + "/api/register_alias", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ alias: myAlias, npub: myNpub })
+        }).then(r => r.json().then(j => console.log("register_alias:", j)))
+          .catch(e => console.warn("register_alias failed:", e));
+    }
 
     ws.onmessage = (evt) => {
         try {
@@ -3969,12 +3878,11 @@ function handleIncomingEnvelope(env) {
     const hash = env.envelope_hash_hex || (env.envelope && env.envelope.envelope_hash_hex) || null;
     // v158: служебные конверты не рендерим (WS в prod мёртв, но защита на
     // будущее). Чужая квитанция — тоже ✓✓; своя — молча скип.
-    if (env._kind === "receipt" || env._kind === "read_receipt" || isReceiptRow(env)) {
-        if (fromNpub !== myNpub) { if (env._kind === "read_receipt") consumeReadReceiptRow(env, hash, peer); else consumeReceiptRow(env, hash, peer); }
+    if (env._kind === "receipt" || isReceiptRow(env)) {
+        if (fromNpub !== myNpub) consumeReceiptRow(env, hash, peer);
         return;
     }
     if (fromNpub !== myNpub && hash) queueReceiptsForPeer(peer, [hash]);
-    if (fromNpub !== myNpub && hash) queueReadReceiptsForPeer(peer, [hash]);
     let exists = false;
     if (hash) {
         exists = messages[peer].some(m => m._hash === hash);
@@ -4115,7 +4023,6 @@ async function pollHistoryForPeer(peer) {
             // ДО exists-дедупа: первый poll приносит ВСЮ историю, надо отчитаться
             // и по backlog'у. Дубли отфильтровывают seen/receipted-хранилища.
             if (fromNpub !== myNpub && hash) queueReceiptsForPeer(peer, [hash]);
-            if (fromNpub !== myNpub && hash) queueReadReceiptsForPeer(peer, [hash]);
             let exists = false;
             if (hash) {
                 exists = messages[peer].some(m => m._hash === hash);
@@ -4133,18 +4040,6 @@ async function pollHistoryForPeer(peer) {
                             .then(({ text: newBody, attachmentsMeta: newMeta }) => {
                                 if (newBody && newBody !== "__DECRYPT_FAILED__") cachedMsg.body = newBody;
                                 if (newMeta && newMeta.length) cachedMsg.attachments_meta = newMeta;
-                                // v160kb: decrypt у freshness for newest msg —
-                                // sidebar preview обновить мгновенно, не через 5s
-                                // resync (Олег: «сначала первое, через пару секунд
-                                // меняется на последнее»).
-                                if (contacts && contacts[peer]) {
-                                    const prev = sanitizePreview(previewForMsg(cachedMsg));
-                                    if (prev && prev !== "🔒 зашифрованное сообщение" && contacts[peer].lastMessagePreview !== prev) {
-                                        contacts[peer].lastMessagePreview = prev;
-                                        contacts[peer].lastTs = cachedMsg.ts || contacts[peer].lastTs || 0;
-                                        renderChatList();
-                                    }
-                                }
                                 if (activePeer === peer) renderMessages();
                             });
                     }
@@ -4217,21 +4112,6 @@ async function pollHistoryForPeer(peer) {
             const { text: bodyText, isBinary } = extractMessageText(msg);
             // Lesson #199 (Олег 2026-08-26): для исходящих — идти в outbox вместо
             // "🔒 шифрованное сообщение", иначе UI покажет placeholder + decrypt errors.
-            // v162g2: 🔒-echo = квитанция (decrypt-failed receipt) — скипнуть в
-            // BOTH paths: pollHist (outgoing) AND loadHistory fresh-load (incoming 🔒
-            // от peer's receipt echo тоже не рендерить — Олег-скрин 09:45).
-            if (fromNpub === myNpub && bodyText && bodyText.includes("🔒")) {
-                continue;
-            }
-            // 🔒 row от peer без decrypt = может быть real msg (needs retry) OR
-            // peer's receipt echo (🔒 навсегда, ct encrypted to peer, not me).
-            // Precise check: _sig совпадает с receipt в OUR outbox → echo, skip.
-            const ctLen = (msg.ct || msg.body_base64 || "").length;
-            if (fromNpub !== myNpub && ctLen > 0 && !msg.attachments && msg.body === "🔒 зашифрованное сообщение") {
-                const myOutbox = loadOutboxForPeer(peer);
-                const sigMatch = myOutbox.some(o => o._sig && o._sig === sigKey && (o._kind === "receipt" || o._kind === "read_receipt" || o.isReceipt));
-                if (sigMatch) continue;
-            }
             let resolvedBody = bodyText;
             let resolvedAttachments = msg.attachments || [];
             let resolvedAttachmentsMeta = msg.attachments || [];
@@ -4286,16 +4166,7 @@ async function pollHistoryForPeer(peer) {
                             size: a.size,
                         }));
                     } else {
-                        // Текстовое исходящее без outbox.
-                        // v162e: если hash уже в messages[peer] — это echo自己的
-                        // сообщения (dedup'd), не плейсхолдер. Если NOT in messages[peer]
-                        // и NOT receipt — квитанция-echo или deleted msg: скипнуть тихо,
-                        // не "[исходящее сообщение]" с ✓✓ (Олег-скрин 09:43).
-                        const isEcho = hash && (messages[peer] || []).some(x => x._hash === hash);
-                        const sb = isReceiptRow(msg);
-                        if (sb || isEcho) {
-                            continue;
-                        }
+                        // Текстовое исходящее без outbox
                         resolvedBody = "[исходящее сообщение]";
                     }
                     console.warn("[pollHist] outgoing NOT resolved via outbox", peer.slice(0, 12), "msg_hash=", hash, "msg_ts=", msg.ts, "outbox_count=", outbox.length, "fallback_body=", resolvedBody.slice(0, 20));
@@ -4553,13 +4424,6 @@ function resyncSidebarPreviews() {
         const fallbackish = (preview === "🔒 зашифрованное сообщение");
         const cur = contacts[peer] ? contacts[peer].lastMessagePreview : "";
         if (fallbackish && cur && cur !== "🔒 зашифрованное сообщение") continue;
-        // v160kd (Олег 22:41 «сначала сообщение из середины, потом последнее»):
-        // resync ходит по messages[peer], который при pagination содержит только
-        // ЧАСТЬ истории — mid-conversation msg перетирает честное LAST.
-        // Fix: если newest из массива СТАРое (ts < contacts.lastTs) — это не
-        // последнее сообщение, preview НЕ менять.
-        const shownTs = contacts[peer] ? (contacts[peer].lastTs || 0) : 0;
-        if ((newest.ts || 0) < shownTs) continue;
         if (!contacts[peer]) contacts[peer] = { peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
         if (preview && contacts[peer].lastMessagePreview !== preview) {
             contacts[peer].lastMessagePreview = preview;

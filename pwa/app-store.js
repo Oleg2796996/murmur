@@ -51,8 +51,10 @@ const STORE_CHATS = "chats";
 const STORE_BLOBS = "blobs";
 const STORE_VAPID = "vapid";
 
-const MAX_MESSAGES_PER_PEER = 200;
+const MAX_MESSAGES_PER_PEER = 500; // v160k9a (Олег 2026-09-05 23:48): 200 → 500. Болезненная обрезка истории была неочевидна.
 const MAX_BLOB_CACHE_BYTES = 50 * 1024 * 1024; // 50MB
+// v160k9a: схема записи chat. Любая запись, чья schema < этого числа, при загрузке мигрирует.
+const CHAT_SCHEMA_V = 2;
 
 // Список всех localStorage ключей для миграции v1→v2
 const LEGACY_LS_KEYS = [
@@ -202,7 +204,18 @@ const chats = {
     async getMessages(peer) {
         return _tx(STORE_CHATS, "readonly", (store) => new Promise((resolve, reject) => {
             const req = store.get(peer);
-            req.onsuccess = () => resolve(req.result ? req.result.messages : []);
+            req.onsuccess = () => {
+                const r = req.result;
+                if (!r) return resolve([]);
+                // v160k9a (Олег 2026-09-05 23:48): старая запись без __schema →
+                // авто-апгрейд до 2 при следующем saveMessages. Увидим в логах.
+                if (!r.__schema) {
+                    console.log("[migrate] peer=" + peer + " chat " + (r.__schema || "v1") + "→" + CHAT_SCHEMA_V);
+                    r.__schema = CHAT_SCHEMA_V;
+                    // не вызываем put здесь — сделаем это лениво при следующем saveMessages.
+                }
+                return resolve(r.messages || []);
+            };
             req.onerror = () => reject(req.error);
         }));
     },
@@ -212,50 +225,41 @@ const chats = {
         // в messages[] ломают IDB put → DataCloneError → кэш не persists.
         // Санитайзер из app.js: _sanitizeMessageForStorage (если есть).
         const sanitize = window._murmurSanitizeMessageForStorage;
-        const trimmed = messages.slice(-MAX_MESSAGES_PER_PEER).map(sanitize ? sanitize : (m) => m)
-            .map((m) => {
+        const total = messages.length;
+        // v160k9a (Олег 2026-09-05 23:48): per-message try/catch.
+        // Одно битое сообщение больше НЕ ломает весь batch — оно выкидывается
+        // с warning, остальные сохраняются. Раньше единичный DataCloneError на
+        // несериализуемом runtime-поле приводил к тому, что весь put падал и
+        // кэш переписки не persisted → после reload часть истории «пропадала».
+        const skipped = [];
+        const cleaned = [];
+        for (let i = 0; i < messages.length; i++) {
+            const m = messages[i];
+            try {
+                const s = sanitize ? sanitize(m) : m;
+                if (!s || typeof s !== "object") { skipped.push(i); continue; }
                 // v160w: deep defense — Promise/несериализуемые поля → null (Lesson #362).
-                // Promise может жить в вложенных объектах (_server_msg). JSON.stringify
-                // с replacer вырезает Promise (typeof v.then === "function") целиком.
-                if (!m || typeof m !== "object") return m;
-                const cm = JSON.parse(JSON.stringify(m, (k, v) =>
+                const cm = JSON.parse(JSON.stringify(s, (k, v) =>
                     (v && typeof v === "object" && typeof v.then === "function" ? null : v)));
-                return cm;
-            });
-        const record = { peer, messages: trimmed, updatedAt: Date.now() };
+                cleaned.push(cm);
+            } catch (e) {
+                skipped.push(i);
+                console.warn("[save] skip", peer, "idx=" + i, "err=" + (e && e.message ? e.message : String(e)));
+            }
+        }
+        const trimmed = cleaned.slice(-MAX_MESSAGES_PER_PEER);
+        const record = { peer, messages: trimmed, updatedAt: Date.now(), __schema: CHAT_SCHEMA_V };
+        // Диагностический лог: [save] peer=X total=Y kept=Z skipped=[idx...] err=...
+        console.log("[save]", peer, "total=" + total, "kept=" + trimmed.length, "skipped=" + JSON.stringify(skipped));
         return _tx(STORE_CHATS, "readwrite", (store) => new Promise((resolve, reject) => {
             const req = store.put(record);
             req.onsuccess = () => resolve();
-            req.onerror = () => reject(req.error);
-        })).catch((err) => {
-            // v160ke (Олег 23:03 «vanishes AGAIN»): batch put fail = весь peer-кэш
-            // пропадает. Fallback: drop attachments (plaintext_b64, big base64)
-            // из всех messages и retry batch once — history persists, attachments
-            // перезагружаются через blob-fetch при просмотре.
-            console.warn("[appStore] batch save failed:", err, "→ retry without attachments");
-            const slim = trimmed.map((m) => {
-                if (!m || typeof m !== "object") return m;
-                const cm = Object.assign({}, m);
-                delete cm._server_msg;
-                delete cm.attachments;
-                delete cm.ct;
-                delete cm.body_base64;
-                if (Array.isArray(cm.attachments_meta)) {
-                    cm.attachments_meta = cm.attachments_meta.map((a) => {
-                        const ca = Object.assign({}, a);
-                        delete ca.plaintext_b64;
-                        return ca;
-                    });
-                }
-                return cm;
-            });
-            const slimRecord = { peer, messages: slim, updatedAt: Date.now() };
-            return _tx(STORE_CHATS, "readwrite", (store) => new Promise((resolve) => {
-                const putReq = store.put(slimRecord);
-                putReq.onsuccess = () => resolve();
-                putReq.onerror = () => resolve(); // even if fails, don't lose everything
-            }));
-        });
+            req.onerror = () => {
+                // v160k9a: QuotaExceeded или DataCloneError на уровне записи — теперь это видно.
+                console.error("[save] IDB put failed", peer, "err=" + (req.error && req.error.message));
+                reject(req.error);
+            };
+        }));
     },
     async appendMessage(peer, msg) {
         return _tx(STORE_CHATS, "readwrite", (store, tx) => new Promise(async (resolve, reject) => {

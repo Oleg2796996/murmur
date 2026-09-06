@@ -67,12 +67,12 @@
      script. iOS Safari PWA cached HTML может не иметь inline-script (HTML cache
      pre-bump). Meta tag читается через document.querySelector + .content
      (работает даже если inline script не выполнился). -->
-    <meta name="app-version" content="v162g">
+    <meta name="app-version" content="v160k9b">
     <!-- Lesson #216: cache busting via ?v= query string. iOS Safari PWA
      caches app.js via HTTP cache independently of SW. Query string forces
      re-fetch on each version bump. SW CACHE_VERSION also bumps for SW
      activation, but the app.js itself needs explicit URL change. -->
-    <link rel="stylesheet" href="styles.css?v=162g">
+    <link rel="stylesheet" href="styles.css?v=160k9a">
 </head>
 <body>
     <!-- ================= IDENTITY SCREEN (create/restore) ================= -->
@@ -93,15 +93,10 @@
                 <h2>Новый аккаунт</h2>
                 <button id="btn-create" class="primary">Создать</button>
             </div>
-            <!-- v160e: восстановление вернули — перенос личности между Safari-вкладкой
-                 и PWA (разные хранилища на iOS) и между устройствами -->
-            <div class="identity-section">
-                <h2>У меня есть ключ</h2>
-                <input id="restore-hex" type="password" autocomplete="off" spellcheck="false"
-                       placeholder="ключ (64 символа)" style="width:100%;box-sizing:border-box;background:#0e1621;color:#e8edf2;border:1px solid #2a3b4d;border-radius:8px;padding:10px;font-size:13px;margin-bottom:8px;">
-                <button id="btn-restore" class="secondary">Восстановить</button>
-                <button id="btn-redeem-code" class="secondary" style="margin-top:8px;">У меня есть код</button>
-            </div>
+            <!-- Олег 2026-09-05 20:24: блок «У меня есть ключ» временно убран — коллеги
+                 сочли restore/restore-by-code преждевременным функционалом. Сам JS-код
+                 (identity_restore, redeem-flow, auto-restore) оставлен, чтобы вернуть
+                 одной правкой блока при готовности продукта. -->
         </div>
     </div>
 
@@ -120,7 +115,8 @@
             <div class="sidebar-footer">
                 <button id="btn-invite" class="invite-btn-green">Пригласить друга ✉</button>
                 <button id="btn-add-by-link" class="logout-btn-danger" title="Вставить invite-ссылку или npub — добавить чат (гарантированный путь, когда ссылка из Safari не может открыть PWA)" style="background:#2b5278;">Вставить ссылку 📋</button>
-                <button id="btn-show-key" class="logout-btn-danger" title="Показать ключ для переноса на другое устройство" style="background:#2b5278;">Мой ключ 🔑</button>
+                <!-- Олег 2026-09-05 20:24: кнопка «Мой ключ» убрана — restore/transfer
+                     пока рано. showKey/revealKey-код в app.js оставлен на будущее. -->
                 <button id="btn-logout" class="logout-btn-danger" title="Удалить все данные">Удалить все данные</button>
             </div>
 
@@ -244,15 +240,15 @@
      HTTP cache не обновляет app.js по CACHE_VERSION bump alone.
      Query string = guaranteed fresh load on each deploy. -->
     <script src="blob-cache.js?v=160y" defer></script>
-    <script src="app-store.js?v=162g" defer></script>
-    <script src="render-attachments.js?v=160ka" defer></script>
-    <script src="app.js?v=162g" defer></script>
+    <script src="app-store.js?v=160k9a" defer></script>
+    <script src="render-attachments.js?v=160z" defer></script>
+    <script src="app.js?v=160k9b" defer></script>
     <script>
       // Register service worker (push notifications only — Lesson #345).
       // Статикой SW не управляет (fetch-хендлера нет), так что
       // controllerchange reload НЕ нужен — убрали (reload-лупы).
       if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/service-worker.js").catch(console.error);
+        navigator.serviceWorker.register("/service-worker.js?v=4").catch(console.error);
       }
     </script>
 </body>
