@@ -135,7 +135,10 @@ const RECEIPT_ACKS_CAP = 500;
 const RECEIPT_STORE_CAP = 800;
 const RECEIPT_BATCH_CAP = 80;               // hash'ей в одной квитанции
 const RECEIPT_FLUSH_DELAY_MS = 2000;        // debounce ~2s (poll 5s → ✓✓ за ~7s)
-const MESSAGES_CACHE_MAX_PER_PEER = 100;
+// v160k9a: MUST match app-store.js MAX_MESSAGES_PER_PEER (500). 100 was
+// silently dropping messages 101-500 on every cache save, which looked like
+// 'old messages disappeared' after reload.
+const MESSAGES_CACHE_MAX_PER_PEER = 500;
 
 // v160o: видео/большие файлы НЕ кладём plaintext_b64 в IDB/outbox —
 // 37–50MB base64-строки выдувают квоту IndexedDB/LS (iOS), после чего весь
@@ -180,8 +183,20 @@ async function saveMessagesCacheForPeer(peer) {
     // (2) если decrypt снова fails — выкинуть 🔒 msg из кэша целиком:
     // после reload pollHist возьмет свежую серверную строку и decrypted
     // plaintext попадает в кэш через нормальный path.
+    // v160l: keep newest N by ts, but preserve original input order in the
+    // surviving subset (so conversation order is unchanged). The naive
+    // arr.slice(-N) kept the last N array slots, which is wrong when messages
+    // are merged from multiple sources (cache, server, outbox) at different
+    // times — it could drop genuinely newer messages while keeping older ones.
+    function keepNewestByTs(arr, limit) {
+        if (arr.length <= limit) return arr;
+        const idx = arr.map((m, i) => ({ i, ts: m.ts || 0 }));
+        idx.sort((a, b) => b.ts - a.ts || a.i - b.i);
+        const keepSet = new Set(idx.slice(0, limit).map(x => x.i));
+        return arr.filter((_, i) => keepSet.has(i));
+    }
     const trimmed = [];
-    for (const m of arr.slice(-MESSAGES_CACHE_MAX_PER_PEER)) {
+    for (const m of keepNewestByTs(arr, MESSAGES_CACHE_MAX_PER_PEER)) {
         const isEnc = m && typeof m.body === "string" &&
             (m.body.includes("🔒") || m.body.includes("шифрованное"));
         if (isEnc) {
@@ -213,9 +228,7 @@ async function saveMessagesCacheForPeer(peer) {
             localStorage.setItem(LS_MESSAGES_CACHE, JSON.stringify(cache));
             let maxTs = 0;
             for (const m of trimmed) if ((m.ts || 0) > maxTs) maxTs = m.ts;
-            const maxTss = JSON.parse(localStorage.getItem(LS_MESSAGES_MAX_TS) || "{}");
-            maxTss[peer] = maxTs;
-            localStorage.setItem(LS_MESSAGES_MAX_TS, JSON.stringify(maxTss));
+            if (maxTs) await updateMaxTs(peer, maxTs);
         } catch (e) { /* QuotaExceeded */ }
         return;
     }
@@ -223,9 +236,7 @@ async function saveMessagesCacheForPeer(peer) {
         await window.appStore.chats.saveMessages(peer, trimmed);
         let maxTs = 0;
         for (const m of trimmed) if ((m.ts || 0) > maxTs) maxTs = m.ts;
-        const existing = (await window.appStore.kv.get(LS_MESSAGES_MAX_TS)) || {};
-        existing[peer] = maxTs;
-        await window.appStore.kv.set(LS_MESSAGES_MAX_TS, existing);
+        if (maxTs) await updateMaxTs(peer, maxTs);
     } catch (e) {
         console.warn("[murmur] appStore.chats.saveMessages failed:", e);
     }
@@ -263,6 +274,11 @@ async function _loadMessagesCacheForPeerImpl(peer, resolveCache) {
         } catch (e) { /* ignore */ }
     }
     if (Array.isArray(arr) && arr.length > 0) {
+        // v160l: assign the cache to in-memory FIRST, then enrich in-place.
+        // Earlier code ran outbox-merge and decrypt before assignment, creating
+        // a window where loadHistory (which awaits the cache promise) could see
+        // an empty messages[peer] or a partially-built array.
+        messages[peer] = arr;
         let outbox = {};
         try {
             if (window.appStore) {
@@ -291,16 +307,16 @@ async function _loadMessagesCacheForPeerImpl(peer, resolveCache) {
                 m.attachments_meta = local.attachments_meta;
             }
         }
+        // Resolve the cache-loading promise immediately after the in-memory
+        // cache is assigned, so any waiter (e.g. loadHistory) sees messages[peer]
+        // populated as soon as possible. Async enrichment (outbox, decrypt) runs
+        // afterwards without blocking callers.
+        resolveCache();
         // v160k4 (Олег 2026-09-03 18:23): offline-decrypt 🔒 rows из кэша.
         // 🔒 rows carry _ct/body_base64. Decrypt локально после WASM init,
         // даже OFFLINE (server TTL privacy — строки уже снесены).
         const encRows = arr.filter(m => typeof m.body === "string" &&
             (m.body.includes("🔒") || m.body.includes("шифрованное") || m._ct));
-        // v160k5 (Олег 2026-09-03 18:34 «iPhone offline = белый экран»: 🔒 rows
-        // с _ct/body_base64 = данные. Decrypt локально после WASM init — works
-        // OFFLINE. Раньше decryptWithTimeout memoized на em._decrypt_promise,
-        // но 🔒 rows из кэша не имеют _decrypt_promise → decrypt НЕ запускался.
-        messages[peer] = arr;
         const decryptEncRow = async (em) => {
             try {
                 // v160k9: �🔒 row carries ciphertext in _server_msg.body_base64,
@@ -1114,13 +1130,12 @@ function previewForMsg(m) {
     try {
         if (!m) return "";
         const am = (Array.isArray(m.attachments_meta) && m.attachments_meta.length) ? m.attachments_meta : (Array.isArray(m.attachments) ? m.attachments : []);
+        // v160m: prioritize _plainName to avoid fallback to neutral 'f-...bin' during state updates.
         const names = am.map(a => (a && (a._plainName || a.name)) || "").filter(Boolean);
         const attLabel = am.length ? "📎 " + (names[0] || "файл") + (am.length > 1 ? " +" + (am.length - 1) : "") : "";
         let t = String(m.body || m.resolvedBody || m.outbox_body || "").trim();
         if (t.startsWith("{")) t = ""; // сырой envelope — считаем нерасшифрованным
         if (t && m.isBinary) t = "";  // "[binary, N bytes]" — чип файла, не текст
-        // v158d: chip вида «📎 имя (размер)» в body — это рендер аттача, не текст;
-        // при наличии attLabel дублирует имя → в превью не включаем.
         if (t && attLabel) {
             t = t.split("\n").filter(line => !line.trim().startsWith("📎")).join(" ").trim();
             t = t.replace(/\s+/g, " ");
@@ -1698,16 +1713,39 @@ function saveMaxTsMap(m) {
 }
 function getMaxTs(peer) {
     peer = normalizePeer(peer);
-    const m = loadMaxTsMap();
-    return m[peer] || 0;
+    // v160l: IDB kv is the source of truth for max_ts; localStorage is a legacy fallback.
+    // saveMessagesCacheForPeer writes to appStore.kv(LS_MESSAGES_MAX_TS), so read it first.
+    if (window.appStore) {
+        try {
+            const idb = window.appStore.kv.get(LS_MESSAGES_MAX_TS);
+            if (idb && idb[peer]) return idb[peer];
+        } catch (e) { /* fallthrough */ }
+    }
+    return loadMaxTsMap()[peer] || 0;
 }
-function updateMaxTs(peer, ts) {
+async function updateMaxTs(peer, ts) {
     peer = normalizePeer(peer);
     if (!ts) return;
-    const m = loadMaxTsMap();
-    if (ts > (m[peer] || 0)) {
-        m[peer] = ts;
-        saveMaxTsMap(m);
+    // v160l: keep both IDB kv and localStorage in sync so incremental fetch
+    // always sees the latest max_ts regardless of which path wrote it.
+    let idbMax = {};
+    if (window.appStore) {
+        try {
+            idbMax = (await window.appStore.kv.get(LS_MESSAGES_MAX_TS)) || {};
+        } catch (e) { /* fallthrough */ }
+    }
+    let dirty = false;
+    if (ts > (idbMax[peer] || 0)) {
+        idbMax[peer] = ts;
+        dirty = true;
+    }
+    const lsMax = loadMaxTsMap();
+    if (ts > (lsMax[peer] || 0)) {
+        lsMax[peer] = ts;
+        saveMaxTsMap(lsMax);
+    }
+    if (dirty && window.appStore) {
+        try { await window.appStore.kv.set(LS_MESSAGES_MAX_TS, idbMax); } catch (e) {}
     }
 }
 
@@ -2685,7 +2723,16 @@ async function loadHistory(peer, beforeTs) {
         new Promise((_, rej) => setTimeout(() => rej(new Error("loadHistory batch timeout " + BATCH_TIMEOUT_MS + "ms")), BATCH_TIMEOUT_MS)),
     ]);
             if (newMsgs.length > 0) {
-                messages[peer] = newMsgs.concat(messages[peer]);
+                // v160m: fix for "missing <10 messages".
+                // If server returns new messages, we MUST NOT overwrite the memory
+                // state with just newMsgs.concat(messages[peer]) if that array
+                // might have been stripped or partially loaded.
+                // We ensure messages[peer] is the source of truth and newMsgs are merged.
+                const combined = newMsgs.concat(messages[peer]);
+                // Keep newest 500 strictly by TS to avoid order-based dropping.
+                const finalSet = keepNewestByTs(combined, MESSAGES_CACHE_MAX_PER_PEER);
+                messages[peer] = finalSet;
+
                 // Lesson #339 (Олег 2026-08-28 16:18 MSK): safety net.
                 // Для каждого существующего кэш-сообщения сверяем direction с API.
                 // Если API даёт out, а кэш имеет in → исправляем. Закрывает баг
@@ -3996,6 +4043,13 @@ async function pollInbox() {
 
 async function pollHistoryForPeer(peer) {
     if (!myNpub || !peer) return;
+    // v160p: как в loadHistory (v160k9c) — ждём загрузку кэша, иначе добавление
+    // серверных строк в пустой messages[peer] + saveMessagesCacheForPeer
+    // затирало IDB-историю серверным окном (root cause «пропала история 15:30–20:25»).
+    const pendingCache = __murmurCacheLoading.get(peer);
+    if (pendingCache) {
+        try { await pendingCache; } catch (e) { /* ignore */ }
+    }
     console.log("[pollHist] peer=", peer.slice(0,12), "myNpub=", myNpub.slice(0,12));
     try {
         const r = await fetch(RELAY + "/api/history?npub=" + encodeURIComponent(myNpub) + "&peer=" + encodeURIComponent(peer) + "&limit=" + HISTORY_LIMIT + "&_t=" + Date.now(), { cache: "no-store", credentials: "omit" });
@@ -4785,10 +4839,24 @@ async function tryAutoRestore() {
 }
 
 if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => { warmOutboxCache(); tryAutoRestore(); });
+    document.addEventListener("DOMContentLoaded", async () => { 
+        await requestNotificationPermission();
+        warmOutboxCache(); tryAutoRestore(); 
+    });
 } else {
+    requestNotificationPermission();
     warmOutboxCache();
     tryAutoRestore();
+}
+
+async function requestNotificationPermission() {
+    if (!("Notification" in window)) return;
+    try {
+        if (Notification.permission === "default") {
+            console.log("[murmur] requesting notification permission");
+            await Notification.requestPermission();
+        }
+    } catch (e) { console.warn("[murmur] permission request failed", e); }
 }
 
 // Повторный заход по ссылке в уже открытом приложении (PWA живёт в фоне).

@@ -8,16 +8,9 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="murmur">
-    <!-- Lesson #219 (Олег 2026-08-26 15:42): iPhone PWA standalone mode кэширует
-     HTML агрессивно. Cache-Control: no-store в meta http-equiv не всегда
-     работает, но Cache-Control: no-cache + no-store + must-revalidate +
-     Pragma: no-cache + Expires: 0 — комбинация пробивает больше кэшей. -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <!-- v159: OG-теги для превью приглашения при пересылке (Telegram/iMessage/WhatsApp).
-     Без них Telegram/iOS лепят случайную заглушку (буква A — fallback для link).
-     og:image — абсолютный URL. -->
     <meta property="og:title" content="murmur — приватный мессенджер">
     <meta property="og:description" content="Децентрализованный мессенджер без слежки. Открой ссылку, чтобы присоединиться.">
     <meta property="og:image" content="https://murmur.senswifi.ru/og-image.png">
@@ -32,15 +25,7 @@
     <title>murmur</title>
     <link rel="manifest" href="manifest.json?v=3">
     <script>
-    // v160i: invite → PWA start_url. iOS читает манифест В МОМЕНТ «На экран
-    // Домой». Свапаем href на УНИКАЛЬНЫЙ PATH /manifest/<npub>.json (без query —
-    // iOS вырезает query из URL манифеста при A2HS, а path сохраняет; уникальный
-    // путь бьёт кэш манифестов iOS). Плюс ставим cookie-мост (см. ниже).
     (function () {
-        // v160o: в standalone-PWA НЕ свапаем манифест и НЕ перезаписываем cookie:
-        // start_url у установленной PWA уже заморожен в iOS (смена href ничего
-        // не меняет), а свежая cookie из Safari (новый invite) затиралась бы
-        // старой из frozen start_url при каждом холодном старте PWA.
         var standalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
             || window.navigator.standalone === true;
         if (standalone) return;
@@ -50,34 +35,19 @@
         if (!m) return;
         var l = document.querySelector('link[rel="manifest"]');
         if (l) l.href = "/manifest/" + m[1] + ".json";
-        // Cookie-мост Safari→PWA (куки на iOS общие для сайта, в отличие от
-        // localStorage): 30 дней, path=/, SameSite=Lax.
         document.cookie = "murmur_invite=" + m[1] + "; max-age=2592000; path=/; SameSite=Lax";
     })();
     </script>
-    <!-- v160e: иконки переименованы в новые имена файлов — iOS отбрасывает ?v= от
-         apple-touch-icon (canonicalization), а кэш иконок iOS переживает «Очистить
-         историю и данные». Новый путь = новый ключ кэша CF + iOS. -->
     <link rel="apple-touch-icon" href="/ati-2026b.png">
     <link rel="icon" type="image/png" sizes="192x192" href="/i192-2026b.png">
     <link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
     <link rel="shortcut icon" href="/favicon-2026b.ico">
     <link rel="mask-icon" href="/mask-icon.svg" color="#229ED9">
-    <!-- Lesson #222 (Олег 2026-08-26 15:55): put version in meta tag AND inline
-     script. iOS Safari PWA cached HTML может не иметь inline-script (HTML cache
-     pre-bump). Meta tag читается через document.querySelector + .content
-     (работает даже если inline script не выполнился). -->
-    <meta name="app-version" content="v160k9b">
-    <!-- Lesson #216: cache busting via ?v= query string. iOS Safari PWA
-     caches app.js via HTTP cache independently of SW. Query string forces
-     re-fetch on each version bump. SW CACHE_VERSION also bumps for SW
-     activation, but the app.js itself needs explicit URL change. -->
+    <meta name="app-version" content="v160p">
     <link rel="stylesheet" href="styles.css?v=160k9a">
 </head>
 <body>
-    <!-- ================= IDENTITY SCREEN (create/restore) ================= -->
     <div id="identity-screen" class="screen">
-        <!-- DEBUG indicator: shows JS load status. Visible only if JS fails to load. -->
         <noscript>
             <div style="position:fixed;top:0;left:0;right:0;background:#17212b;color:#888;padding:12px;text-align:center;z-index:99999;border-bottom:1px solid #333;font-family:sans-serif;font-size:13px;">
                 murmur требует JavaScript. Включи JS в настройках Safari.
@@ -86,58 +56,37 @@
         <div class="identity-card">
             <h1 class="brand">murmur</h1>
             <p class="subtitle">приватный мессенджер</p>
-
             <div class="identity-error" id="identity-error" hidden></div>
-
             <div class="identity-section">
                 <h2>Новый аккаунт</h2>
                 <button id="btn-create" class="primary">Создать</button>
             </div>
-            <!-- Олег 2026-09-05 20:24: блок «У меня есть ключ» временно убран — коллеги
-                 сочли restore/restore-by-code преждевременным функционалом. Сам JS-код
-                 (identity_restore, redeem-flow, auto-restore) оставлен, чтобы вернуть
-                 одной правкой блока при готовности продукта. -->
         </div>
     </div>
-
-    <!-- ================= MESSENGER (sidebar + chat panel) ================= -->
     <div id="messenger" class="messenger" hidden>
-        <!-- Lesson #212 (Олег 2026-08-26 14:21): version banner для debug SW update -->
         <div id="version-banner" style="position:fixed;bottom:4px;right:4px;font-size:9px;color:#888;opacity:0.6;z-index:9999;font-family:monospace;pointer-events:none;background:rgba(0,0,0,0.3);padding:1px 4px;border-radius:3px;">…</div>
-        <!-- SIDEBAR: chat list -->
         <aside id="sidebar" class="sidebar">
             <header class="sidebar-header">
                 <button id="btn-notifications" class="notif-btn" title="Включить уведомления">🔔</button>
                 <button id="btn-cache-stats" class="notif-btn" title="Статистика кэша вложений" style="display:none;">💾</button>
                 <button id="btn-diag" class="notif-btn" title="Диагностика">📊</button>
             </header>
-
             <div class="sidebar-footer">
                 <button id="btn-invite" class="invite-btn-green">Пригласить друга ✉</button>
-                <button id="btn-add-by-link" class="logout-btn-danger" title="Вставить invite-ссылку или npub — добавить чат (гарантированный путь, когда ссылка из Safari не может открыть PWA)" style="background:#2b5278;">Вставить ссылку 📋</button>
-                <!-- Олег 2026-09-05 20:24: кнопка «Мой ключ» убрана — restore/transfer
-                     пока рано. showKey/revealKey-код в app.js оставлен на будущее. -->
+                <button id="btn-add-by-link" class="logout-btn-danger" title="Вставить invite-ссылку или npub" style="background:#2b5278;">Вставить ссылку 📋</button>
                 <button id="btn-logout" class="logout-btn-danger" title="Удалить все данные">Удалить все данные</button>
             </div>
-
             <div class="chat-search-wrap">
                 <input id="chat-search" type="search" placeholder="поиск чатов…" autocomplete="off">
             </div>
-
-            <nav id="chat-list" class="chat-list" aria-label="Чаты">
-                <!-- populated by JS: each <button class="chat-item" data-peer="..."> -->
-            </nav>
+            <nav id="chat-list" class="chat-list" aria-label="Чаты"></nav>
         </aside>
-
-        <!-- EMPTY STATE: shown when no chat is selected (mobile) -->
         <section id="no-chat" class="no-chat" hidden>
             <div class="no-chat-inner">
                 <h2>murmur</h2>
                 <p>Выберите чат слева или создайте новый.</p>
             </div>
         </section>
-
-        <!-- CHAT VIEW: messages + input -->
         <main id="chat-view" class="chat-view">
             <header class="chat-header">
                 <button id="btn-back" class="icon-btn back-btn" title="Назад" aria-label="назад к списку"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
@@ -146,11 +95,9 @@
                 </div>
                 <button id="btn-delete-chat" class="icon-btn delete-btn" title="Удалить чат" aria-label="удалить чат" hidden>🗑</button>
             </header>
-
             <section id="chat-panel" class="chat-panel">
                 <div id="messages-area" class="messages-area"></div>
             </section>
-
             <footer id="input-area" class="input-area" hidden>
                 <div id="attachments-preview" class="attachments-preview"></div>
                 <div class="input-row">
@@ -162,22 +109,13 @@
             </footer>
         </main>
     </div>
-
     <script>
-      // ─── Inline handlers (classic script, NOT module) ───
-      // Inline script at end of <body> executes AFTER DOM is parsed (no DOMContentLoaded needed).
-      // This is critical for iOS PWA standalone where <script type="module"> has flaky support.
-      // The handlers check if app.js has loaded _handleCreate / _handleRestore on window yet.
       function bindHandler(elemId, fnName, label) {
         const el = document.getElementById(elemId);
-        if (!el) {
-          console.warn("[murmur] no element #" + elemId + " — will retry");
-          return false;
-        }
+        if (!el) return false;
         el.addEventListener("click", async function(ev) {
           ev.preventDefault();
           ev.stopPropagation();
-          // If app.js handler is ready — call it immediately.
           if (typeof window[fnName] === "function") {
             try { await window[fnName](); }
             catch (e) {
@@ -187,9 +125,6 @@
             }
             return;
           }
-          // app.js not loaded yet — wait up to 30s for it (PWA cold-start on iPhone
-          // can take 10-20s when app.js + WASM module (181 KB) load over Cloudflare
-          // tunnel from Russian IP — Lesson #203 (Олег 2026-08-26)).
           const err = document.getElementById("identity-error");
           if (err) {
             err.hidden = false;
@@ -212,21 +147,9 @@
         }, { passive: false });
         return true;
       }
-      // Inline script at end of <body> — DOM is already parsed here.
       bindHandler("btn-create", "_handleCreate", "Создать");
       bindHandler("btn-restore", "_handleRestore", "Восстановить");
-      // v160f: код переноса — открывает модалку ввода (app.js showRedeemModal).
-      document.getElementById("btn-redeem-code")?.addEventListener("click", () => {
-        if (typeof window.showRedeemModal === "function") window.showRedeemModal();
-        else console.warn("showRedeemModal not ready");
-      });
-      // Safety: if app.js was loaded before this script, handlers are already wired there.
-      console.log("[murmur] inline handlers bound");
     </script>
-    <!-- Lesson #218 (Олег 2026-08-26 15:36): inline version detection.
-     `document.currentScript` возвращает null для `<script defer>` (известный bug
-     браузеров). Inline script сначала ставит `window.__APP_VERSION__` из
-     document.querySelector('script[src*="app.js"]').getAttribute('src'). -->
     <script>
         (function() {
             try {
@@ -236,17 +159,11 @@
             } catch (e) { window.__APP_VERSION__ = "?"; }
         })();
     </script>
-    <!-- Lesson #216 (Олег 2026-08-26 15:18): ?v= cache busting — iOS Safari
-     HTTP cache не обновляет app.js по CACHE_VERSION bump alone.
-     Query string = guaranteed fresh load on each deploy. -->
     <script src="blob-cache.js?v=160y" defer></script>
-    <script src="app-store.js?v=160k9a" defer></script>
-    <script src="render-attachments.js?v=160z" defer></script>
-    <script src="app.js?v=160k9b" defer></script>
+    <script src="app-store.js?v=160p" defer></script>
+    <script src="render-attachments.js?v=160p" defer></script>
+    <script src="app.js?v=160p" defer></script>
     <script>
-      // Register service worker (push notifications only — Lesson #345).
-      // Статикой SW не управляет (fetch-хендлера нет), так что
-      // controllerchange reload НЕ нужен — убрали (reload-лупы).
       if ("serviceWorker" in navigator) {
         navigator.serviceWorker.register("/service-worker.js?v=4").catch(console.error);
       }

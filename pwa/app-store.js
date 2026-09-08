@@ -52,6 +52,18 @@ const STORE_BLOBS = "blobs";
 const STORE_VAPID = "vapid";
 
 const MAX_MESSAGES_PER_PEER = 500; // v160k9a (Олег 2026-09-05 23:48): 200 → 500. Болезненная обрезка истории была неочевидна.
+
+// v160l: keep newest N by ts but preserve original input order among survivors.
+// slice(-N) keeps the last N array slots, which is wrong when messages are
+// merged from cache/server/outbox at different times (loadHistory prepends
+// new messages, so the tail becomes the OLDEST cached messages).
+function _keepNewestByTs(arr, limit) {
+    if (arr.length <= limit) return arr;
+    const idx = arr.map((m, i) => ({ i, ts: (m && m.ts) || 0 }));
+    idx.sort((a, b) => b.ts - a.ts || a.i - b.i);
+    const keepSet = new Set(idx.slice(0, limit).map(x => x.i));
+    return arr.filter((_, i) => keepSet.has(i));
+}
 const MAX_BLOB_CACHE_BYTES = 50 * 1024 * 1024; // 50MB
 // v160k9a: схема записи chat. Любая запись, чья schema < этого числа, при загрузке мигрирует.
 const CHAT_SCHEMA_V = 2;
@@ -226,11 +238,6 @@ const chats = {
         // Санитайзер из app.js: _sanitizeMessageForStorage (если есть).
         const sanitize = window._murmurSanitizeMessageForStorage;
         const total = messages.length;
-        // v160k9a (Олег 2026-09-05 23:48): per-message try/catch.
-        // Одно битое сообщение больше НЕ ломает весь batch — оно выкидывается
-        // с warning, остальные сохраняются. Раньше единичный DataCloneError на
-        // несериализуемом runtime-поле приводил к тому, что весь put падал и
-        // кэш переписки не persisted → после reload часть истории «пропадала».
         const skipped = [];
         const cleaned = [];
         for (let i = 0; i < messages.length; i++) {
@@ -247,8 +254,55 @@ const chats = {
                 console.warn("[save] skip", peer, "idx=" + i, "err=" + (e && e.message ? e.message : String(e)));
             }
         }
-        const trimmed = cleaned.slice(-MAX_MESSAGES_PER_PEER);
+        const trimmed = _keepNewestByTs(cleaned, MAX_MESSAGES_PER_PEER);
+        // v160p (Олег 2026-09-08 21:20 «история пропала при смене версии»):
+        // saveMessages РАНЬШЕ ЗАМЕНЯЛ запись целиком (store.put(record) без чтения).
+        // Любой путь сохранения, вызванный с ПОДМНОЖЕСТВОМ сообщений (гонка
+        // pollHistoryForPeer/openChat/loadHistory до завершения загрузки кэша,
+        // окно TTL сервера = в ответе только свежие строки), затирал IDB-историю.
+        // Фикс: ПЕРЕД put читаем существующую запись и сливаем по ключам
+        // _hash/_sig/_sig-фолбэкам. Сохранение теперь идемпотентно и не теряет
+        // строки, которых нет во входном массиве.
+        let prev = [];
+        try {
+            const old = await new Promise((res, rej) => {
+                const tx = _db.transaction(STORE_CHATS, "readonly");
+                const rq = tx.objectStore(STORE_CHATS).get(peer);
+                rq.onsuccess = () => res(rq.result);
+                rq.onerror = () => rej(rq.error);
+            });
+            if (old && Array.isArray(old.messages)) prev = old.messages;
+        } catch (e) { /* readable failure → prev stays [] (degrade to replace) */ }
+        if (prev.length > 0) {
+            const keyOf = (m) => {
+                if (!m || typeof m !== "object") return null;
+                if (m._hash) return "h:" + m._hash;
+                if (m._sig) return "s:" + m._sig;
+                const f = m.from_npub || m.from || "";
+                return f ? ("k:" + f + ":" + m.ts) : null;
+            };
+            const seen = new Set();
+            for (const m of trimmed) { const k = keyOf(m); if (k) seen.add(k); }
+            const merged = trimmed.concat(prev.filter(m => {
+                const k = keyOf(m);
+                return !k || !seen.has(k);
+            }));
+            trimmed.length = 0;
+            trimmed.push(..._keepNewestByTs(merged, MAX_MESSAGES_PER_PEER));
+        }
         const record = { peer, messages: trimmed, updatedAt: Date.now(), __schema: CHAT_SCHEMA_V };
+        // v160l: also track max ts for incremental fetch in IDB kv.
+        let maxTs = 0;
+        for (const m of trimmed) if (((m && m.ts) || 0) > maxTs) maxTs = m.ts;
+        if (maxTs) {
+            (async () => {
+                try {
+                    const existing = await kv.get(LS_MESSAGES_MAX_TS) || {};
+                    existing[peer] = maxTs;
+                    await kv.set(LS_MESSAGES_MAX_TS, existing);
+                } catch (e) { /* ignore */ }
+            })();
+        }
         // Диагностический лог: [save] peer=X total=Y kept=Z skipped=[idx...] err=...
         console.log("[save]", peer, "total=" + total, "kept=" + trimmed.length, "skipped=" + JSON.stringify(skipped));
         return _tx(STORE_CHATS, "readwrite", (store) => new Promise((resolve, reject) => {
@@ -268,7 +322,7 @@ const chats = {
                 const record = getReq.result || { peer, messages: [], updatedAt: 0 };
                 record.messages.push(msg);
                 if (record.messages.length > MAX_MESSAGES_PER_PEER) {
-                    record.messages = record.messages.slice(-MAX_MESSAGES_PER_PEER);
+                    record.messages = _keepNewestByTs(record.messages, MAX_MESSAGES_PER_PEER);
                 }
                 record.updatedAt = Date.now();
                 const putReq = store.put(record);

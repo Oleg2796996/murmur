@@ -258,10 +258,13 @@ async function renderAttachment(att, containerEl, abortSignal) {
 function renderByMime({ mime, name, blobUrl, size, poster, att }) {
     const figure = document.createElement("figure");
     figure.className = "attach-figure";
+    // v160k9d: friendly name для ВСЕХ веток (не только файлов). Если real name
+    // (_plainName) не доехал после reload, f-xxx.bin → f-xxx.jpg/pdf по mime.
+    const displayName = deriveFriendlyName(name, mime);
     if (mime.startsWith("image/")) {
         const img = document.createElement("img");
         img.src = blobUrl;
-        img.alt = name || "image";
+        img.alt = displayName || "image";
         img.loading = "lazy";
         img.className = "attach-image";
         img.onclick = () => openFullscreen(blobUrl, mime);
@@ -292,7 +295,7 @@ function renderByMime({ mime, name, blobUrl, size, poster, att }) {
         playBtn.textContent = "▶";
         wrap.appendChild(thumb);
         wrap.appendChild(playBtn);
-        wrap.onclick = () => openVideoFullscreen(blobUrl, mime, name, att);
+        wrap.onclick = () => openVideoFullscreen(blobUrl, mime, displayName, att);
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(thumb, blobUrl);
         figure.appendChild(wrap);
         // v160c: общий сетап превью — реализация в window.murmurSetupVideoPreview
@@ -323,7 +326,7 @@ function renderByMime({ mime, name, blobUrl, size, poster, att }) {
     }
     if (name && mime.startsWith("image/")) {
         const cap = document.createElement("figcaption");
-        cap.textContent = name;
+        cap.textContent = displayName;
         figure.appendChild(cap);
     }
     return figure;
@@ -356,6 +359,18 @@ function deriveFriendlyName(name, mime) {
         "text/csv": "csv",
         "application/epub+zip": "epub",
         "application/rtf": "rtf",
+        "image/jpeg": "jpg",
+        "image/png": "png",
+        "image/gif": "gif",
+        "image/webp": "webp",
+        "image/heic": "heic",
+        "image/heif": "heif",
+        "video/quicktime": "mov",
+        "video/mp4": "mp4",
+        "video/webm": "webm",
+        "audio/mpeg": "mp3",
+        "audio/mp4": "m4a",
+        "audio/wav": "wav",
     };
     const ext = extMap[mime] || (mime.split("/")[1] || "bin").replace(/[^a-z0-9]/gi, "");
     const base = (n.replace(/\.bin$/i, "") || "file");

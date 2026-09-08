@@ -399,7 +399,7 @@ impl PushServer {
                     let _ = self.store.delete(&sub.id);
                 }
                 Err(e) => {
-                    warn!(err=%e, sub=%sub.id, "push delivery failed");
+                    warn!(err=?e, sub=%sub.id, "push delivery failed");
                 }
             }
         }
