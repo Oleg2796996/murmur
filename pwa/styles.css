@@ -227,10 +227,9 @@ button.small { padding: 8px 12px; font-size: 13px; }
 .logout-btn-danger:hover { background: var(--danger); color: #fff; }
 
 .notif-btn {
-    /* Lesson #242 (Олег 2026-08-26 22:15): скрыть кнопку уведомлений.
-       Олег попросил убрать из UI. Логика (pushManager.subscribe) сохранена
-       — если понадобится вернуть, просто удалить display:none. */
-    display: none !important;
+    /* v160p (Олег 2026-09-08 21:45 «колокольчика нет и пуши не приходят»):
+       вернули кнопку. Lesson #242 (26.08, скрыть по просьбе Олега) отменён —
+       теперь колокольчик = индикатор состояния пушей + ручной re-subscribe. */
     background: var(--surface-2);
     border: 1px solid var(--border);
     color: var(--text);
