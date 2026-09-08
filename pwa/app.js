@@ -140,6 +140,22 @@ const RECEIPT_FLUSH_DELAY_MS = 2000;        // debounce ~2s (poll 5s → ✓✓ 
 // 'old messages disappeared' after reload.
 const MESSAGES_CACHE_MAX_PER_PEER = 500;
 
+// v160q (Олег 2026-09-08 22:49 «превью остаётся bin» + сим-лог «loadHistory
+// FAILED: keepNewestByTs is not defined»): keepNewestByTs была ОБЪЯВЛЕНА ВНУТРИ
+// saveMessagesCacheForPeer (v160l), а loadHistory зовёт её на module scope →
+// ReferenceError → loadHistory падал ПОСЛЕ fetch, ДО сохранения кэша и ДО
+// Phase-3 decrypt (запускается только из pollHistoryForPeer). Следствия:
+// открытый чат получал исходники без merge/decrypt, IDB-кэш писался только
+// pollHist-путём с неотмерженной meta (f-…bin без _plainName).
+// Фикс: вынесена на module scope — едина для обоих callers.
+function keepNewestByTs(arr, limit) {
+    if (arr.length <= limit) return arr;
+    const idx = arr.map((m, i) => ({ i, ts: m.ts || 0 }));
+    idx.sort((a, b) => b.ts - a.ts || a.i - b.i);
+    const keepSet = new Set(idx.slice(0, limit).map(x => x.i));
+    return arr.filter((_, i) => keepSet.has(i));
+}
+
 // v160o: видео/большие файлы НЕ кладём plaintext_b64 в IDB/outbox —
 // 37–50MB base64-строки выдувают квоту IndexedDB/LS (iOS), после чего весь
 // кэш перестаёт сохраняться (DataCloneError/QuotaExceeded) и превью пропадает
@@ -183,18 +199,8 @@ async function saveMessagesCacheForPeer(peer) {
     // (2) если decrypt снова fails — выкинуть 🔒 msg из кэша целиком:
     // после reload pollHist возьмет свежую серверную строку и decrypted
     // plaintext попадает в кэш через нормальный path.
-    // v160l: keep newest N by ts, but preserve original input order in the
-    // surviving subset (so conversation order is unchanged). The naive
-    // arr.slice(-N) kept the last N array slots, which is wrong when messages
-    // are merged from multiple sources (cache, server, outbox) at different
-    // times — it could drop genuinely newer messages while keeping older ones.
-    function keepNewestByTs(arr, limit) {
-        if (arr.length <= limit) return arr;
-        const idx = arr.map((m, i) => ({ i, ts: m.ts || 0 }));
-        idx.sort((a, b) => b.ts - a.ts || a.i - b.i);
-        const keepSet = new Set(idx.slice(0, limit).map(x => x.i));
-        return arr.filter((_, i) => keepSet.has(i));
-    }
+    // v160q: keepNewestByTs вынесена на module scope (loadHistory тоже её зовёт
+    // — ReferenceError тут валил весь saveMessagesCacheForPeer).
     const trimmed = [];
     for (const m of keepNewestByTs(arr, MESSAGES_CACHE_MAX_PER_PEER)) {
         const isEnc = m && typeof m.body === "string" &&
@@ -1569,8 +1575,17 @@ if (notifBtn && !notifBtn.dataset.bound) {
     notifBtn.addEventListener("click", async () => {
         notifBtn.disabled = true;
         try {
-            // If currently enabled, click toggles off — unsubscribe on server.
-            if (Notification && Notification.permission === "granted") {
+            // v160q: ветка по ФАКТИЧЕСКОМУ наличию подписки, не по permission.
+            // Раньше granted + нет подписки (тёмный bell, title "нажми чтобы
+            // переподключить") попадал в toggle-off и СТИРАЛ записи —
+            // клики по тёмному колокольчику молча убивали пуши.
+            let hasSub = false;
+            try {
+                const reg = await navigator.serviceWorker.ready;
+                hasSub = !!(await reg.pushManager.getSubscription());
+            } catch (e) { /* нет SW — считаем подписки нет */ }
+            if (Notification && Notification.permission === "granted" && hasSub) {
+                // Включено → выключить: снять browser-подписку + серверные записи.
                 try {
                     const reg = await navigator.serviceWorker.ready;
                     const sub = await reg.pushManager.getSubscription();
@@ -1588,6 +1603,7 @@ if (notifBtn && !notifBtn.dataset.bound) {
                     }).catch(() => {});
                 }
             } else {
+                // Выключено ИЛИ granted-без-подписки → включить/переподключить.
                 await requestPushPermission();
             }
         } finally {
@@ -4279,7 +4295,13 @@ async function pollHistoryForPeer(peer) {
             }
             // Lesson #326: сохраняем обновлённый кэш после каждого poll.
             saveMessagesCacheForPeer(peer);
-            // Phase 3: async decrypt new envelopes to replace placeholder
+        }
+        // v160q: Phase-3 (decrypt/merge meta) выполняется при КАЖДОМ тике, не только
+        // при added. Кэш-строки после reload приходят с расшифрованным body, но
+        // НЕОТМЕРЖЕННОЙ meta (f-…bin без _plainName) — раньше они навсегда
+        // выпадали из обработки, и превью файла оставалось .bin (сим-репро 22:49).
+        // Фильтр encMsgs сам оставляет только нуждающихся (🔒 или needsMetaMerge),
+        // после успешного merge _plainName снимает msg с фильтра → ретраев нет.
             // body "🔒 шифрованное сообщение" with real text (and attach meta).
             // Mirrors loadHistory pDecrypt pattern (Олег 2026-08-25 16:25 MSK).
             // Lesson #199 (Олег 2026-08-26): для исходящих (direction === "out")
@@ -4290,9 +4312,16 @@ async function pollHistoryForPeer(peer) {
             // `_server_msg` — кэш-сообщения (restore из IDB) имели body "🔒..." без
             // _server_msg и оставались зашифрованными навсегда.
             const allMsgs = messages[peer];
-            const encMsgs = allMsgs.filter(m => m.direction === "in" &&
-                m.body && m.body.includes("🔒") &&
-                (m._server_msg || m.body_base64 || (m._hash && !m._decrypt_promise)));
+            // v160q (Олег 22:49 «превью перебирается и остаётся bin»): в фильтр
+            // добавлены входящие, у которых meta ещё НЕ ОТМЕРЖЕНА (name=f-…bin,
+            // _plainName нет) — кэш-строки после reload: body уже расшифрован,
+            // поэтому фильтр по «🔒» их пропускал, и real names из ct никогда
+            // не попадали в attachments_meta → превью навсегда .bin.
+            const needsMetaMerge = (m) => Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0 &&
+                m.attachments_meta.some(a => a && !a._plainName && a.name && /^f-/.test(a.name));
+            const encMsgs = allMsgs.filter(m => m.direction === "in" && m._server_msg && (
+                (m.body && m.body.includes("🔒")) || needsMetaMerge(m)
+            ));
             // Ensure _server_msg exists: rebuild from cache via body_base64 if missing.
             for (const m of encMsgs) {
                 if (!m._server_msg && m.body_base64) {
@@ -4425,9 +4454,14 @@ async function pollHistoryForPeer(peer) {
                         // теперь ВНУТРИ for-loop где m определён. v2 был снаружи
                         // → ReferenceError → .catch глотал → не работало.
                     })
-                    .catch(e => console.warn("[pollHist] async decrypt chain failed:", e));
+                    .catch(e => console.warn("[pollHist] async decrypt chain failed:", e))
+                    .finally(() => {
+                        // v160q: merge meta меняет данные и при added=false (кэш-строки) —
+                        // сохраняем кэш после КАЖДОГО завершения Phase-3 цепочки,
+                        // иначе IDB остаётся с f-…bin без _plainName навсегда.
+                        try { saveMessagesCacheForPeer(peer); } catch (e) {}
+                    });
             }
-        }
     } catch (e) {
         console.warn("pollHistoryForPeer failed:", e && e.message, e && e.stack);
         if (typeof window.__pollErrors !== 'undefined') window.__pollErrors.push({t: Date.now(), fn: 'pollHistoryForPeer', msg: String(e && e.message), stack: String(e && e.stack)});
