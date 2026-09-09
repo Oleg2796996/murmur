@@ -8,7 +8,7 @@
 // no-store (js/css/html/json), браузер сам ходит в сеть каждый раз.
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
-const SW_VERSION = "murmur-sw3";
+const SW_VERSION = "murmur-sw4";
 
 self.addEventListener("install", (event) => {
   // Никаких precache — сервер отдаёт всё с no-store.
@@ -37,7 +37,10 @@ self.addEventListener("message", (event) => {
 });
 
 self.addEventListener("push", (event) => {
-  let payload = { alias: "unknown", title: "Murmur", subtitle: "", body: "Новое сообщение" };
+  // v160v (Олег 15:05): дефолт = точный формат баннера. ВАЖНО: title дефолт
+  // "MurMur" (НЕ "Murmur") — если payload.title пустой, показываем "MurMur",
+  // иначе iOS добавлял авто-строку "murmur" под заголовком (скриншот 14:48).
+  let payload = { alias: "unknown", title: "MurMur", subtitle: "", body: "MurMur: Новое сообщение" };
   try {
     if (event.data) {
       payload = event.data.json();
@@ -45,14 +48,14 @@ self.addEventListener("push", (event) => {
   } catch (e) {
     console.warn("[murmur-sw] push payload not JSON", e);
   }
-  const title = payload.title || "Murmur";
+  const title = payload.title || "MurMur";
   const options = {
     // Олег 2026-09-05 20:40: subtitle/sender-превью убрали (минимум текста
     // в пуше). iOS Web Push subtitle всё равно игнорируется на
     // chromium-клиентах, и на iOS мы хотим единый формат «Murmur / Новое
     // сообщение». Subtitle пустой → iOS не вставит «from <app>» авто-строку.
     subtitle: "",
-    body: payload.body || "Новое сообщение",
+    body: payload.body || "MurMur: Новое сообщение",
     icon: "/i192-2026b.png",
     badge: "/i192-2026b.png",
     tag: "murmur-" + (payload.envelope_hash_hex || "").slice(0, 8),

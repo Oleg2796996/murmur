@@ -1960,6 +1960,10 @@ async function updateBadge() {
     }
 }
 
+// v160v: флаг «контакты/кэш загружены» — renderChatList рисует «Нет сообщений»
+// только когда данные реально загружены (иначе пусто, без ступенчатого перебора).
+let contactsLoaded = false;
+
 async function loadContacts() {
     if (!myNpub) return;
     try {
@@ -2061,15 +2065,22 @@ async function loadContacts() {
                         // v160k7 (Олег 19:19 «показывается первое, а не последнее»: кэш
                         // arr НЕ сортирован по ts (id-порядок загрузки). Берем msg
                         // с МАКСимальным ts — это последнее сообщение.
-                        const withTs = rec.filter(m => m && (m.ts || m.created_at_ts || 0));
-                        const last = withTs.length
-                            ? withTs.reduce((a, b) => ((b.ts || b.created_at_ts || 0) > (a.ts || a.created_at_ts || 0) ? b : a))
-                            : rec[rec.length - 1];
-                        const prev = sanitizePreview(previewForMsg(last));
+                        // v160v (Олег 15:05): перебор «Нет сообщений → первое →
+                        // последнее» = берём max-ts запись, а её превью часто 🔒
+                        // (серверная строка из pollHist без decrypt) → превью
+                        // остаётся от СТАРОГО сообщения, потом decrypt апгрейдит.
+                        // Правильно: идём от конца (max ts) и берём ПЕРВУЮ запись
+                        // с реальным превью — сразу финальный текст, без ступеней.
+                        const withTs = rec.filter(m => m && (m.ts || m.created_at_ts || 0))
+                            .sort((a, b) => ((b.ts || b.created_at_ts || 0) - (a.ts || a.created_at_ts || 0)));
                         const cur = contacts[peer];
-                        if (!cur.lastMessagePreview && prev && prev !== "🔒 зашифрованное сообщение") {
-                            cur.lastMessagePreview = prev;
-                            cur.lastTs = last.ts || last.created_at_ts || cur.lastTs || 0;
+                        for (const m of withTs) {
+                            const prev = sanitizePreview(previewForMsg(m));
+                            if (prev && prev !== "🔒 зашифрованное сообщение" && !prev.startsWith("{")) {
+                                cur.lastMessagePreview = prev;
+                                cur.lastTs = m.ts || m.created_at_ts || cur.lastTs || 0;
+                                break;
+                            }
                         }
                     }
                 }
@@ -2094,6 +2105,7 @@ async function loadContacts() {
             }
         }
     } catch (e) { /* ignore */ }
+    contactsLoaded = true;
 }
 
 function renderChatList() {
@@ -2129,12 +2141,16 @@ function renderChatList() {
         div.className = "chat-item" + (activePeer === c.peer ? " active" : "");
         // v160u (Олег 14:24): не показывать «🔒 зашифрованное сообщение» в сайдбаре.
         // Сервер отдаёт placeholder (не имеет ключей), локальный decrypt приходит
-        // через 1-2 cек — раньше был видимый перебор «🔒 → текст». Теперь до
-        // реального превью показываем пустоту (как «Нет сообщений», но без текста):
-        // пользователь видит финальный текст один раз, без мерцания.
+        // через 1-2 cек — раньше был видимый перебор «🔒 → текст».
+        // v160v (Олег 15:05): убрали и перебор «Нет сообщений → … → финальный».
+        // Пока данные грузятся (контакты с сервера/кэш не готовы) превью-строка
+        // ПУСТАЯ; «Нет сообщений» рисуем только когда данные точно загружены
+        // (contactsLoaded) и сообщений реально нет. Пользователь видит одну
+        // смену: пусто → финальный текст (или честное «Нет сообщений»).
         const isLockedPlaceholder = c.lastMessagePreview === "🔒 зашифрованное сообщение" || c.lastMessagePreview.startsWith("{");
-        const preview = (!c.lastMessagePreview || isLockedPlaceholder)
-            ? "Нет сообщений"
+        const noPreview = !c.lastMessagePreview || isLockedPlaceholder;
+        const preview = noPreview
+            ? (contactsLoaded ? "Нет сообщений" : "")
             : (c.lastMessagePreview.length > 60 ? c.lastMessagePreview.slice(0, 60) + "…" : c.lastMessagePreview)
         const name = nameMap[c.peer];
         // Privacy v157: npub не показываем в списке чатов. Без имени — «Без имени».
