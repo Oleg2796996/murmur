@@ -1826,6 +1826,14 @@ function getDeletedTs(peer) {
 
 
 // ─── Push notifications + badge ───
+// v160s: bytes → base64url (для сравнения applicationServerKey подписки с
+// серверным VAPID-ключом; ключ приходит из sub.options.applicationServerKey).
+function _u8ToBase64url(u8) {
+    let s = "";
+    for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+    return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 function urlBase64ToUint8Array(base64String) {
     const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
     const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -1843,12 +1851,28 @@ async function setupPushSubscription() {
     try {
         const reg = await navigator.serviceWorker.ready;
         let sub = await reg.pushManager.getSubscription();
-        if (!sub) {
-            const vapidKey = await fetch(RELAY + "/vapid_public_key").then(r => r.text());
-            if (!vapidKey || vapidKey.length < 20) {
-                console.warn("[push] vapid key invalid:", vapidKey);
-                return;
+        // v160s: server VAPID key may have been regenerated (relay reinstall).
+        // A browser subscription created with an OLD key gets 403 from Apple on
+        // every delivery (VAPID signature mismatch) — and looks perfectly alive
+        // client-side. Detect key mismatch and recreate the subscription.
+        const vapidKey = await fetch(RELAY + "/vapid_public_key").then(r => r.text());
+        if (!vapidKey || vapidKey.length < 20) {
+            console.warn("[push] vapid key invalid:", vapidKey);
+            return;
+        }
+        if (sub && sub.options && sub.options.applicationServerKey) {
+            try {
+                const subKeyB64 = _u8ToBase64url(new Uint8Array(sub.options.applicationServerKey));
+                if (subKeyB64 !== vapidKey) {
+                    console.warn("[push] subscription VAPID key mismatch (server rotated) — resubscribing");
+                    await sub.unsubscribe();
+                    sub = null;
+                }
+            } catch (e) {
+                console.warn("[push] key compare failed:", e && e.message);
             }
+        }
+        if (!sub) {
             const perm = Notification.permission;
             if (perm === "denied") {
                 console.warn("[push] notifications denied by user");
