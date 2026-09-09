@@ -3057,6 +3057,13 @@ function renderMessages() {
             // показывает имя+размер, иначе дубль. Регэксп точный — обычный
             // текст пользователя с 📎 не трогаем (только «📎 … (…)» в конец строки).
             let bodyText = m.body || "";
+            // v160y3: 🔒-заглушка в body + уже есть чипы attachments_meta
+            // (decrypt успешен, фото/чип отрендерились) → не показываем текстовую
+            // «🔒 шифрованное сообщение» строку. Пузырь = чип + превью файла.
+            if (m.direction === "in" && /\u{1F512}\s*шифрованное сообщение/u.test(bodyText) &&
+                Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0) {
+                bodyText = "";
+            }
             if (m.direction === "in" && Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0 && bodyText.includes("📎")) {
                 const attLineRe = /^\s*📎\s.+\s\([^)]*\)\s*$/;
                 bodyText = bodyText.split("\n").filter((l) => !attLineRe.test(l)).join("\n").trim();
@@ -4286,6 +4293,13 @@ async function pollHistoryForPeer(peer) {
             }
 
             const { text: bodyText, isBinary } = extractMessageText(msg);
+            // v160y3: входящее с вложениями + 🔒-заглушка в body → скрываем заглушку
+            // сразу (фото/чип отрендерятся из attachments_meta, decrypt апгрейдит body).
+            // Раньше «🔒 шифрованное сообщение» висело под превью файла до decrypt.
+            if (fromNpub !== myNpub && Array.isArray(msg.attachments) && msg.attachments.length > 0 &&
+                typeof bodyText === "string" && /\u{1F512}\s*шифрованное сообщение/u.test(bodyText)) {
+                bodyText = "";
+            }
             // Lesson #199 (Олег 2026-08-26): для исходящих — идти в outbox вместо
             // "🔒 шифрованное сообщение", иначе UI покажет placeholder + decrypt errors.
             let resolvedBody = bodyText;
