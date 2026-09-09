@@ -3050,7 +3050,14 @@ function renderMessages() {
             if (isSystem) {
                 statusGlyph = "⏳";
             }
-            const bodyText = m.body || "";
+            let bodyText = m.body || "";
+            // v160y7: 🔒-заглушка в body + уже есть чипы attachments_meta
+            // → не показываем текстовую «🔒 шифрованное сообщение» строку.
+            // ТОЛЬКО render-слой (НЕ pollHist bodyText="" — регресс y6).
+            if (m.direction === "in" && /\u{1F512}\s*шифрованное сообщение/u.test(bodyText) &&
+                Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0) {
+                bodyText = "";
+            }
             // Олег 2026-09-05 20:40: linkify — после escape. В iOS PWA
             // target=_blank открывает SFSafariViewController, в обычном
             // браузере — новый таб. Не заменяем внутреннюю навигацию.
