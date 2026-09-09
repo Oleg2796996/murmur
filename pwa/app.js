@@ -2006,7 +2006,7 @@ async function loadContacts() {
                                 setChatPreview(key, c.last_ts, serverPrev);
                             }
                         }
-                        contacts[key].lastTs = c.last_ts;
+                        contacts[key].lastTs = Math.max(contacts[key].lastTs || 0, c.last_ts || 0); // v160x: не откатывать в прошлое
                     }
                     // Не перезаписываем локальный unread с сервера — мы их считаем сами.
                 }
@@ -2116,8 +2116,13 @@ function setChatPreview(peer, ts, preview) {
     if (!contacts[peer]) contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
     const cur = contacts[peer];
     const nts = ts || 0;
-    if (cur.lastTs && nts && nts < cur.lastTs) return false; // устаревшее — игнор
     if (!preview) return false;
+    // v160x фикс регрессии «Нет сообщений»: серверный last_ts — по НОВЕЙШЕМУ
+    // сообщению (часто 🔒-строка без превью), а первое реальное превью в кэше —
+    // старее. Старый guard блокировал его навсегда → пустое превью рисовалось
+    // как «Нет сообщений». Пустое превью заполняем ВСЕГДА; guard защищает
+    // только непустое значение от затирания более старым.
+    if (cur.lastMessagePreview && cur.lastTs && nts && nts < cur.lastTs) return false;
     cur.lastMessagePreview = preview;
     cur.lastTs = Math.max(cur.lastTs || 0, nts);
     return true;
