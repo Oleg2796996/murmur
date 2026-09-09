@@ -415,9 +415,28 @@ impl MessageStore {
                         return Ok(trunc(bs, 80));
                     }
                     // Envelope JSON без body и без ct — fallback attachments.
+                    // v160t (Олег): типовое превью по mime («фото/видео/аудио/файл»),
+                    // НЕ нейтральное имя f-…bin — тогда серверное превью совпадает
+                    // с клиентским (previewForMsg v160t) и loadContacts не портит
+                    // сайдбар. mime в attachments_meta не является секретом.
                     if let Some(arr) = v.get("attachments_meta").and_then(|a| a.as_array()) {
-                        if let Some(first) = arr.first().and_then(|x| x.get("name")).and_then(|n| n.as_str()) {
-                            return Ok(format!("📎 {}", first));
+                        if let Some(first) = arr.first() {
+                            let mime = first.get("mime").and_then(|m| m.as_str()).unwrap_or("");
+                            let kind = if mime.starts_with("image/") {
+                                "фото"
+                            } else if mime.starts_with("video/") {
+                                "видео"
+                            } else if mime.starts_with("audio/") {
+                                "аудио"
+                            } else {
+                                "файл"
+                            };
+                            let n = arr.len();
+                            return Ok(if n > 1 {
+                                format!("📎 {} +{}", kind, n - 1)
+                            } else {
+                                format!("📎 {}", kind)
+                            });
                         }
                     }
                     // Ничего не нашли — возвращаем placeholder, а не сырой JSON.

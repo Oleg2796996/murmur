@@ -1136,9 +1136,18 @@ function previewForMsg(m) {
     try {
         if (!m) return "";
         const am = (Array.isArray(m.attachments_meta) && m.attachments_meta.length) ? m.attachments_meta : (Array.isArray(m.attachments) ? m.attachments : []);
-        // v160m: prioritize _plainName to avoid fallback to neutral 'f-...bin' during state updates.
-        const names = am.map(a => (a && (a._plainName || a.name)) || "").filter(Boolean);
-        const attLabel = am.length ? "📎 " + (names[0] || "файл") + (am.length > 1 ? " +" + (am.length - 1) : "") : "";
+        // v160t (Олег): типовое превью вместо имени — «фото/видео/файл». Имя файла
+        // не нужно: mime есть и у сервера → локальное и серверное превью СОВПАДАЮТ,
+        // перетирание в loadContacts (f-…bin) становится безвредным. Root cause
+        // класса багов v160q–s устранён упрощением, а не новым merge-правилом.
+        const kindOf = (a) => {
+            const mime = (a && a.mime) || "";
+            if (mime.startsWith("image/")) return "фото";
+            if (mime.startsWith("video/")) return "видео";
+            if (mime.startsWith("audio/")) return "аудио";
+            return "файл";
+        };
+        const attLabel = am.length ? "📎 " + kindOf(am[0]) + (am.length > 1 ? " +" + (am.length - 1) : "") : "";
         let t = String(m.body || m.resolvedBody || m.outbox_body || "").trim();
         if (t.startsWith("{")) t = ""; // сырой envelope — считаем нерасшифрованным
         if (t && m.isBinary) t = "";  // "[binary, N bytes]" — чип файла, не текст
@@ -1983,8 +1992,15 @@ async function loadContacts() {
                         const localPrev = contacts[key].lastMessagePreview || "";
                         const localReal = localPrev && localPrev !== "🔒 зашифрованное сообщение" && !localPrev.startsWith("{");
                         const serverReal = serverPrev && !serverPrev.startsWith("🔒") && !serverPrev.startsWith("{");
-                        if (serverReal || !localReal) {
-                            contacts[key].lastMessagePreview = serverPrev;
+                        // v160t: серверное типовое превью («📎 файл») не содержит текст
+                        // сообщения (ct sealed). Локальное «📎 фото · текст» богаче —
+                        // не откатывать его до голого типового.
+                        const bareServerKind = /^📎 (фото|видео|аудио|файл)( \+\d+)?$/.test(serverPrev.trim());
+                        const localHasText = /^📎 .+· .+/.test(localPrev) || (!localPrev.startsWith("📎") && localReal);
+                        if (serverReal || (!localReal && !localHasText)) {
+                            if (!(bareServerKind && localHasText)) {
+                                contacts[key].lastMessagePreview = serverPrev;
+                            }
                         }
                         contacts[key].lastTs = c.last_ts;
                     }
@@ -2702,7 +2718,9 @@ async function loadHistory(peer, beforeTs) {
                     if (isOutgoing && bodyText === "__DECRYPT_FAILED__") {
                         const meta = m.attachments_meta || (m.envelope && m.envelope.attachments_meta) || [];
                         if (meta.length) {
-                            finalBody = "📎 " + meta.map(a => a.name + " (" + formatSize(a.size) + ")").join(", ");
+                            // v160t: типовое превью (mime → фото/видео/аудио/файл), не f-…bin
+                            const kindOfA = (a) => { const mm = (a && a.mime) || ""; if (mm.startsWith("image/")) return "фото"; if (mm.startsWith("video/")) return "видео"; if (mm.startsWith("audio/")) return "аудио"; return "файл"; };
+                            finalBody = "📎 " + meta.map(kindOfA).join(", ");
                         } else {
                             finalBody = "[исходящее, шифрование нарушено]";
                         }
