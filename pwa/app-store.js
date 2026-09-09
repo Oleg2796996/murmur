@@ -281,8 +281,51 @@ const chats = {
                 const f = m.from_npub || m.from || "";
                 return f ? ("k:" + f + ":" + m.ts) : null;
             };
-            const seen = new Set();
-            for (const m of trimmed) { const k = keyOf(m); if (k) seen.add(k); }
+            const seen = new Map();
+            for (const m of trimmed) { const k = keyOf(m); if (k) seen.set(k, m); }
+            // v160r: merged-in (incoming) rows must not LOSE richer local meta.
+            // Outgoing server rows carry only neutral f-…bin names (real filename
+            // is sealed for the recipient; sender cannot decrypt own ct), so a
+            // server row replacing a good local/outbox record would downgrade
+            // preview to "f-….bin" forever. Merge prev's real names into the
+            // incoming row before prev rows are dropped.
+            if (prev.length > 0) {
+                for (const m of trimmed) {
+                    const k = keyOf(m);
+                    if (!k || !seen.has(k)) continue;
+                    const p = prev.find(x => keyOf(x) === k);
+                    if (!p) continue;
+                    // a) attachments: restore real names clobbered by f-…bin
+                    const pa = Array.isArray(p.attachments) ? p.attachments : null;
+                    const ma = Array.isArray(m.attachments) ? m.attachments : null;
+                    if (pa && pa.length) {
+                        const byId = new Map();
+                        for (const a of pa) {
+                            const id = (a && (a.blob_id || a.sha256)) || null;
+                            if (id) byId.set(id, a);
+                        }
+                        if (ma && ma.length) {
+                            for (const a of ma) {
+                                if (!a || !/^f-/.test(a.name || "")) continue;
+                                const id = a.blob_id || a.sha256;
+                                const old = id ? byId.get(id) : null;
+                                if (old && old.name && !/^f-/.test(old.name)) {
+                                    a.name = old.name; // real name wins
+                                    if (old.poster_data_url && !a.poster_data_url) a.poster_data_url = old.poster_data_url;
+                                    if (old.plaintext_b64 && !a.plaintext_b64) a.plaintext_b64 = old.plaintext_b64;
+                                }
+                            }
+                        } else {
+                            m.attachments = pa; // incoming lost meta entirely
+                        }
+                    }
+                    // b) body: keep plaintext body if incoming is sealed/placeholder
+                    if (typeof m.body === "string" && (m.body.includes("\uD83D\uDD12") || !m.body) &&
+                        typeof p.body === "string" && p.body && !p.body.includes("\uD83D\uDD12")) {
+                        m.body = p.body;
+                    }
+                }
+            }
             const merged = trimmed.concat(prev.filter(m => {
                 const k = keyOf(m);
                 return !k || !seen.has(k);
