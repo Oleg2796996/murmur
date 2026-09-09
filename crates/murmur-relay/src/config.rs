@@ -41,7 +41,7 @@ fn default_push_bind() -> String {
 }
 
 fn default_vapid_subject() -> String {
-    "mailto:admin@murmur.local".to_string()
+    "mailto:oleg@senswifi.ru".to_string()
 }
 
 impl RelayConfig {
