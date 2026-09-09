@@ -249,25 +249,25 @@ impl PushPayload {
             from_npub: entry.from_npub.clone(),
             ts: entry.ts,
             envelope_hash_hex: entry.envelope_hash_hex.clone(),
-            // Олег 2026-09-09 15:05 (v160v): title="MurMur" — iOS рисует его
-            // как заголовок баннера (скриншот Олега: было "Murmur"+"murmur"
-            // строкой ниже = авто-строка app-name). Регистр "MurMur" (не
-            // совпадает с именем PWA "murmur") — iOS НЕ парсит body как
-            // формат "App: text" и НЕ дописывает "from murmur".
-            title: "MurMur".to_string(),
+            // Олег 2026-09-09 16:15 (v160w): title="" — возвращаемся к
+            // доказанному на iOS формату (v160k9). Скриншоты 15:33 показали:
+            // с непустым title iOS рисует И его, И "from murmur" субтитлом
+            // (платформенный баннер web push, не зависит от формата body).
+            // Пустой title = только body. Отличие iPhone/Mac баннеров —
+            // платформенная разница отрисовки, не payload.
+            title: "".to_string(),
             // Олег 2026-09-05 23:46 (v160k9a): поменяли body на «murmur:
             // новое сообщение» — iOS Web Push для generic self-notification
             // (без двоеточия) prepends «from murmur», для нормального текста —
             // нет. Теперь title=Murmur, body=murmur: новое сообщение.
             // Subtitle пустой (без превью sender). E2E ciphertext на relay не
             // расшифровывается, показывать нечего.
-            // Олег 2026-09-09 15:05 (v160v): тело пуша = «MurMur: Новое сообщение»
-            // (ТЗ Олега дословно). Прежние варианты давали лишние строки:
-            // "Murmur: …" → Safari Mac "Murmur from murmur …"; "Новое сообщение"
-            // с пустым title → iOS рисовал "murmur" авто-строкой (скриншот 14:48).
-            // Хитрый регистр "MurMur:" рвёт парсер формата "App: text".
+            // Олег 2026-09-09 16:15 (v160w): body = «Новое сообщение».
+            // Любые префиксы/двоеточия iOS дополняет своим баннером
+            // ("from murmur" / app-name строкой) — единственный чистый
+            // вариант на iOS: title пуст + body без имени приложения.
             subtitle: "".to_string(),
-            body: "MurMur: Новое сообщение".to_string(),
+            body: "Новое сообщение".to_string(),
         }
     }
 
@@ -1522,12 +1522,12 @@ mod tests {
             envelope_hash_hex: "abc".into(),
         };
         let payload = PushPayload::from_entry(&entry, Some(&store));
-        // v160v: title "MurMur", body "MurMur: Новое сообщение" (ТЗ Олега 15:05).
-        assert_eq!(payload.title, "MurMur");
+        // v160w: title "" (iOS рисует "from murmur" субтитлом при непустом title).
+        assert_eq!(payload.title, "");
         // v160k9/v160v: subtitle пустой (минимум текста в пуше, ТЗ Олега) —
         // и тем самым full npub не утекает.
         assert_eq!(payload.subtitle, "", "subtitle must be empty: {}", payload.subtitle);
-        assert_eq!(payload.body, "MurMur: Новое сообщение");
+        assert_eq!(payload.body, "Новое сообщение");
         // JSON field `alias` carries the recipient npub (routing key).
         assert_eq!(payload.alias, "oleg-hp");
 

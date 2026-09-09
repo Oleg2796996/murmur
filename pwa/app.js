@@ -2003,7 +2003,7 @@ async function loadContacts() {
                         const localHasText = /^📎 .+· .+/.test(localPrev) || (!localPrev.startsWith("📎") && localReal);
                         if (serverReal || (!localReal && !localHasText)) {
                             if (!(bareServerKind && localHasText)) {
-                                contacts[key].lastMessagePreview = serverPrev;
+                                setChatPreview(key, c.last_ts, serverPrev);
                             }
                         }
                         contacts[key].lastTs = c.last_ts;
@@ -2073,12 +2073,10 @@ async function loadContacts() {
                         // с реальным превью — сразу финальный текст, без ступеней.
                         const withTs = rec.filter(m => m && (m.ts || m.created_at_ts || 0))
                             .sort((a, b) => ((b.ts || b.created_at_ts || 0) - (a.ts || a.created_at_ts || 0)));
-                        const cur = contacts[peer];
                         for (const m of withTs) {
                             const prev = sanitizePreview(previewForMsg(m));
                             if (prev && prev !== "🔒 зашифрованное сообщение" && !prev.startsWith("{")) {
-                                cur.lastMessagePreview = prev;
-                                cur.lastTs = m.ts || m.created_at_ts || cur.lastTs || 0;
+                                setChatPreview(peer, m.ts || m.created_at_ts || 0, prev);
                                 break;
                             }
                         }
@@ -2106,6 +2104,23 @@ async function loadContacts() {
         }
     } catch (e) { /* ignore */ }
     contactsLoaded = true;
+}
+
+// v160w (Олег 15:45 «превью бегает»): единый писатель превью с упорядочиванием
+// по ts. Десяток асинхронных источников (WS, decrypt-батч, history, resync,
+// outbox) писали contacts[peer].lastMessagePreview напрямую — кто последний,
+// тот и в DOM: превью «бегало» между старым и новым значением. Теперь любое
+// обновление только через setChatPreview: старое ts НЕ затираем, монотонность
+// гарантирует ровно одну смену «старое → финальное».
+function setChatPreview(peer, ts, preview) {
+    if (!contacts[peer]) contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
+    const cur = contacts[peer];
+    const nts = ts || 0;
+    if (cur.lastTs && nts && nts < cur.lastTs) return false; // устаревшее — игнор
+    if (!preview) return false;
+    cur.lastMessagePreview = preview;
+    cur.lastTs = Math.max(cur.lastTs || 0, nts);
+    return true;
 }
 
 function renderChatList() {
@@ -2861,18 +2876,13 @@ async function loadHistory(peer, beforeTs) {
                 }
                 if (newest && newest.body) {
                     if (!contacts[peer]) contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
-                    contacts[peer].lastTs = newest.ts;
                     // Lesson #241: НЕ обновлять preview здесь, если body
-                    // ещё-зашифрованный JSON envelope. sanitizePreview вернёт
-                    // '🔒 зашифрованное сообщение' что выглядит как регресс.
-                    // Пусть Lesson #238 v3 (async decrypt) обновит preview
-                    // после расшифровки.
+                    // ещё-зашифрованный JSON envelope (async decrypt обновит).
+                    // v160w: писать только через setChatPreview (ts-порядок).
                     const bodyStr = String(newest.body);
                     if (!bodyStr.startsWith("{")) {
-                        // decrypted plaintext или plain text
-                        contacts[peer].lastMessagePreview = bodyStr.slice(0, 80);
+                        setChatPreview(peer, newest.ts, bodyStr.slice(0, 80));
                     }
-                    // else: оставляем предыдущий preview, async decrypt обновит
                 }
             }
             if (j.next_before_ts) oldestTsForPeer[peer] = j.next_before_ts;
@@ -3562,10 +3572,7 @@ async function sendMessage() {
  // квитанция получателя (applyReceipts → acks).
             if (last && last._sig === renderedMsg._sig) last.status = "sent";
             renderMessages();
-            if (contacts[activePeer]) {
-                contacts[activePeer].lastMessagePreview = text.slice(0, 80);
-                contacts[activePeer].lastTs = msg.ts;
-            }
+            setChatPreview(activePeer, msg.ts, text.slice(0, 80));
             renderChatList();
         } else {
             const last = messages[activePeer][messages[activePeer].length - 1];
@@ -4054,11 +4061,7 @@ function handleIncomingEnvelope(env) {
         };
         messages[peer].push(msg);
 
-        if (!contacts[peer]) {
-            contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
-        }
-        contacts[peer].lastMessagePreview = previewForMsg(msg);
-        contacts[peer].lastTs = env.ts;
+        setChatPreview(peer, env.ts, previewForMsg(msg));
 
         // Lesson #127: при reload WS присылает старые envelopes. Если ts <= maxTs,
         // сообщение уже было показано/прочитано — не bumpUnread.
@@ -4224,9 +4227,7 @@ async function pollHistoryForPeer(peer) {
                     originalRecipient: parsedBody.original_recipient || "",
                     sig: "",
                 });
-                if (!contacts[peer]) contacts[peer] = { peer: peer, lastMessagePreview: "Не доставлено", lastTs: msg.ts, unreadCount: 0 };
-                contacts[peer].lastMessagePreview = "Не доставлено";
-                contacts[peer].lastTs = msg.ts;
+                setChatPreview(peer, msg.ts, "Не доставлено");
                 if (isHiddenPeer(peer)) {
                     // Lesson #132.5: tombstone — не восстанавливаем чат ради
                     // старого envelope, который polling пере-fetch'ит из
@@ -4324,11 +4325,7 @@ async function pollHistoryForPeer(peer) {
 
             // Privacy v155: from_name не читаем — имя контакта задаёт получатель локально.
 
-            if (!contacts[peer]) {
-                contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
-            }
-            contacts[peer].lastMessagePreview = previewForMsg(envelope);
-            contacts[peer].lastTs = msg.ts;
+            setChatPreview(peer, msg.ts, previewForMsg(envelope));
             // Lesson #131 + #132.1: при ЛЮБОМ новом сообщении для этого
             // peer (входящем ИЛИ self-sender с другого устройства)
             // проверяем hidden и снимаем скрытие. Без этого fix'а:
@@ -4458,11 +4455,8 @@ async function pollHistoryForPeer(peer) {
                                 // происходило. Lesson #232 inline update тоже
                                 // внутри цикла — работает. Сейчас то же самое.
                                 if (m.direction === "in" && contacts) {
-                                    if (!contacts[peer]) contacts[peer] = { peer: peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
                                     const preview = previewForMsg(m); // v158c: файлы → 📎 имя
-                                    if (preview && contacts[peer].lastMessagePreview !== preview) {
-                                        contacts[peer].lastMessagePreview = preview;
-                                        contacts[peer].lastTs = m.ts || Date.now();
+                                    if (preview && setChatPreview(peer, m.ts || Date.now(), preview)) {
                                         renderChatList();
                                     }
                                 }
@@ -4471,7 +4465,7 @@ async function pollHistoryForPeer(peer) {
                                     m.body = "[не удалось расшифровать]";
                                     // Lesson #238 v3: failed decrypt тоже обновляет preview
                                     if (contacts && contacts[peer]) {
-                                        contacts[peer].lastMessagePreview = "[не удалось расшифровать]";
+                                        setChatPreview(peer, m.ts || Date.now(), "[не удалось расшифровать]");
                                         renderChatList();
                                     }
                                 }
@@ -4577,9 +4571,7 @@ function resyncSidebarPreviews() {
         const cur = contacts[peer] ? contacts[peer].lastMessagePreview : "";
         if (fallbackish && cur && cur !== "🔒 зашифрованное сообщение") continue;
         if (!contacts[peer]) contacts[peer] = { peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };
-        if (preview && contacts[peer].lastMessagePreview !== preview) {
-            contacts[peer].lastMessagePreview = preview;
-            contacts[peer].lastTs = newest.ts || Date.now();
+        if (preview && setChatPreview(peer, newest.ts || Date.now(), preview)) {
             any = true;
         }
     }

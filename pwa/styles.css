@@ -182,6 +182,12 @@ button.small { padding: 8px 12px; font-size: 13px; }
     border-bottom: 1px solid var(--border);
 }
 
+/* v160w (Олег 15:45): иконки 🔔💾📊 скрыты, но header жив (safe-area сверху
+   на iPhone). header[hidden] схлопнул отступ → UI «уехал вверх». */
+.sidebar-header .notif-btn {
+    display: none;
+}
+
 .sidebar-footer {
     display: flex;
     flex-direction: column;
