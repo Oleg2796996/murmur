@@ -3050,7 +3050,23 @@ function renderMessages() {
             if (isSystem) {
                 statusGlyph = "⏳";
             }
-            const bodyText = m.body || "";
+            let bodyText = m.body || "";
+            // v160y3: 🔒-заглушка в body + уже есть чипы attachments_meta
+            // (decrypt успешен, фото/чип отрендерились) → не показываем текстовую
+            // «🔒 шифрованное сообщение» строку. Пузырь = чип + превью файла.
+            if (m.direction === "in" && /\u{1F512}\s*шифрованное сообщение/u.test(bodyText) &&
+                Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0) {
+                bodyText = "";
+            }
+            // v160y: если у входящего есть attach-чипы (msg-attach-list из
+            // attachments_meta), 📎-строки «name (size)» в тексте — легаси
+            // из decrypt-append или старого IDB-кэша → вырезаем: чип уже
+            // показывает имя+размер, иначе дубль. Регэксп точный — обычный
+            // текст пользователя с 📎 не трогаем (только «📎 … (…)» в конец строки).
+            if (m.direction === "in" && Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0 && bodyText.includes("📎")) {
+                const attLineRe = /^\s*📎\s.+\s\([^)]*\)\s*$/;
+                bodyText = bodyText.split("\n").filter((l) => !attLineRe.test(l)).join("\n").trim();
+            }
             // Олег 2026-09-05 20:40: linkify — после escape. В iOS PWA
             // target=_blank открывает SFSafariViewController, в обычном
             // браузере — новый таб. Не заменяем внутреннюю навигацию.
@@ -4276,6 +4292,13 @@ async function pollHistoryForPeer(peer) {
             }
 
             const { text: bodyText, isBinary } = extractMessageText(msg);
+            // v160y3: входящее с вложениями + 🔒-заглушка в body → скрываем заглушку
+            // сразу (фото/чип отрендерятся из attachments_meta, decrypt апгрейдит body).
+            // Раньше «🔒 шифрованное сообщение» висело под превью файла до decrypt.
+            if (fromNpub !== myNpub && Array.isArray(msg.attachments) && msg.attachments.length > 0 &&
+                typeof bodyText === "string" && /\u{1F512}\s*шифрованное сообщение/u.test(bodyText)) {
+                bodyText = "";
+            }
             // Lesson #199 (Олег 2026-08-26): для исходящих — идти в outbox вместо
             // "🔒 шифрованное сообщение", иначе UI покажет placeholder + decrypt errors.
             let resolvedBody = bodyText;
