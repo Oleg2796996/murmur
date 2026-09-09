@@ -211,9 +211,8 @@ async function saveMessagesCacheForPeer(peer) {
                 // decrypt raw server row, otherwise ct=null → 🔒 stays forever.
                 const raw = m._server_msg || m;
                 const d = await decryptEnvelopeForRender(raw);
-                // v160y2: пустой text + вложения = успех (фото без подписи).
-                if (decryptResultHasContent(d)) {
-                    const cm = _sanitizeMessageForStorage(Object.assign({}, m, { body: d.text || "" }));
+                if (d && d.text && d.text !== "__DECRYPT_FAILED__" && !d.text.includes("🔒")) {
+                    const cm = _sanitizeMessageForStorage(Object.assign({}, m, { body: d.text }));
                     trimmed.push(cm);
                     continue;
                 }
@@ -332,9 +331,8 @@ async function _loadMessagesCacheForPeerImpl(peer, resolveCache) {
                 // навсегда. Pass _server_msg (fresh object, no memoized promise).
                 const raw = em._server_msg || em;
                 const d = await decryptWithTimeout(raw);
-                // v160y2: пустой text + вложения = успех (фото без подписи).
-                if (decryptResultHasContent(d)) {
-                    em.body = d.text || "";
+                if (d && d.text && d.text !== "__DECRYPT_FAILED__" && !d.text.includes("🔒")) {
+                    em.body = d.text;
                     em._ct = null; // decrypted — 🔒 заглушка не нужна
                     em._decryptedOffline = true;
                     if (activePeer === peer) renderMessages();
@@ -706,16 +704,6 @@ function extractBodyTextSync(input) {
 /// Input can be either:
 ///   - a message row from `/api/history` (with `body_base64` field)
 ///   - a parsed envelope object (with `ct` and `attachments_meta` fields)
-// v160y2: decrypt успешен, если есть текст ИЛИ вложения. Фото/файл без подписи:
-// text="" — ВАЛИДНЫЙ результат (чип рендерится из attachments_meta). Старые
-// guard'ы «if (newBody && ...)» считали пустой text неудачей → 🔒-заглушка
-// не перезаписывалась (регрессия v160y: раньше текст всегда был из 📎-append).
-function decryptResultHasContent(d) {
-    if (!d || d.text === "__DECRYPT_FAILED__") return false;
-    if (typeof d.text === "string" && d.text.includes("🔒")) return false;
-    return (d.text && d.text.length > 0) || (Array.isArray(d.attachments) && d.attachments.length > 0);
-}
-
 async function decryptEnvelopeForRender(env) {
     let ct = null;
     let attachmentsMeta = [];
@@ -766,13 +754,8 @@ async function decryptEnvelopeForRender(env) {
                 }
             }
         }
-        // v160y: Render attachments inline в body — ТОЛЬКО если чипов нет.
-        // attachmentsMeta рисуется отдельным чипом (msg-attach-list,
-        // render-attachments.js «📎 name (size)») — дубль текстом был только
-        // у входящих (исходящие строились без этого append, см. ~4296).
-        // Старый формат без attachments_meta: 📎-строка в body остаётся
-        // единственным указанием на файл — не теряем.
-        if (plain.attachments && plain.attachments.length && !attachmentsMeta.length) {
+        // Render attachments inline в body.
+        if (plain.attachments && plain.attachments.length) {
             for (const a of plain.attachments) {
                 body += "\n📎 " + a.name + " (" + formatSize(a.size) + ")";
             }
@@ -2139,15 +2122,7 @@ function setChatPreview(peer, ts, preview) {
     // старее. Старый guard блокировал его навсегда → пустое превью рисовалось
     // как «Нет сообщений». Пустое превью заполняем ВСЕГДА; guard защищает
     // только непустое значение от затирания более старым.
-    // v160y: 🔒/{-плейсхолдер (сервер не имеет ключей) — ЗАМЕНЯЕМЫЙ независимо
-    // от ts. Серверный last_ts раздут квитанциями (≥ новейшего реального msg),
-    // а реальное превью из IDB-кэша/decrypt несёт ts самого сообщения (< last_ts).
-    // v160x-guard «непустое не трогать при более старом ts» держал 🔒 вечно →
-    // «Нет сообщений» после reload (v160x лечил только ПУСТОЕ превью).
-    const curIsPlaceholder = !cur.lastMessagePreview ||
-        cur.lastMessagePreview === "🔒 зашифрованное сообщение" ||
-        cur.lastMessagePreview.startsWith("{");
-    if (!curIsPlaceholder && cur.lastTs && nts && nts < cur.lastTs) return false;
+    if (cur.lastMessagePreview && cur.lastTs && nts && nts < cur.lastTs) return false;
     cur.lastMessagePreview = preview;
     cur.lastTs = Math.max(cur.lastTs || 0, nts);
     return true;
@@ -2667,9 +2642,8 @@ async function loadHistory(peer, beforeTs) {
                         if (apiDir === "in") {
                             // Для входящих — расшифровываем body
                             pDecrypt.push(decryptWithTimeout(m).then(({ text: newBody, attachments: newAttArr }) => {
-                                // v160y2: пустой text + вложения = успех (фото без подписи).
-                                if (decryptResultHasContent({ text: newBody, attachments: newAttArr })) {
-                                    cachedMsg.body = newBody || "";
+                                if (newBody && newBody !== "__DECRYPT_FAILED__") {
+                                    cachedMsg.body = newBody;
                                 }
                                 if (newAttArr && newAttArr.length > 0) {
                                     cachedMsg.attachments = newAttArr;
@@ -3051,23 +3025,7 @@ function renderMessages() {
             if (isSystem) {
                 statusGlyph = "⏳";
             }
-            // v160y: если у входящего есть attach-чипы (msg-attach-list из
-            // attachments_meta), 📎-строки «name (size)» в тексте — легаси
-            // из decrypt-append или старого IDB-кэша → вырезаем: чип уже
-            // показывает имя+размер, иначе дубль. Регэксп точный — обычный
-            // текст пользователя с 📎 не трогаем (только «📎 … (…)» в конец строки).
-            let bodyText = m.body || "";
-            // v160y3: 🔒-заглушка в body + уже есть чипы attachments_meta
-            // (decrypt успешен, фото/чип отрендерились) → не показываем текстовую
-            // «🔒 шифрованное сообщение» строку. Пузырь = чип + превью файла.
-            if (m.direction === "in" && /\u{1F512}\s*шифрованное сообщение/u.test(bodyText) &&
-                Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0) {
-                bodyText = "";
-            }
-            if (m.direction === "in" && Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0 && bodyText.includes("📎")) {
-                const attLineRe = /^\s*📎\s.+\s\([^)]*\)\s*$/;
-                bodyText = bodyText.split("\n").filter((l) => !attLineRe.test(l)).join("\n").trim();
-            }
+            const bodyText = m.body || "";
             // Олег 2026-09-05 20:40: linkify — после escape. В iOS PWA
             // target=_blank открывает SFSafariViewController, в обычном
             // браузере — новый таб. Не заменяем внутреннюю навигацию.
@@ -4221,9 +4179,8 @@ async function pollHistoryForPeer(peer) {
                         (cachedMsg.body.includes("🔒") || cachedMsg.body.includes("шифрованное"));
                     if (cachedMsg && staleBody && !cachedMsg._decrypt_promise) {
                         cachedMsg._decrypt_promise = decryptWithTimeout(msg)
-                            .then(({ text: newBody, attachments: newAttArr, attachmentsMeta: newMeta }) => {
-                                // v160y2: пустой text + вложения = успех (фото без подписи).
-                                if (decryptResultHasContent({ text: newBody, attachments: newAttArr })) cachedMsg.body = newBody || "";
+                            .then(({ text: newBody, attachmentsMeta: newMeta }) => {
+                                if (newBody && newBody !== "__DECRYPT_FAILED__") cachedMsg.body = newBody;
                                 if (newMeta && newMeta.length) cachedMsg.attachments_meta = newMeta;
                                 if (activePeer === peer) renderMessages();
                             });
@@ -4293,13 +4250,6 @@ async function pollHistoryForPeer(peer) {
             }
 
             const { text: bodyText, isBinary } = extractMessageText(msg);
-            // v160y3: входящее с вложениями + 🔒-заглушка в body → скрываем заглушку
-            // сразу (фото/чип отрендерятся из attachments_meta, decrypt апгрейдит body).
-            // Раньше «🔒 шифрованное сообщение» висело под превью файла до decrypt.
-            if (fromNpub !== myNpub && Array.isArray(msg.attachments) && msg.attachments.length > 0 &&
-                typeof bodyText === "string" && /\u{1F512}\s*шифрованное сообщение/u.test(bodyText)) {
-                bodyText = "";
-            }
             // Lesson #199 (Олег 2026-08-26): для исходящих — идти в outbox вместо
             // "🔒 шифрованное сообщение", иначе UI покажет placeholder + decrypt errors.
             let resolvedBody = bodyText;
@@ -4471,13 +4421,12 @@ async function pollHistoryForPeer(peer) {
                             if (m.direction === "in" && m._server_msg && Array.isArray(m._server_msg.attachments)) {
                                 m.attachments_meta = m._server_msg.attachments;
                             }
-                            // v160y2: пустой text + вложения = успех (фото без подписи).
-                            if (decryptResultHasContent(r)) {
+                            if (r && r.text && r.text !== "__DECRYPT_FAILED__") {
                                 // Lesson #224: для outgoing НЕ перезаписывать body —
                                 // он либо из outbox (correct), либо из Lesson #201
                                 // fallback (correct). Только incoming — async decrypt.
                                 if (m.direction === "in") {
-                                    m.body = r.text || "";
+                                    m.body = r.text;
                                     if (r.attachments) m.attachments = r.attachments;
                                     // Privacy v154: подтягиваем meta со слитыми real names
                                     // из расшифровки (иначе чипы навсегда f-…bin).

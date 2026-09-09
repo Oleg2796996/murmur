@@ -8,7 +8,7 @@
 // no-store (js/css/html/json), браузер сам ходит в сеть каждый раз.
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
-const SW_VERSION = "murmur-sw6";
+const SW_VERSION = "murmur-sw5";
 
 self.addEventListener("install", (event) => {
   // Никаких precache — сервер отдаёт всё с no-store.
@@ -37,13 +37,8 @@ self.addEventListener("message", (event) => {
 });
 
 self.addEventListener("push", (event) => {
-  // v160y (Олег 19:20): платформенный сплит против дубля заголовка.
-  // macOS: title="" → система сама подставляет имя приложения ВТОРОЙ
-  // строкой (скриншот 18:45: "murmur / murmur / Новое сообщение").
-  // Лечение: title = текст, body = "" → баннер "murmur / Новое сообщение"
-  // (первую строку app-name рисует ОС, неустранимо).
-  // iOS: title="" как в v160w — чистая одна строка body (Lesson #395:
-  // непустой title на iOS → субтитл "from murmur").
+  // v160w (Олег 16:15): title пуст → iOS не рисует дубль-заголовок и
+  // субтитл "from murmur"; body без имени приложения → баннер чистый.
   let payload = { alias: "unknown", title: "", subtitle: "", body: "Новое сообщение" };
   try {
     if (event.data) {
@@ -52,17 +47,14 @@ self.addEventListener("push", (event) => {
   } catch (e) {
     console.warn("[murmur-sw] push payload not JSON", e);
   }
-  const text = payload.body || "Новое сообщение";
-  // WorkerNavigator.userAgent доступен в SW; iPad отдаёт Macintosh-UA →
-  // исключаем мобильные явно.
-  const ua = (self.navigator && self.navigator.userAgent) || "";
-  const isMac = /Macintosh|Mac OS X/i.test(ua) && !/iPhone|iPad|iPod/i.test(ua);
-  const title = isMac ? text : "";
+  const title = payload.title || "";
   const options = {
     // Олег 2026-09-05 20:40: subtitle/sender-превью убрали (минимум текста
-    // в пуше). Subtitle пустой → iOS не вставит «from <app>» авто-строку.
+    // в пуше). iOS Web Push subtitle всё равно игнорируется на
+    // chromium-клиентах, и на iOS мы хотим единый формат «Murmur / Новое
+    // сообщение». Subtitle пустой → iOS не вставит «from <app>» авто-строку.
     subtitle: "",
-    body: isMac ? "" : text,
+    body: payload.body || "Новое сообщение",
     icon: "/i192-2026b.png",
     badge: "/i192-2026b.png",
     tag: "murmur-" + (payload.envelope_hash_hex || "").slice(0, 8),
