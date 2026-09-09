@@ -754,8 +754,13 @@ async function decryptEnvelopeForRender(env) {
                 }
             }
         }
-        // Render attachments inline в body.
-        if (plain.attachments && plain.attachments.length) {
+        // v160y: Render attachments inline в body — ТОЛЬКО если чипов нет.
+        // attachmentsMeta рисуется отдельным чипом (msg-attach-list,
+        // render-attachments.js «📎 name (size)») — дубль текстом был только
+        // у входящих (исходящие строились без этого append, см. ~4296).
+        // Старый формат без attachments_meta: 📎-строка в body остаётся
+        // единственным указанием на файл — не теряем.
+        if (plain.attachments && plain.attachments.length && !attachmentsMeta.length) {
             for (const a of plain.attachments) {
                 body += "\n📎 " + a.name + " (" + formatSize(a.size) + ")";
             }
@@ -2122,7 +2127,15 @@ function setChatPreview(peer, ts, preview) {
     // старее. Старый guard блокировал его навсегда → пустое превью рисовалось
     // как «Нет сообщений». Пустое превью заполняем ВСЕГДА; guard защищает
     // только непустое значение от затирания более старым.
-    if (cur.lastMessagePreview && cur.lastTs && nts && nts < cur.lastTs) return false;
+    // v160y: 🔒/{-плейсхолдер (сервер не имеет ключей) — ЗАМЕНЯЕМЫЙ независимо
+    // от ts. Серверный last_ts раздут квитанциями (≥ новейшего реального msg),
+    // а реальное превью из IDB-кэша/decrypt несёт ts самого сообщения (< last_ts).
+    // v160x-guard «непустое не трогать при более старом ts» держал 🔒 вечно →
+    // «Нет сообщений» после reload (v160x лечил только ПУСТОЕ превью).
+    const curIsPlaceholder = !cur.lastMessagePreview ||
+        cur.lastMessagePreview === "🔒 зашифрованное сообщение" ||
+        cur.lastMessagePreview.startsWith("{");
+    if (!curIsPlaceholder && cur.lastTs && nts && nts < cur.lastTs) return false;
     cur.lastMessagePreview = preview;
     cur.lastTs = Math.max(cur.lastTs || 0, nts);
     return true;
@@ -3025,7 +3038,16 @@ function renderMessages() {
             if (isSystem) {
                 statusGlyph = "⏳";
             }
-            const bodyText = m.body || "";
+            // v160y: если у входящего есть attach-чипы (msg-attach-list из
+            // attachments_meta), 📎-строки «name (size)» в тексте — легаси
+            // из decrypt-append или старого IDB-кэша → вырезаем: чип уже
+            // показывает имя+размер, иначе дубль. Регэксп точный — обычный
+            // текст пользователя с 📎 не трогаем (только «📎 … (…)» в конец строки).
+            let bodyText = m.body || "";
+            if (m.direction === "in" && Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0 && bodyText.includes("📎")) {
+                const attLineRe = /^\s*📎\s.+\s\([^)]*\)\s*$/;
+                bodyText = bodyText.split("\n").filter((l) => !attLineRe.test(l)).join("\n").trim();
+            }
             // Олег 2026-09-05 20:40: linkify — после escape. В iOS PWA
             // target=_blank открывает SFSafariViewController, в обычном
             // браузере — новый таб. Не заменяем внутреннюю навигацию.
