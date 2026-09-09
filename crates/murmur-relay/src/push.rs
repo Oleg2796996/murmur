@@ -259,13 +259,12 @@ impl PushPayload {
             // нет. Теперь title=Murmur, body=murmur: новое сообщение.
             // Subtitle пустой (без превью sender). E2E ciphertext на relay не
             // расшифровывается, показывать нечего.
-            // Олег 2026-09-06 09:31 (v160k9b): Safari (Mac) парсит body, начинающийся
-            // с "murmur: …", как формат "App: text" → рендерит "Murmur from murmur
-            // новое сообщение". Заглавная M ("Murmur: …") не мачится с
-            // lowercase app-name "murmur" → auto-line "from murmur" не вставляется.
-            // iOS парсинг Case-sensitive — на iPhone тоже норм.
+            // Олег 2026-09-09 14:24 (v160u): текст пуша = просто «Новое сообщение»,
+            // без "Murmur:"/"from murmur" мусора. title пустой (Safari не рисует
+            // "Murmur from murmur"); body без двоеточия и без имени приложения —
+            // iOS/Android показывают только текст, app-name рисует ОС отдельной строкой.
             subtitle: "".to_string(),
-            body: "Murmur: новое сообщение".to_string(),
+            body: "Новое сообщение".to_string(),
         }
     }
 

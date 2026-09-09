@@ -43,7 +43,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
     <link rel="shortcut icon" href="/favicon-2026b.ico">
     <link rel="mask-icon" href="/mask-icon.svg" color="#229ED9">
-    <meta name="app-version" content="v160t">
+    <meta name="app-version" content="v160u">
     <link rel="stylesheet" href="styles.css?v=160q">
 </head>
 <body>
@@ -66,7 +66,11 @@
     <div id="messenger" class="messenger" hidden>
         <div id="version-banner" style="position:fixed;bottom:4px;right:4px;font-size:9px;color:#888;opacity:0.6;z-index:9999;font-family:monospace;pointer-events:none;background:rgba(0,0,0,0.3);padding:1px 4px;border-radius:3px;">…</div>
         <aside id="sidebar" class="sidebar">
-            <header class="sidebar-header">
+            <!-- v160u (Олег 14:24): иконки из шапки сайдбара убраны. Кнопки остаются
+                 в DOM (JS-хендлеры не ломаются: bell = push-toggle на случай дебага,
+                 floppy = кэш, diag = диагностика) — просто не отображаются. Пуши
+                 включаются автоматически (setupPushSubscription при старте). -->
+            <header class="sidebar-header" hidden>
                 <button id="btn-notifications" class="notif-btn" title="Включить уведомления">🔔</button>
                 <button id="btn-cache-stats" class="notif-btn" title="Статистика кэша вложений" style="display:none;">💾</button>
                 <button id="btn-diag" class="notif-btn" title="Диагностика">📊</button>
@@ -162,10 +166,10 @@
     <script src="blob-cache.js?v=160y" defer></script>
     <script src="app-store.js?v=160r" defer></script>
     <script src="render-attachments.js?v=160q" defer></script>
-    <script src="app.js?v=160t" defer></script>
+    <script src="app.js?v=160u" defer></script>
     <script>
       if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/service-worker.js?v=4").catch(console.error);
+        navigator.serviceWorker.register("/service-worker.js?v=5").catch(console.error);
       }
     </script>
 </body>

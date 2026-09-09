@@ -2127,9 +2127,15 @@ function renderChatList() {
     for (const c of sorted) {
         const div = document.createElement("div");
         div.className = "chat-item" + (activePeer === c.peer ? " active" : "");
-        const preview = c.lastMessagePreview
-            ? (c.lastMessagePreview.length > 60 ? c.lastMessagePreview.slice(0, 60) + "…" : c.lastMessagePreview)
-            : "Нет сообщений"; // v157b: без английского
+        // v160u (Олег 14:24): не показывать «🔒 зашифрованное сообщение» в сайдбаре.
+        // Сервер отдаёт placeholder (не имеет ключей), локальный decrypt приходит
+        // через 1-2 cек — раньше был видимый перебор «🔒 → текст». Теперь до
+        // реального превью показываем пустоту (как «Нет сообщений», но без текста):
+        // пользователь видит финальный текст один раз, без мерцания.
+        const isLockedPlaceholder = c.lastMessagePreview === "🔒 зашифрованное сообщение" || c.lastMessagePreview.startsWith("{");
+        const preview = (!c.lastMessagePreview || isLockedPlaceholder)
+            ? "Нет сообщений"
+            : (c.lastMessagePreview.length > 60 ? c.lastMessagePreview.slice(0, 60) + "…" : c.lastMessagePreview)
         const name = nameMap[c.peer];
         // Privacy v157: npub не показываем в списке чатов. Без имени — «Без имени».
         const displayName = name || "Без имени";

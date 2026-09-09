@@ -37,7 +37,7 @@ self.addEventListener("message", (event) => {
 });
 
 self.addEventListener("push", (event) => {
-  let payload = { alias: "unknown", title: "Murmur", subtitle: "", body: "murmur: новое сообщение" };
+  let payload = { alias: "unknown", title: "Murmur", subtitle: "", body: "Новое сообщение" };
   try {
     if (event.data) {
       payload = event.data.json();
@@ -52,7 +52,7 @@ self.addEventListener("push", (event) => {
     // chromium-клиентах, и на iOS мы хотим единый формат «Murmur / Новое
     // сообщение». Subtitle пустой → iOS не вставит «from <app>» авто-строку.
     subtitle: "",
-    body: payload.body || "murmur: новое сообщение",
+    body: payload.body || "Новое сообщение",
     icon: "/i192-2026b.png",
     badge: "/i192-2026b.png",
     tag: "murmur-" + (payload.envelope_hash_hex || "").slice(0, 8),
