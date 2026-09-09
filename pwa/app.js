@@ -2122,7 +2122,15 @@ function setChatPreview(peer, ts, preview) {
     // старее. Старый guard блокировал его навсегда → пустое превью рисовалось
     // как «Нет сообщений». Пустое превью заполняем ВСЕГДА; guard защищает
     // только непустое значение от затирания более старым.
-    if (cur.lastMessagePreview && cur.lastTs && nts && nts < cur.lastTs) return false;
+    // v160y4: 🔒/{-плейсхолдер (сервер не имеет ключей) — ЗАМЕНЯЕМЫЙ независимо
+    // от ts. Серверный last_ts раздут квитанциями (≥ новейшего реального msg),
+    // а реальное превью из IDB-кэша/decrypt несёт ts самого сообщения (< last_ts).
+    // v160x-guard «непустое не трогать при более старом ts» держал 🔒 вечно →
+    // «Нет сообщений» после reload (v160x лечил только ПУСТОЕ превью).
+    const curIsPlaceholder = !cur.lastMessagePreview ||
+        cur.lastMessagePreview === "🔒 зашифрованное сообщение" ||
+        cur.lastMessagePreview.startsWith("{");
+    if (!curIsPlaceholder && cur.lastTs && nts && nts < cur.lastTs) return false;
     cur.lastMessagePreview = preview;
     cur.lastTs = Math.max(cur.lastTs || 0, nts);
     return true;
