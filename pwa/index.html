@@ -170,7 +170,16 @@
     <script src="app.js?v=160y3" defer></script>
     <script>
       if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/service-worker.js?v=8").catch(console.error);
+        navigator.serviceWorker.register("/service-worker.js?v=8").then((reg) => {
+          // v160y3 (Олег 21:35): iOS PWA иногда держит старый SW неделями —
+          // ручной update-check при КАЖДОМ запуске приложения + немедленный
+          // activate (в SW skipWaiting+claim). Без этого пуши приходили
+          // со старым кодом (дубль «murmur from murmur»).
+          if (reg.waiting) {
+            reg.waiting.postMessage({ type: "SKIP_WAITING" });
+          }
+          reg.update().catch(() => {});
+        }).catch(console.error);
       }
     </script>
 </body>
