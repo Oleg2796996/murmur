@@ -7,11 +7,11 @@
     <meta name="theme-color" content="#17212b">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="murmur">
+    <meta name="apple-mobile-web-app-title" content="MurMur">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <meta property="og:title" content="murmur — приватный мессенджер">
+    <meta property="og:title" content="MurMur — приватный мессенджер">
     <meta property="og:description" content="Децентрализованный мессенджер без слежки. Открой ссылку, чтобы присоединиться.">
     <meta property="og:image" content="https://murmur.senswifi.ru/og-image.png">
     <meta property="og:image:width" content="1200">
@@ -19,11 +19,11 @@
     <meta property="og:url" content="https://murmur.senswifi.ru/">
     <meta property="og:type" content="website">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="murmur — приватный мессенджер">
+    <meta name="twitter:title" content="MurMur — приватный мессенджер">
     <meta name="twitter:description" content="Децентрализованный мессенджер без слежки. Открой ссылку, чтобы присоединиться.">
     <meta name="twitter:image" content="https://murmur.senswifi.ru/og-image.png">
-    <title>murmur</title>
-    <link rel="manifest" href="manifest.json?v=3">
+    <title>MurMur</title>
+    <link rel="manifest" href="manifest.json?v=4">
     <script>
     (function () {
         var standalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
@@ -43,18 +43,18 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
     <link rel="shortcut icon" href="/favicon-2026b.ico">
     <link rel="mask-icon" href="/mask-icon.svg" color="#229ED9">
-    <meta name="app-version" content="v160y9">
+    <meta name="app-version" content="v160y10">
     <link rel="stylesheet" href="styles.css?v=160q">
 </head>
 <body>
     <div id="identity-screen" class="screen">
         <noscript>
             <div style="position:fixed;top:0;left:0;right:0;background:#17212b;color:#888;padding:12px;text-align:center;z-index:99999;border-bottom:1px solid #333;font-family:sans-serif;font-size:13px;">
-                murmur требует JavaScript. Включи JS в настройках Safari.
+                MurMur требует JavaScript. Включи JS в настройках Safari.
             </div>
         </noscript>
         <div class="identity-card">
-            <h1 class="brand">murmur</h1>
+            <h1 class="brand">MurMur</h1>
             <p class="subtitle">приватный мессенджер</p>
             <div class="identity-error" id="identity-error" hidden></div>
             <div class="identity-section">
@@ -88,7 +88,7 @@
         </aside>
         <section id="no-chat" class="no-chat" hidden>
             <div class="no-chat-inner">
-                <h2>murmur</h2>
+                <h2>MurMur</h2>
                 <p>Выберите чат слева или создайте новый.</p>
             </div>
         </section>
@@ -165,13 +165,13 @@
         })();
     </script>
     <script src="blob-cache.js?v=160y" defer></script>
-    <script src="app-store.js?v=160y9" defer></script>
+    <script src="app-store.js?v=160y10" defer></script>
     <script src="render-attachments.js?v=160q" defer></script>
-    <script src="app.js?v=160y9" defer></script>
+    <script src="app.js?v=160y10" defer></script>
     <script>
       if ("serviceWorker" in navigator) {
-        // v160y9: cache-bust SW URL + visibilitychange update (iOS "from murmur" fix)
-        navigator.serviceWorker.register("/service-worker.js?v=10&t=" + Date.now()).then((reg) => {
+        // v160y10: MurMur branding + cache-bust SW (iOS push app-name refresh)
+        navigator.serviceWorker.register("/service-worker.js?v=11&t=" + Date.now()).then((reg) => {
           if (reg.waiting) {
             reg.waiting.postMessage({ type: "SKIP_WAITING" });
           }

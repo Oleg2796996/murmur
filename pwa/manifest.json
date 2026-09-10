@@ -1,6 +1,6 @@
 {
-  "name": "murmur",
-  "short_name": "murmur",
+  "name": "MurMur",
+  "short_name": "MurMur",
   "description": "Decentralized messenger with metadata privacy",
   "start_url": "/",
   "display": "standalone",
