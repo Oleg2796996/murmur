@@ -9,7 +9,7 @@
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
 const APP_DISPLAY_NAME = "MurMur";
-const SW_VERSION = "murmur-sw17"; // v160y19: убрали дубль MurMur в пушах (title="")
+const SW_VERSION = "murmur-sw18"; // v160y22: fix ReferenceError isDesktop → platform split restored
 
 self.addEventListener("install", (event) => {
   // Никаких precache — сервер отдаёт всё с no-store.
@@ -54,12 +54,18 @@ self.addEventListener("push", (event) => {
     console.warn("[murmur-sw] push payload not JSON", e);
   }
   const text = payload.body || "Откройте приложение, чтобы прочитать сообщение";
-  // v160y19: убрали дубль MurMur. Title пустой — ОС показывает имя приложения
-  // из manifest (MurMur) однократно. Было: system MurMur + our MurMur + text.
-  const title = "";
+  // WorkerNavigator.userAgent доступен в SW; iPad отдаёт Macintosh-UA →
+  // исключаем мобильные явно.
+  const ua = (self.navigator && self.navigator.userAgent) || "";
+  const isIOS = /iPhone|iPad|iPod/i.test(ua);
+  const isMac = /Macintosh|Mac OS X/i.test(ua) && !isIOS;
+  // macOS (v160y13): title=text, body="" — иначе баннер пустой/пропадает.
+  // iOS: title="", body=text — MurMur / from MurMur (Олег OK после reinstall).
+  // Win/HP: title="", body=text — без дубля title (v160y12).
+  const title = isMac ? text : "";
   const options = {
     subtitle: "",
-    body: isDesktop ? text : text,
+    body: isMac ? "" : text,
     icon: "/i192-2026b.png",
     badge: "/i192-2026b.png",
     tag: "murmur-" + (payload.envelope_hash_hex || "").slice(0, 8),
