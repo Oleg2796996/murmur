@@ -8,7 +8,7 @@
 // no-store (js/css/html/json), браузер сам ходит в сеть каждый раз.
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
-const SW_VERSION = "murmur-sw6";
+const SW_VERSION = "murmur-sw7"; // v160y8: force iOS SW refresh (push title fix)
 
 self.addEventListener("install", (event) => {
   // Никаких precache — сервер отдаёт всё с no-store.

@@ -43,7 +43,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
     <link rel="shortcut icon" href="/favicon-2026b.ico">
     <link rel="mask-icon" href="/mask-icon.svg" color="#229ED9">
-    <meta name="app-version" content="v160y7">
+    <meta name="app-version" content="v160y8">
     <link rel="stylesheet" href="styles.css?v=160q">
 </head>
 <body>
@@ -165,20 +165,25 @@
         })();
     </script>
     <script src="blob-cache.js?v=160y" defer></script>
-    <script src="app-store.js?v=160r" defer></script>
+    <script src="app-store.js?v=160y8" defer></script>
     <script src="render-attachments.js?v=160q" defer></script>
-    <script src="app.js?v=160y7" defer></script>
+    <script src="app.js?v=160y8" defer></script>
     <script>
       if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/service-worker.js?v=8").then((reg) => {
-          // v160y4 (Олег 21:35): iOS PWA может держать старый SW — ручной
-          // update-check при каждом запуске + немедленный activate
-          // (skipWaiting+claim в SW).
+        // v160y8: cache-bust SW URL + visibilitychange update (iOS stale sw6 fix)
+        navigator.serviceWorker.register("/service-worker.js?v=9&t=" + Date.now()).then((reg) => {
           if (reg.waiting) {
             reg.waiting.postMessage({ type: "SKIP_WAITING" });
           }
           reg.update().catch(() => {});
         }).catch(console.error);
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "visible" && navigator.serviceWorker.controller) {
+            navigator.serviceWorker.getRegistration().then((reg) => {
+              if (reg) reg.update().catch(() => {});
+            });
+          }
+        });
       }
     </script>
 </body>

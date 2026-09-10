@@ -68,6 +68,44 @@ const MAX_BLOB_CACHE_BYTES = 50 * 1024 * 1024; // 50MB
 // v160k9a: схема записи chat. Любая запись, чья schema < этого числа, при загрузке мигрирует.
 const CHAT_SCHEMA_V = 2;
 
+// v160y8 (Олег 2026-09-10): backup snapshot в kv — без bump DB_VERSION
+// (onupgradeneeded+onblocked на iOS PWA рискован). Дебаунс 30с/peer.
+const BACKUP_KEY_PREFIX = "chats_backup:";
+const BACKUP_DEBOUNCE_MS = 30000;
+const BACKUP_MAX_MESSAGES = 200;
+const _backupTs = new Map();
+
+function _backupKey(peer) {
+    return BACKUP_KEY_PREFIX + peer;
+}
+
+async function _writeChatBackup(peer, messages) {
+    if (!Array.isArray(messages) || messages.length === 0) return;
+    const now = Date.now();
+    const last = _backupTs.get(peer) || 0;
+    if (now - last < BACKUP_DEBOUNCE_MS) return;
+    _backupTs.set(peer, now);
+    const snapshot = messages.slice(-BACKUP_MAX_MESSAGES);
+    try {
+        await kv.set(_backupKey(peer), { peer, messages: snapshot, updatedAt: now });
+    } catch (e) {
+        console.warn("[backup] write failed", peer.slice(0, 12), e && e.message);
+    }
+}
+
+async function _readChatBackup(peer) {
+    try {
+        const rec = await kv.get(_backupKey(peer));
+        if (rec && Array.isArray(rec.messages) && rec.messages.length > 0) return rec.messages;
+    } catch (e) { /* ignore */ }
+    return null;
+}
+
+async function _deleteChatBackup(peer) {
+    try { await kv.del(_backupKey(peer)); } catch (e) { /* ignore */ }
+    _backupTs.delete(peer);
+}
+
 // Список всех localStorage ключей для миграции v1→v2
 const LEGACY_LS_KEYS = [
     "murmur.npub",
@@ -214,11 +252,11 @@ const kv = {
 
 const chats = {
     async getMessages(peer) {
-        return _tx(STORE_CHATS, "readonly", (store) => new Promise((resolve, reject) => {
+        const main = await _tx(STORE_CHATS, "readonly", (store) => new Promise((resolve, reject) => {
             const req = store.get(peer);
             req.onsuccess = () => {
                 const r = req.result;
-                if (!r) return resolve([]);
+                if (!r) return resolve(null);
                 // v160k9a (Олег 2026-09-05 23:48): старая запись без __schema →
                 // авто-апгрейд до 2 при следующем saveMessages. Увидим в логах.
                 if (!r.__schema) {
@@ -230,6 +268,16 @@ const chats = {
             };
             req.onerror = () => reject(req.error);
         }));
+        if (Array.isArray(main) && main.length > 0) return main;
+        // v160y8: main пуст — пробуем backup и self-heal main store.
+        const backup = await _readChatBackup(peer);
+        if (backup && backup.length > 0) {
+            console.log("[backup] restored", peer.slice(0, 12), "count=" + backup.length);
+            chats.saveMessages(peer, backup).catch((e) =>
+                console.warn("[backup] self-heal failed", peer.slice(0, 12), e && e.message));
+            return backup;
+        }
+        return main || [];
     },
     async saveMessages(peer, messages) {
         if (!Array.isArray(messages) || messages.length === 0) return;
@@ -348,15 +396,23 @@ const chats = {
         }
         // Диагностический лог: [save] peer=X total=Y kept=Z skipped=[idx...] err=...
         console.log("[save]", peer, "total=" + total, "kept=" + trimmed.length, "skipped=" + JSON.stringify(skipped));
-        return _tx(STORE_CHATS, "readwrite", (store) => new Promise((resolve, reject) => {
+        await _tx(STORE_CHATS, "readwrite", (store) => new Promise((resolve, reject) => {
             const req = store.put(record);
             req.onsuccess = () => resolve();
             req.onerror = () => {
                 // v160k9a: QuotaExceeded или DataCloneError на уровне записи — теперь это видно.
-                console.error("[save] IDB put failed", peer, "err=" + (req.error && req.error.message));
+                const errMsg = req.error && req.error.message ? req.error.message : "unknown";
+                console.error("[save] IDB put failed", peer, "err=" + errMsg);
+                try {
+                    localStorage.setItem("murmur.last_save_error", JSON.stringify({
+                        t: Date.now(), peer: peer.slice(0, 12), err: errMsg,
+                    }));
+                } catch (_) { /* ignore */ }
                 reject(req.error);
             };
         }));
+        // v160y8: backup last-known-good после успешного put.
+        _writeChatBackup(peer, trimmed).catch(() => {});
     },
     async appendMessage(peer, msg) {
         return _tx(STORE_CHATS, "readwrite", (store, tx) => new Promise(async (resolve, reject) => {
@@ -392,6 +448,7 @@ const chats = {
         }));
     },
     async deleteMessages(peer) {
+        await _deleteChatBackup(peer);
         return _tx(STORE_CHATS, "readwrite", (store) => new Promise((resolve, reject) => {
             const req = store.delete(peer);
             req.onsuccess = () => resolve();

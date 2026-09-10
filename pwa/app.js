@@ -246,6 +246,12 @@ async function saveMessagesCacheForPeer(peer) {
         if (maxTs) await updateMaxTs(peer, maxTs);
     } catch (e) {
         console.warn("[murmur] appStore.chats.saveMessages failed:", e);
+        try {
+            localStorage.setItem("murmur.last_save_error", JSON.stringify({
+                t: Date.now(), peer: peer.slice(0, 12), fn: "saveMessagesCacheForPeer",
+                err: String(e && e.message || e),
+            }));
+        } catch (_) { /* ignore */ }
     }
 }
 
@@ -2848,6 +2854,20 @@ async function loadHistory(peer, beforeTs) {
         new Promise((_, rej) => setTimeout(() => rej(new Error("loadHistory batch timeout " + BATCH_TIMEOUT_MS + "ms")), BATCH_TIMEOUT_MS)),
     ]);
             if (newMsgs.length > 0) {
+                // v160y8 (Олег 2026-09-10): сервер после TTL отдаёт только свежие
+                // строки. Если IDB-кэш не успел/не смог загрузиться — in-memory
+                // пуст → UI показывает только «Сегодня». Прямой re-read IDB.
+                if ((!messages[peer] || messages[peer].length === 0) && window.appStore) {
+                    try {
+                        const cached = await window.appStore.chats.getMessages(peer);
+                        if (Array.isArray(cached) && cached.length > 0) {
+                            messages[peer] = cached;
+                            console.log("[murmur] loadHistory: IDB backfill", peer.slice(0, 12), "count=" + cached.length);
+                        }
+                    } catch (e) {
+                        console.warn("[murmur] loadHistory: IDB backfill failed:", e && e.message);
+                    }
+                }
                 // v160m: fix for "missing <10 messages".
                 // If server returns new messages, we MUST NOT overwrite the memory
                 // state with just newMsgs.concat(messages[peer]) if that array
@@ -4556,7 +4576,16 @@ async function pollHistoryForPeer(peer) {
                         // v160q: merge meta меняет данные и при added=false (кэш-строки) —
                         // сохраняем кэш после КАЖДОГО завершения Phase-3 цепочки,
                         // иначе IDB остаётся с f-…bin без _plainName навсегда.
-                        try { saveMessagesCacheForPeer(peer); } catch (e) {}
+                        // v160y8: не глотаем ошибки save — unhandled rejection → txn abort.
+                        saveMessagesCacheForPeer(peer).catch((e) => {
+                            console.warn("[pollHist] saveMessagesCacheForPeer failed:", e && e.message);
+                            try {
+                                localStorage.setItem("murmur.last_save_error", JSON.stringify({
+                                    t: Date.now(), peer: peer.slice(0, 12), fn: "pollHist.save",
+                                    err: String(e && e.message || e),
+                                }));
+                            } catch (_) { /* ignore */ }
+                        });
                     });
             }
     } catch (e) {
