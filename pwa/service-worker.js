@@ -8,8 +8,7 @@
 // no-store (js/css/html/json), браузер сам ходит в сеть каждый раз.
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
-const APP_DISPLAY_NAME = "MurMur";
-const SW_VERSION = "murmur-sw11"; // v160y12: remove desktop title dupe, title="" everywhere
+const SW_VERSION = "murmur-sw12"; // v160y13: restore macOS title=text/body="" split
 
 self.addEventListener("install", (event) => {
   // Никаких precache — сервер отдаёт всё с no-store.
@@ -58,14 +57,14 @@ self.addEventListener("push", (event) => {
   // исключаем мобильные явно.
   const ua = (self.navigator && self.navigator.userAgent) || "";
   const isIOS = /iPhone|iPad|iPod/i.test(ua);
-  const isAndroid = /Android/i.test(ua);
-  const isDesktop = !isIOS && !isAndroid;
-  // v160y12 (Олег): убрать дубль title на HP — title="" везде.
-  // Desktop покажет app-name (murmur/MurMur) + body, без дубля.
-  const title = "";
+  const isMac = /Macintosh|Mac OS X/i.test(ua) && !isIOS;
+  // macOS (v160y): title=text, body="" — иначе баннер пустой/пропадает.
+  // iOS: title="", body=text — MurMur / from MurMur (Олег OK после reinstall).
+  // Win/HP: title="", body=text — без дубля title (v160y12).
+  const title = isMac ? text : "";
   const options = {
     subtitle: "",
-    body: isDesktop ? text : text,
+    body: isMac ? "" : text,
     icon: "/i192-2026b.png",
     badge: "/i192-2026b.png",
     tag: "murmur-" + (payload.envelope_hash_hex || "").slice(0, 8),
