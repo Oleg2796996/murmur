@@ -9,7 +9,7 @@
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
 const APP_DISPLAY_NAME = "MurMur";
-const SW_VERSION = "murmur-sw15"; // v160y17: Safari macOS needs user gesture for notification permission
+const SW_VERSION = "murmur-sw16"; // v160y18: вернули кнопку 🔔 для ручного re-subscribe на macOS PWA
 
 self.addEventListener("install", (event) => {
   // Никаких precache — сервер отдаёт всё с no-store.
