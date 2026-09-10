@@ -5013,45 +5013,63 @@ if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", async () => { 
         await requestNotificationPermission();
         warmOutboxCache(); tryAutoRestore(); 
-        // v160y15: auto-restore push subscription after PWA reinstall (with visible diag)
+        // v160y16: auto-restore push subscription — handles "default" permission on macOS PWA
         if (!("PushManager" in window)) {
             showPushDiag("PushManager NOT supported");
-        } else if (Notification.permission !== "granted") {
-            showPushDiag("permission=" + Notification.permission);
-        } else {
-            try {
-                showPushDiag("granted — checking subscription...");
-                const reg = await navigator.serviceWorker.ready;
-                showPushDiag("SW ready");
-                const sub = await reg.pushManager.getSubscription();
-                if (sub) {
-                    showPushDiag("already subscribed: " + sub.endpoint.slice(0, 40));
-                } else {
-                    showPushDiag("no sub — calling requestPushPermission()");
-                    await requestPushPermission();
-                    showPushDiag("requestPushPermission done");
-                }
-            } catch (e) {
-                showPushDiag("ERROR: " + (e && e.message));
+            return;
+        }
+        try {
+            let perm = Notification.permission;
+            showPushDiag("perm=" + perm);
+            if (perm === "default") {
+                showPushDiag("requesting permission...");
+                perm = await Notification.requestPermission();
+                showPushDiag("after request: " + perm);
             }
+            if (perm !== "granted") {
+                showPushDiag("not granted, skipping");
+                return;
+            }
+            showPushDiag("granted — checking subscription...");
+            const reg = await navigator.serviceWorker.ready;
+            showPushDiag("SW ready");
+            let sub = await reg.pushManager.getSubscription();
+            if (sub) {
+                showPushDiag("already subscribed: " + sub.endpoint.slice(0, 40));
+            } else {
+                showPushDiag("no sub — calling requestPushPermission()");
+                await requestPushPermission();
+                showPushDiag("requestPushPermission done");
+            }
+        } catch (e) {
+            showPushDiag("ERROR: " + (e && e.message));
         }
     });
 } else {
     requestNotificationPermission();
     warmOutboxCache();
     tryAutoRestore();
-    // v160y15: auto-restore push subscription after PWA reinstall (with visible diag)
+    // v160y16: auto-restore push subscription — handles "default" permission on macOS PWA
     if (!("PushManager" in window)) {
         showPushDiag("PushManager NOT supported");
-    } else if (Notification.permission !== "granted") {
-        showPushDiag("permission=" + Notification.permission);
     } else {
         (async () => {
             try {
+                let perm = Notification.permission;
+                showPushDiag("perm=" + perm);
+                if (perm === "default") {
+                    showPushDiag("requesting permission...");
+                    perm = await Notification.requestPermission();
+                    showPushDiag("after request: " + perm);
+                }
+                if (perm !== "granted") {
+                    showPushDiag("not granted, skipping");
+                    return;
+                }
                 showPushDiag("granted — checking subscription...");
                 const reg = await navigator.serviceWorker.ready;
                 showPushDiag("SW ready");
-                const sub = await reg.pushManager.getSubscription();
+                let sub = await reg.pushManager.getSubscription();
                 if (sub) {
                     showPushDiag("already subscribed: " + sub.endpoint.slice(0, 40));
                 } else {
