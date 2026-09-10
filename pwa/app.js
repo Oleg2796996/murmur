@@ -5022,9 +5022,7 @@ if (document.readyState === "loading") {
             let perm = Notification.permission;
             showPushDiag("perm=" + perm);
             if (perm === "default") {
-                showPushDiag("requesting permission...");
-                perm = await Notification.requestPermission();
-                showPushDiag("after request: " + perm);
+                showPushDiag("perm=default — NEED USER GESTURE: click 🔔 to enable notifications");
             }
             if (perm !== "granted") {
                 showPushDiag("not granted, skipping");
@@ -5058,9 +5056,7 @@ if (document.readyState === "loading") {
                 let perm = Notification.permission;
                 showPushDiag("perm=" + perm);
                 if (perm === "default") {
-                    showPushDiag("requesting permission...");
-                    perm = await Notification.requestPermission();
-                    showPushDiag("after request: " + perm);
+                showPushDiag("perm=default — NEED USER GESTURE: click 🔔 to enable notifications");
                 }
                 if (perm !== "granted") {
                     showPushDiag("not granted, skipping");
