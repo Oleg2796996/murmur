@@ -4996,21 +4996,43 @@ async function tryAutoRestore() {
     }
 }
 
+// ===== TEMPORARY DIAGNOSTIC (v160y15) — remove after macOS push fixed =====
+function showPushDiag(msg) {
+    let el = document.getElementById('push-diag');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'push-diag';
+        el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,0.8);color:#0f0;padding:6px;font-size:11px;z-index:99999;font-family:monospace;white-space:pre-wrap;max-height:80px;overflow:auto;';
+        document.body.appendChild(el);
+    }
+    el.textContent += '[DIAG] ' + msg + '\n';
+}
+// ======================================================================
+
 if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", async () => { 
         await requestNotificationPermission();
         warmOutboxCache(); tryAutoRestore(); 
-        // v160y14: auto-restore push subscription after PWA reinstall
-        if ("PushManager" in window && Notification.permission === "granted") {
+        // v160y15: auto-restore push subscription after PWA reinstall (with visible diag)
+        if (!("PushManager" in window)) {
+            showPushDiag("PushManager NOT supported");
+        } else if (Notification.permission !== "granted") {
+            showPushDiag("permission=" + Notification.permission);
+        } else {
             try {
+                showPushDiag("granted — checking subscription...");
                 const reg = await navigator.serviceWorker.ready;
+                showPushDiag("SW ready");
                 const sub = await reg.pushManager.getSubscription();
-                if (!sub) {
-                    console.log("[murmur] auto-subscribing push after PWA reinstall");
+                if (sub) {
+                    showPushDiag("already subscribed: " + sub.endpoint.slice(0, 40));
+                } else {
+                    showPushDiag("no sub — calling requestPushPermission()");
                     await requestPushPermission();
+                    showPushDiag("requestPushPermission done");
                 }
             } catch (e) {
-                console.warn("[murmur] auto-subscribe failed", e);
+                showPushDiag("ERROR: " + (e && e.message));
             }
         }
     });
@@ -5018,18 +5040,27 @@ if (document.readyState === "loading") {
     requestNotificationPermission();
     warmOutboxCache();
     tryAutoRestore();
-    // v160y14: auto-restore push subscription after PWA reinstall
-    if ("PushManager" in window && Notification.permission === "granted") {
+    // v160y15: auto-restore push subscription after PWA reinstall (with visible diag)
+    if (!("PushManager" in window)) {
+        showPushDiag("PushManager NOT supported");
+    } else if (Notification.permission !== "granted") {
+        showPushDiag("permission=" + Notification.permission);
+    } else {
         (async () => {
             try {
+                showPushDiag("granted — checking subscription...");
                 const reg = await navigator.serviceWorker.ready;
+                showPushDiag("SW ready");
                 const sub = await reg.pushManager.getSubscription();
-                if (!sub) {
-                    console.log("[murmur] auto-subscribing push after PWA reinstall");
+                if (sub) {
+                    showPushDiag("already subscribed: " + sub.endpoint.slice(0, 40));
+                } else {
+                    showPushDiag("no sub — calling requestPushPermission()");
                     await requestPushPermission();
+                    showPushDiag("requestPushPermission done");
                 }
             } catch (e) {
-                console.warn("[murmur] auto-subscribe failed", e);
+                showPushDiag("ERROR: " + (e && e.message));
             }
         })();
     }

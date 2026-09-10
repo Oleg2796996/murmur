@@ -9,7 +9,7 @@
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
 const APP_DISPLAY_NAME = "MurMur";
-const SW_VERSION = "murmur-sw13"; // v160y14: auto-subscribe push after PWA reinstall
+const SW_VERSION = "murmur-sw14"; // v160y15: visible push diagnostic for macOS debugging
 
 self.addEventListener("install", (event) => {
   // Никаких precache — сервер отдаёт всё с no-store.
