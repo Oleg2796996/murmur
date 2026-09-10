@@ -4996,86 +4996,30 @@ async function tryAutoRestore() {
     }
 }
 
-// ===== TEMPORARY DIAGNOSTIC (v160y15) — remove after macOS push fixed =====
-function showPushDiag(msg) {
-    let el = document.getElementById('push-diag');
-    if (!el) {
-        el = document.createElement('div');
-        el.id = 'push-diag';
-        el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,0.8);color:#0f0;padding:6px;font-size:11px;z-index:99999;font-family:monospace;white-space:pre-wrap;max-height:80px;overflow:auto;';
-        document.body.appendChild(el);
-    }
-    el.textContent += '[DIAG] ' + msg + '\n';
-}
-// ======================================================================
-
+// v160y19: auto-restore push subscription (clean, no diagnostic)
 if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", async () => { 
         await requestNotificationPermission();
         warmOutboxCache(); tryAutoRestore(); 
-        // v160y16: auto-restore push subscription — handles "default" permission on macOS PWA
-        if (!("PushManager" in window)) {
-            showPushDiag("PushManager NOT supported");
-            return;
-        }
-        try {
-            let perm = Notification.permission;
-            showPushDiag("perm=" + perm);
-            if (perm === "default") {
-                showPushDiag("perm=default — NEED USER GESTURE: click 🔔 to enable notifications");
-            }
-            if (perm !== "granted") {
-                showPushDiag("not granted, skipping");
-                return;
-            }
-            showPushDiag("granted — checking subscription...");
-            const reg = await navigator.serviceWorker.ready;
-            showPushDiag("SW ready");
-            let sub = await reg.pushManager.getSubscription();
-            if (sub) {
-                showPushDiag("already subscribed: " + sub.endpoint.slice(0, 40));
-            } else {
-                showPushDiag("no sub — calling requestPushPermission()");
-                await requestPushPermission();
-                showPushDiag("requestPushPermission done");
-            }
-        } catch (e) {
-            showPushDiag("ERROR: " + (e && e.message));
+        if ("PushManager" in window && Notification.permission === "granted") {
+            try {
+                const reg = await navigator.serviceWorker.ready;
+                const sub = await reg.pushManager.getSubscription();
+                if (!sub) await requestPushPermission();
+            } catch (e) { console.warn("[murmur] auto-subscribe failed", e); }
         }
     });
 } else {
     requestNotificationPermission();
     warmOutboxCache();
     tryAutoRestore();
-    // v160y16: auto-restore push subscription — handles "default" permission on macOS PWA
-    if (!("PushManager" in window)) {
-        showPushDiag("PushManager NOT supported");
-    } else {
+    if ("PushManager" in window && Notification.permission === "granted") {
         (async () => {
             try {
-                let perm = Notification.permission;
-                showPushDiag("perm=" + perm);
-                if (perm === "default") {
-                showPushDiag("perm=default — NEED USER GESTURE: click 🔔 to enable notifications");
-                }
-                if (perm !== "granted") {
-                    showPushDiag("not granted, skipping");
-                    return;
-                }
-                showPushDiag("granted — checking subscription...");
                 const reg = await navigator.serviceWorker.ready;
-                showPushDiag("SW ready");
-                let sub = await reg.pushManager.getSubscription();
-                if (sub) {
-                    showPushDiag("already subscribed: " + sub.endpoint.slice(0, 40));
-                } else {
-                    showPushDiag("no sub — calling requestPushPermission()");
-                    await requestPushPermission();
-                    showPushDiag("requestPushPermission done");
-                }
-            } catch (e) {
-                showPushDiag("ERROR: " + (e && e.message));
-            }
+                const sub = await reg.pushManager.getSubscription();
+                if (!sub) await requestPushPermission();
+            } catch (e) { console.warn("[murmur] auto-subscribe failed", e); }
         })();
     }
 }

@@ -43,7 +43,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
     <link rel="shortcut icon" href="/favicon-2026b.ico">
     <link rel="mask-icon" href="/mask-icon.svg" color="#229ED9">
-    <meta name="app-version" content="v160y18">
+    <meta name="app-version" content="v160y19">
     <link rel="stylesheet" href="styles.css?v=160q">
 </head>
 <body>
@@ -170,8 +170,8 @@
     <script src="app.js?v=160y10" defer></script>
     <script>
       if ("serviceWorker" in navigator) {
-        // v160y18: вернули кнопку 🔔 для ручного re-subscribe на macOS PWA
-        navigator.serviceWorker.register("/service-worker.js?v=18&t=" + Date.now()).then((reg) => {
+        // v160y19: убрали дубль MurMur в пушах (title="", ОС берёт из manifest)
+        navigator.serviceWorker.register("/service-worker.js?v=19&t=" + Date.now()).then((reg) => {
           if (reg.waiting) {
             reg.waiting.postMessage({ type: "SKIP_WAITING" });
           }

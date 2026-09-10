@@ -9,7 +9,7 @@
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
 const APP_DISPLAY_NAME = "MurMur";
-const SW_VERSION = "murmur-sw16"; // v160y18: вернули кнопку 🔔 для ручного re-subscribe на macOS PWA
+const SW_VERSION = "murmur-sw17"; // v160y19: убрали дубль MurMur в пушах (title="")
 
 self.addEventListener("install", (event) => {
   // Никаких precache — сервер отдаёт всё с no-store.
@@ -54,17 +54,9 @@ self.addEventListener("push", (event) => {
     console.warn("[murmur-sw] push payload not JSON", e);
   }
   const text = payload.body || "Откройте приложение, чтобы прочитать сообщение";
-  // WorkerNavigator.userAgent доступен в SW; iPad отдаёт Macintosh-UA →
-  // исключаем мобильные явно.
-  const ua = (self.navigator && self.navigator.userAgent) || "";
-  const isIOS = /iPhone|iPad|iPod/i.test(ua);
-  const isAndroid = /Android/i.test(ua);
-  const isDesktop = !isIOS && !isAndroid;
-  // iOS (Олег 2026-09-10): MurMur / from MurMur после reinstall — оставляем.
-  // Desktop (HP Win PWA, Mac, Linux): title=MurMur, body=text — OS app-name
-  // строка может остаться lowercase если PWA установлена давно, но title
-  // в баннере будет MurMur с заглавными.
-  const title = isDesktop ? APP_DISPLAY_NAME : "";
+  // v160y19: убрали дубль MurMur. Title пустой — ОС показывает имя приложения
+  // из manifest (MurMur) однократно. Было: system MurMur + our MurMur + text.
+  const title = "";
   const options = {
     subtitle: "",
     body: isDesktop ? text : text,
