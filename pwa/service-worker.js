@@ -8,7 +8,7 @@
 // no-store (js/css/html/json), браузер сам ходит в сеть каждый раз.
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
-const SW_VERSION = "murmur-sw7"; // v160y8: force iOS SW refresh (push title fix)
+const SW_VERSION = "murmur-sw8"; // v160y9: longer action body against iOS "from murmur" subtitle
 
 self.addEventListener("install", (event) => {
   // Никаких precache — сервер отдаёт всё с no-store.
@@ -44,7 +44,7 @@ self.addEventListener("push", (event) => {
   // (первую строку app-name рисует ОС, неустранимо).
   // iOS: title="" как в v160w — чистая одна строка body (Lesson #395:
   // непустой title на iOS → субтитл "from murmur").
-  let payload = { alias: "unknown", title: "", subtitle: "", body: "Новое сообщение" };
+  let payload = { alias: "unknown", title: "", subtitle: "", body: "Откройте приложение, чтобы прочитать сообщение" };
   try {
     if (event.data) {
       payload = event.data.json();
@@ -52,7 +52,7 @@ self.addEventListener("push", (event) => {
   } catch (e) {
     console.warn("[murmur-sw] push payload not JSON", e);
   }
-  const text = payload.body || "Новое сообщение";
+  const text = payload.body || "Откройте приложение, чтобы прочитать сообщение";
   // WorkerNavigator.userAgent доступен в SW; iPad отдаёт Macintosh-UA →
   // исключаем мобильные явно.
   const ua = (self.navigator && self.navigator.userAgent) || "";

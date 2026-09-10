@@ -262,12 +262,11 @@ impl PushPayload {
             // нет. Теперь title=Murmur, body=murmur: новое сообщение.
             // Subtitle пустой (без превью sender). E2E ciphertext на relay не
             // расшифровывается, показывать нечего.
-            // Олег 2026-09-09 16:15 (v160w): body = «Новое сообщение».
-            // Любые префиксы/двоеточия iOS дополняет своим баннером
-            // ("from murmur" / app-name строкой) — единственный чистый
-            // вариант на iOS: title пуст + body без имени приложения.
+            // Олег 2026-09-10 07:16 (v160y9): короткий body «Новое сообщение» →
+            // iOS вставляет субтитл «from murmur» (скрин: murmur / from murmur / …).
+            // Длинная action-фраза без имени приложения — Lesson #396 (2026-08-23).
             subtitle: "".to_string(),
-            body: "Новое сообщение".to_string(),
+            body: "Откройте приложение, чтобы прочитать сообщение".to_string(),
         }
     }
 
@@ -1527,7 +1526,7 @@ mod tests {
         // v160k9/v160v: subtitle пустой (минимум текста в пуше, ТЗ Олега) —
         // и тем самым full npub не утекает.
         assert_eq!(payload.subtitle, "", "subtitle must be empty: {}", payload.subtitle);
-        assert_eq!(payload.body, "Новое сообщение");
+        assert_eq!(payload.body, "Откройте приложение, чтобы прочитать сообщение");
         // JSON field `alias` carries the recipient npub (routing key).
         assert_eq!(payload.alias, "oleg-hp");
 
