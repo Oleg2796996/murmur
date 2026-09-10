@@ -5000,11 +5000,39 @@ if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", async () => { 
         await requestNotificationPermission();
         warmOutboxCache(); tryAutoRestore(); 
+        // v160y14: auto-restore push subscription after PWA reinstall
+        if ("PushManager" in window && Notification.permission === "granted") {
+            try {
+                const reg = await navigator.serviceWorker.ready;
+                const sub = await reg.pushManager.getSubscription();
+                if (!sub) {
+                    console.log("[murmur] auto-subscribing push after PWA reinstall");
+                    await requestPushPermission();
+                }
+            } catch (e) {
+                console.warn("[murmur] auto-subscribe failed", e);
+            }
+        }
     });
 } else {
     requestNotificationPermission();
     warmOutboxCache();
     tryAutoRestore();
+    // v160y14: auto-restore push subscription after PWA reinstall
+    if ("PushManager" in window && Notification.permission === "granted") {
+        (async () => {
+            try {
+                const reg = await navigator.serviceWorker.ready;
+                const sub = await reg.pushManager.getSubscription();
+                if (!sub) {
+                    console.log("[murmur] auto-subscribing push after PWA reinstall");
+                    await requestPushPermission();
+                }
+            } catch (e) {
+                console.warn("[murmur] auto-subscribe failed", e);
+            }
+        })();
+    }
 }
 
 async function requestNotificationPermission() {
