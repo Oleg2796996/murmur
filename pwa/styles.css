@@ -245,7 +245,7 @@ button.small { padding: 8px 12px; font-size: 13px; }
     margin-left: 6px;
     transition: background 0.15s ease;
 }
-.notif-btn:hover { background: var(--accent); border-color: var(--accent); }
+.notif-btn:hover { border-color: var(--accent); }
 .notif-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 /* v157 (Олег 31.08 «стрелка назад совсем мелкая»): нормальный tap-target.
    Раньше у .back-btn не было собственных стилей размера — рендерился системным
