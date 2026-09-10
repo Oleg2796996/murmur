@@ -9,7 +9,7 @@
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
 const APP_DISPLAY_NAME = "MurMur";
-const SW_VERSION = "murmur-sw10"; // v160y11: desktop push title = MurMur (HP/Win/Mac)
+const SW_VERSION = "murmur-sw11"; // v160y12: remove desktop title dupe, title="" everywhere
 
 self.addEventListener("install", (event) => {
   // Никаких precache — сервер отдаёт всё с no-store.
@@ -60,11 +60,9 @@ self.addEventListener("push", (event) => {
   const isIOS = /iPhone|iPad|iPod/i.test(ua);
   const isAndroid = /Android/i.test(ua);
   const isDesktop = !isIOS && !isAndroid;
-  // iOS (Олег 2026-09-10): MurMur / from MurMur после reinstall — оставляем.
-  // Desktop (HP Win PWA, Mac, Linux): title=MurMur, body=text — OS app-name
-  // строка может остаться lowercase если PWA установлена давно, но title
-  // в баннере будет MurMur с заглавными.
-  const title = isDesktop ? APP_DISPLAY_NAME : "";
+  // v160y12 (Олег): убрать дубль title на HP — title="" везде.
+  // Desktop покажет app-name (murmur/MurMur) + body, без дубля.
+  const title = "";
   const options = {
     subtitle: "",
     body: isDesktop ? text : text,
