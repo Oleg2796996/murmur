@@ -8,7 +8,8 @@
 // no-store (js/css/html/json), браузер сам ходит в сеть каждый раз.
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
-const SW_VERSION = "murmur-sw9"; // v160y10: MurMur branding refresh (manifest + apple title)
+const APP_DISPLAY_NAME = "MurMur";
+const SW_VERSION = "murmur-sw10"; // v160y11: desktop push title = MurMur (HP/Win/Mac)
 
 self.addEventListener("install", (event) => {
   // Никаких precache — сервер отдаёт всё с no-store.
@@ -56,13 +57,17 @@ self.addEventListener("push", (event) => {
   // WorkerNavigator.userAgent доступен в SW; iPad отдаёт Macintosh-UA →
   // исключаем мобильные явно.
   const ua = (self.navigator && self.navigator.userAgent) || "";
-  const isMac = /Macintosh|Mac OS X/i.test(ua) && !/iPhone|iPad|iPod/i.test(ua);
-  const title = isMac ? text : "";
+  const isIOS = /iPhone|iPad|iPod/i.test(ua);
+  const isAndroid = /Android/i.test(ua);
+  const isDesktop = !isIOS && !isAndroid;
+  // iOS (Олег 2026-09-10): MurMur / from MurMur после reinstall — оставляем.
+  // Desktop (HP Win PWA, Mac, Linux): title=MurMur, body=text — OS app-name
+  // строка может остаться lowercase если PWA установлена давно, но title
+  // в баннере будет MurMur с заглавными.
+  const title = isDesktop ? APP_DISPLAY_NAME : "";
   const options = {
-    // Олег 2026-09-05 20:40: subtitle/sender-превью убрали (минимум текста
-    // в пуше). Subtitle пустой → iOS не вставит «from <app>» авто-строку.
     subtitle: "",
-    body: isMac ? "" : text,
+    body: isDesktop ? text : text,
     icon: "/i192-2026b.png",
     badge: "/i192-2026b.png",
     tag: "murmur-" + (payload.envelope_hash_hex || "").slice(0, 8),
