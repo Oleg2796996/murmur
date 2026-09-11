@@ -645,7 +645,7 @@ impl MessageStore {
     /// удаляются немедленно. Never-linked orphan uploads живут до 24h;
     /// downloaded blobs — ~5 min после GET /api/blob/{id} (cron).
     pub fn delete_envelope_by_hash(&self, hash: &str) -> rusqlite::Result<()> {
-        let detached_paths = {
+        let detached_paths: Vec<String> = {
             let c = self.conn.lock();
             let tx = c.unchecked_transaction()?;
             tx.execute(
@@ -654,16 +654,17 @@ impl MessageStore {
                 params![hash],
             )?;
             tx.execute("DELETE FROM attachment_refs WHERE envelope_hash = ?1", params![hash])?;
+            // Collect detached blobs BEFORE tx.commit() — drop statement first
             let mut s = tx.prepare(
                 "SELECT b.id, b.storage_path FROM blobs b \
                  WHERE b.ref_count = 0 \
                  AND NOT EXISTS (SELECT 1 FROM attachment_refs ar WHERE ar.blob_id = b.id)",
             )?;
             let detached: Vec<(String, String)> = s
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-                ?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .filter_map(|r| r.ok())
                 .collect();
+            drop(s); // drop statement before tx.commit
             for (blob_id, _) in &detached {
                 tx.execute("DELETE FROM blobs WHERE id = ?1", params![blob_id])?;
             }
@@ -671,7 +672,7 @@ impl MessageStore {
             detached
                 .into_iter()
                 .filter_map(|(_, p)| if p.is_empty() { None } else { Some(p) })
-                .collect::<Vec<String>>()
+                .collect()
         };
         for p in &detached_paths {
             let path = std::path::Path::new(p);
@@ -699,16 +700,18 @@ impl MessageStore {
     pub fn delete_stale_downloaded_blobs(&self, now: i64, grace_secs: i64) -> rusqlite::Result<Vec<String>> {
         let mut deleted_files: Vec<String> = Vec::new();
         let cutoff = now.saturating_sub(grace_secs);
+        // Collect ids first — drop statement and connection before re-locking
         let blob_ids: Vec<(String, String)> = {
             let c = self.conn.lock();
             let mut s = c.prepare(
                 "SELECT id, storage_path FROM blobs \
                  WHERE downloaded_at > 0 AND downloaded_at < ?1",
             )?;
-            s.query_map(params![cutoff], |r| Ok((r.get(0)?, r.get(1)?)))
-                ?
+            let ids: Vec<(String, String)> = s
+                .query_map(params![cutoff], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .filter_map(|r| r.ok())
-                .collect()
+                .collect();
+            ids
         };
         if blob_ids.is_empty() {
             return Ok(deleted_files);
