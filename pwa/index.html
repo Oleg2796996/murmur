@@ -170,7 +170,7 @@
     <script>
       if ("serviceWorker" in navigator) {
         // v160y20: чистый UI — только 🔔, без 💾📊, hover без нажатого эффекта
-        navigator.serviceWorker.register("/service-worker.js?v=21&t=" + Date.now()).then((reg) => {
+        navigator.serviceWorker.register("/service-worker.js?v=22&t=" + Date.now()).then((reg) => {
           if (reg.waiting) {
             reg.waiting.postMessage({ type: "SKIP_WAITING" });
           }

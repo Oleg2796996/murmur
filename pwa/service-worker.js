@@ -9,7 +9,7 @@
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
 const APP_DISPLAY_NAME = "MurMur";
-const SW_VERSION = "murmur-sw18"; // v160y22: fix ReferenceError isDesktop → platform split restored
+const SW_VERSION = "murmur-sw19"; // v160y22fix: force SW refresh after v160y23 regression rollback
 
 self.addEventListener("install", (event) => {
   // Никаких precache — сервер отдаёт всё с no-store.
