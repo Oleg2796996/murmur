@@ -378,12 +378,16 @@ function deriveFriendlyName(name, mime) {
 }
 
 // Fullscreen lightbox for images
+// v160y23: blob URL принадлежит превью в чате (__murmurBlobOwners) —
+// revoke только если overlay создал СВОЙ URL (как openVideoFullscreen).
 function openFullscreen(blobUrl, mime) {
     const overlay = document.createElement("div");
     overlay.className = "fullscreen-overlay";
+    const ownedByChat = window.__murmurBlobOwners &&
+        Array.from(window.__murmurBlobOwners.values()).includes(blobUrl);
     overlay.onclick = () => {
         overlay.remove();
-        URL.revokeObjectURL(blobUrl);
+        if (!ownedByChat) URL.revokeObjectURL(blobUrl);
     };
     const img = document.createElement("img");
     img.src = blobUrl;

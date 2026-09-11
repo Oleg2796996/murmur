@@ -1065,6 +1065,8 @@ function renderOutgoingAttachment({ mime, name, url, size, poster, att }) {
         img.alt = name || "image";
         img.loading = "lazy";
         img.className = "attach-image";
+        // v160y23: tap → fullscreen (как у входящих в render-attachments.js)
+        img.onclick = () => openFullscreen(url, mime);
         // Lesson #225: register для auto-revoke на detach
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(img, url);
         figure.appendChild(img);
@@ -4553,7 +4555,8 @@ async function pollHistoryForPeer(peer) {
                                     const bubbleEl = document.querySelector(`.bubble[data-sig="${escFn(sig)}"]`);
                                     if (bubbleEl) {
                                         const bodyEl = bubbleEl.querySelector('.msg-body');
-                                        if (bodyEl && m.body) bodyEl.textContent = m.body;
+                                        // v160y23: linkify после async decrypt (как renderMessages)
+                                        if (bodyEl && m.body) bodyEl.innerHTML = linkifyHtml(escapeHtml(m.body));
                                     }
                                 }
                             }

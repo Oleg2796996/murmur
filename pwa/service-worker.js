@@ -9,7 +9,7 @@
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
 const APP_DISPLAY_NAME = "MurMur";
-const SW_VERSION = "murmur-sw19"; // v160y22fix: force SW refresh after v160y23 regression rollback
+const SW_VERSION = "murmur-sw20"; // v160y23: PWA bugfixes (outgoing photo FS, incoming links, blob revoke)
 
 self.addEventListener("install", (event) => {
   // Никаких precache — сервер отдаёт всё с no-store.
