@@ -67,7 +67,7 @@ pub async fn spawn(
         let env_bytes = bytes[4 + alias_len..].to_vec();
 
         if let Err(e) = crate::envelope::accept_envelope(alias.clone(), env_bytes, &pending, &hub, Some(&push), Some(&store)) {
-            warn!(to=%alias, err=%e, "dropping envelope");
+            warn!(to=%crate::privacy::redact_npub(&alias), err=%e, "dropping envelope");
         }
     };
 

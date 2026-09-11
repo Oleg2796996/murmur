@@ -383,7 +383,10 @@ function openFullscreen(blobUrl, mime) {
     overlay.className = "fullscreen-overlay";
     overlay.onclick = () => {
         overlay.remove();
-        URL.revokeObjectURL(blobUrl);
+        // v160y23: не ревокать URL, если он ещё живёт в чате (__murmurBlobOwners)
+        const owners = window.__murmurBlobOwners;
+        const stillUsed = owners && [...owners.values()].includes(blobUrl);
+        if (!stillUsed) URL.revokeObjectURL(blobUrl);
     };
     const img = document.createElement("img");
     img.src = blobUrl;

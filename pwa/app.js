@@ -1065,6 +1065,8 @@ function renderOutgoingAttachment({ mime, name, url, size, poster, att }) {
         img.alt = name || "image";
         img.loading = "lazy";
         img.className = "attach-image";
+        // v160y23: tap → fullscreen (как у видео openVideoFullscreen)
+        img.onclick = () => openFullscreen(url, mime);
         // Lesson #225: register для auto-revoke на detach
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(img, url);
         figure.appendChild(img);
@@ -1392,18 +1394,8 @@ function enterMessenger() {
     if (myNpubEl) { /* v157: элемент удалён из HTML, npub не показываем */ }
     const fullEl = $("my-npub-full");
     if (fullEl) fullEl.textContent = myNpub;
-    // CRITICAL: Register alias immediately so history queries find us on either side.
-    // Use the user-chosen alias if available (LS_NAME key holds the chosen
-    // display name), otherwise fall back to npub for first-run. We then
-    // upsert the canonical alias under both names so the relay can find us
-    // regardless of whether the sender typed our display name or our npub.
-    const preferredAlias = myAlias || myNpub;
-    fetch(RELAY + "/api/register_alias", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ alias: preferredAlias, npub: myNpub })
-    }).then(r => r.json().then(j => console.log("register_alias on enter:", j)))
-      .catch(e => console.warn("register_alias on enter failed:", e));
+    // v149: relay routes by npub only; user_aliases table removed.
+    // Display name (murmur.name) and contact names stay local — never sent to relay.
     const copyBtn = $("btn-copy-npub");
     if (copyBtn && !copyBtn.dataset.bound) {
         copyBtn.dataset.bound = "1";
@@ -4013,19 +4005,8 @@ function connectWS() {
         wsConnected = true;
         wsReconnectDelay = WS_RECONNECT_BASE;
         console.log("WS connected");
-        ws.send(JSON.stringify({ type: "subscribe", alias: myAlias, npub: myNpub }));
+        ws.send(JSON.stringify({ type: "subscribe", npub: myNpub }));
     };
-
-    // Register alias→npub mapping via HTTP (works even if WS tunnel is down).
-    // This is what allows /api/history and /api/inbox to find messages for us.
-    if (myNpub && myAlias) {
-        fetch(RELAY + "/api/register_alias", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ alias: myAlias, npub: myNpub })
-        }).then(r => r.json().then(j => console.log("register_alias:", j)))
-          .catch(e => console.warn("register_alias failed:", e));
-    }
 
     ws.onmessage = (evt) => {
         try {
@@ -4553,7 +4534,7 @@ async function pollHistoryForPeer(peer) {
                                     const bubbleEl = document.querySelector(`.bubble[data-sig="${escFn(sig)}"]`);
                                     if (bubbleEl) {
                                         const bodyEl = bubbleEl.querySelector('.msg-body');
-                                        if (bodyEl && m.body) bodyEl.textContent = m.body;
+                                        if (bodyEl && m.body) bodyEl.innerHTML = linkifyHtml(escapeHtml(m.body));
                                     }
                                 }
                             }

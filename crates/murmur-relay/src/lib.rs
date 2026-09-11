@@ -28,6 +28,7 @@
 pub mod config;
 pub mod envelope;
 pub mod pending;
+pub mod privacy;
 pub mod subscriber;
 pub mod ws_server;
 pub mod iroh_server;
@@ -41,5 +42,6 @@ pub use subscriber::{SubscriberHub, WsMessage};
 pub use ws_server::WsServer;
 pub use push::{VapidKeys, PushSubscription, PushStore, PushServer, PushPayload};
 pub use envelope::accept_envelope;
+pub use privacy::redact_npub;
 pub use storage::MessageStore;
 pub use upload::{BlobMeta, BlobRow, UploadError, UploadRequest, handle_download, handle_upload};

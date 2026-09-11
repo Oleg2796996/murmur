@@ -208,6 +208,21 @@ impl MessageStore {
             CREATE INDEX IF NOT EXISTS idx_identity_transfers_expires ON identity_transfers(expires_at);
             ",
         )?;
+        // v160y23: track blob download time for ~5 min post-fetch cleanup.
+        let has_downloaded_at: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('blobs') WHERE name = 'downloaded_at'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if has_downloaded_at == 0 {
+            conn.execute_batch(
+                "ALTER TABLE blobs ADD COLUMN downloaded_at INTEGER NOT NULL DEFAULT 0;
+                 CREATE INDEX IF NOT EXISTS idx_blobs_downloaded_at ON blobs(downloaded_at);",
+            )?;
+            info!("v160y23 migration: blobs.downloaded_at added");
+        }
         debug!(db_path = %path.display(), "message store initialised");
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
@@ -625,29 +640,100 @@ impl MessageStore {
         Ok(n > 0)
     }
 
-    /// Удаляет envelope по hash + сносит attachment_refs (v160o).
-    /// Blob'ы ТОЛЬКО декрементируются: ref_count 0 → blob остаётся в БД как
-    /// «orphan» (строка + файл) и физически удаляется позже — только
-    /// delete_orphan_blobs, если он старше BLOB_MAX_AGE_SECS (24h от загрузки).
-    /// Это гарантирует: полученное видео остаётся доступным ~24h независимо
-    /// от судьбы envelope (v160m каскад убивал файл через ~5 мин после доставки).
-    /// Приватность: файл — AES-256-GCM шифротекст; wrapped_key живёт только в
-    /// attachment_refs, после их удаления дешифровать не может даже владелец relay.
+    /// Удаляет envelope по hash + сносит attachment_refs (v160y23).
+    /// Blob'ы декрементируются; detached (ref_count=0, no attachment_refs)
+    /// удаляются немедленно. Never-linked orphan uploads живут до 24h;
+    /// downloaded blobs — ~5 min после GET /api/blob/{id} (cron).
     pub fn delete_envelope_by_hash(&self, hash: &str) -> rusqlite::Result<()> {
-        let c = self.conn.lock();
-        let tx = c.unchecked_transaction()?;
-        // ref_count уникальных blob'ов этого envelope — вниз (строки blob'ов живут).
-        tx.execute(
-            "UPDATE blobs SET ref_count = MAX(ref_count - 1, 0) \
-             WHERE id IN (SELECT DISTINCT blob_id FROM attachment_refs WHERE envelope_hash = ?1)",
-            params![hash],
-        )?;
-        tx.execute("DELETE FROM attachment_refs WHERE envelope_hash = ?1", params![hash])?;
-        tx.commit()?;
-        drop(c);
-        // Сам envelope.
+        let detached_paths = {
+            let c = self.conn.lock();
+            let tx = c.unchecked_transaction()?;
+            tx.execute(
+                "UPDATE blobs SET ref_count = MAX(ref_count - 1, 0) \
+                 WHERE id IN (SELECT DISTINCT blob_id FROM attachment_refs WHERE envelope_hash = ?1)",
+                params![hash],
+            )?;
+            tx.execute("DELETE FROM attachment_refs WHERE envelope_hash = ?1", params![hash])?;
+            let mut s = tx.prepare(
+                "SELECT b.id, b.storage_path FROM blobs b \
+                 WHERE b.ref_count = 0 \
+                 AND NOT EXISTS (SELECT 1 FROM attachment_refs ar WHERE ar.blob_id = b.id)",
+            )?;
+            let detached: Vec<(String, String)> = s
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                ?
+                .filter_map(|r| r.ok())
+                .collect();
+            for (blob_id, _) in &detached {
+                tx.execute("DELETE FROM blobs WHERE id = ?1", params![blob_id])?;
+            }
+            tx.commit()?;
+            detached
+                .into_iter()
+                .filter_map(|(_, p)| if p.is_empty() { None } else { Some(p) })
+                .collect::<Vec<String>>()
+        };
+        for p in &detached_paths {
+            let path = std::path::Path::new(p);
+            if path.exists() {
+                match std::fs::remove_file(path) {
+                    Ok(_) => info!(blob = %p, "v160y23: detached blob deleted on envelope removal"),
+                    Err(e) => warn!(blob = %p, error = %e, "v160y23: failed to delete detached blob file"),
+                }
+            }
+        }
         self.exec_sql("DELETE FROM envelopes WHERE envelope_hash = ?1", params![hash])?;
         Ok(())
+    }
+
+    /// v160y23: mark blob as downloaded (GET /api/blob/{id}). Cron deletes ~5 min later.
+    pub fn mark_blob_downloaded(&self, blob_id: &str, now: i64) -> rusqlite::Result<bool> {
+        let n = self.exec_sql(
+            "UPDATE blobs SET downloaded_at = ?1 WHERE id = ?2 AND downloaded_at = 0",
+            params![now, blob_id],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// v160y23: delete blobs marked downloaded_at > 0 and older than grace_secs.
+    pub fn delete_stale_downloaded_blobs(&self, now: i64, grace_secs: i64) -> rusqlite::Result<Vec<String>> {
+        let mut deleted_files: Vec<String> = Vec::new();
+        let cutoff = now.saturating_sub(grace_secs);
+        let blob_ids: Vec<(String, String)> = {
+            let c = self.conn.lock();
+            let mut s = c.prepare(
+                "SELECT id, storage_path FROM blobs \
+                 WHERE downloaded_at > 0 AND downloaded_at < ?1",
+            )?;
+            s.query_map(params![cutoff], |r| Ok((r.get(0)?, r.get(1)?)))
+                ?
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        if blob_ids.is_empty() {
+            return Ok(deleted_files);
+        }
+        {
+            let c = self.conn.lock();
+            let tx = c.unchecked_transaction()?;
+            for (blob_id, storage_path) in &blob_ids {
+                tx.execute("DELETE FROM blobs WHERE id = ?1", params![blob_id])?;
+                if !storage_path.is_empty() {
+                    deleted_files.push(storage_path.clone());
+                }
+            }
+            tx.commit()?;
+        }
+        for p in &deleted_files {
+            let path = std::path::Path::new(p);
+            if path.exists() {
+                match std::fs::remove_file(path) {
+                    Ok(_) => info!(blob = %p, "v160y23: downloaded blob deleted (post-fetch grace)"),
+                    Err(e) => warn!(blob = %p, error = %e, "v160y23: failed to delete downloaded blob file"),
+                }
+            }
+        }
+        Ok(deleted_files)
     }
 
     /// v149: blob'ы без ссылок (orphan) — удалить. Вызывается из TTL-cron.

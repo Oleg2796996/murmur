@@ -393,7 +393,7 @@ impl PushServer {
             match client.send(msg).await {
                 Ok(_) => {
                     delivered += 1;
-                    info!(sub=%sub.id, alias=%payload.alias, "push delivered");
+                    info!(sub=%sub.id, to=%crate::privacy::redact_npub(&payload.alias), "push delivered");
                 }
                 Err(WebPushError::EndpointNotFound) | Err(WebPushError::EndpointNotValid) => {
                     warn!(sub=%sub.id, "endpoint gone, removing");
@@ -1371,6 +1371,15 @@ async fn handle_api_blob_download(
         Ok(b) => b,
         Err(e) => return Ok(json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("read blob: {e}"))),
     };
+
+    // v160y23: mark downloaded — cron deletes file ~5 min later.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if let Err(e) = db.mark_blob_downloaded(blob_id, now) {
+        warn!(err=%e, blob_id=%blob_id, "mark_blob_downloaded failed");
+    }
 
     Ok(Response::builder()
         .status(StatusCode::OK)

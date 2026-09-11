@@ -21,6 +21,7 @@
 //! Signature покрывает `ct`, чтобы relay не мог подменить ciphertext.
 
 use crate::pending::{PendingEntry, PendingStore};
+use crate::privacy::redact_npub;
 use crate::push::PushServer;
 use crate::storage::MessageStore;
 use crate::subscriber::SubscriberHub;
@@ -240,7 +241,7 @@ pub fn accept_envelope(
 
     // 6. Broadcast to WS subscribers.
     let n = hub.broadcast(&entry, store);
-    info!(to=%recipient_npub, hash=%hash_hex, subs=n, "envelope accepted + fanout");
+    info!(to=%redact_npub(&recipient_npub), hash=%hash_hex, subs=n, "envelope accepted + fanout");
 
     // v160m (решение Олега 2026-09-02): honest relay v2 — TTL 24h держится,
     // пока получатель НЕ забрал сообщение. Сокращаем до 5 минут только при
@@ -275,11 +276,11 @@ pub fn accept_envelope(
             .unwrap_or(false);
     if let Some(push) = push {
         if is_receipt {
-            info!(to=%recipient_npub, "receipt envelope: WS-only, no web-push");
+            info!(to=%redact_npub(&recipient_npub), "receipt envelope: WS-only, no web-push");
         } else {
         let push = push.clone();
         let payload = crate::push::PushPayload::from_entry(&entry, store);
-        let npub_for_log = recipient_npub.clone();
+        let npub_for_log = redact_npub(&recipient_npub);
         tokio::spawn(async move {
             match push.deliver(&payload).await {
                 Ok(n) if n > 0 => info!(to=%npub_for_log, delivered=n, "push delivered"),

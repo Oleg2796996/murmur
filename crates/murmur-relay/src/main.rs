@@ -162,6 +162,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(_) => {}
                 Err(err) => warn!(err=%err, "orphan blob cleanup failed"),
             }
+            // v160y23: blobs fetched via GET /api/blob/{id} — delete ~5 min after download.
+            match store_for_ttl.delete_stale_downloaded_blobs(now_secs, 300) {
+                Ok(files) if !files.is_empty() => {
+                    info!(count = files.len(), "downloaded blobs deleted (v160y23)");
+                }
+                Ok(_) => {}
+                Err(err) => warn!(err=%err, "downloaded blob cleanup failed"),
+            }
         }
     });
 
