@@ -642,8 +642,9 @@ impl MessageStore {
 
     /// Удаляет envelope по hash + сносит attachment_refs (v160y23).
     /// Blob'ы декрементируются; detached (ref_count=0, no attachment_refs)
-    /// удаляются немедленно. Never-linked orphan uploads живут до 24h;
-    /// downloaded blobs — ~5 min после GET /api/blob/{id} (cron).
+    /// удаляются только если уже скачаны (downloaded_at > 0).
+    /// v160y23a: never downloaded → keep until orphan TTL (24h cron).
+    /// Downloaded blobs — ~5 min после GET /api/blob/{id} (cron).
     pub fn delete_envelope_by_hash(&self, hash: &str) -> rusqlite::Result<()> {
         let detached_paths: Vec<String> = {
             let c = self.conn.lock();
@@ -658,6 +659,7 @@ impl MessageStore {
             let mut s = tx.prepare(
                 "SELECT b.id, b.storage_path FROM blobs b \
                  WHERE b.ref_count = 0 \
+                 AND b.downloaded_at > 0 \
                  AND NOT EXISTS (SELECT 1 FROM attachment_refs ar WHERE ar.blob_id = b.id)",
             )?;
             let detached: Vec<(String, String)> = s
