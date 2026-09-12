@@ -1065,13 +1065,6 @@ function renderOutgoingAttachment({ mime, name, url, size, poster, att }) {
         img.alt = name || "image";
         img.loading = "lazy";
         img.className = "attach-image";
-        // v160y23: tap → fullscreen (как у входящих в render-attachments.js)
-        // v160y27: revert v160y26 touchstart — it caused overlay to open on
-        // touchstart and then the delayed synthetic click hit the overlay,
-        // immediately closing the lightbox. Use plain onclick (MVP pattern).
-        img.onclick = () => {
-            if (window.openFullscreen) window.openFullscreen(url, mime);
-        };
         // Lesson #225: register для auto-revoke на detach
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(img, url);
         figure.appendChild(img);
@@ -1248,41 +1241,6 @@ function bytesToBase64(bytes) {
     return btoa(binary);
 }
 
-// v160y24: identity в LS + IDB kv (appStore мигрирует LS→IDB, tryAutoRestore
-// читал только LS → после reload ключи «пропадали»).
-async function saveIdentityCredentials(npub, keyHex, name) {
-    localStorage.setItem(LS_NPUB, npub);
-    localStorage.setItem(LS_KEY, keyHex);
-    if (name) localStorage.setItem(LS_NAME, name);
-    if (window.appStore) {
-        try {
-            await window.appStore.open();
-            await window.appStore.kv.set(LS_NPUB, npub);
-            await window.appStore.kv.set(LS_KEY, keyHex);
-            if (name) await window.appStore.kv.set(LS_NAME, name);
-        } catch (e) { console.warn("[murmur] identity IDB save failed", e); }
-    }
-}
-
-async function loadIdentityCredentials() {
-    let npub = localStorage.getItem(LS_NPUB);
-    let key = localStorage.getItem(LS_KEY);
-    if ((!npub || !key) && window.appStore) {
-        try {
-            await window.appStore.open();
-            npub = npub || (await window.appStore.kv.get(LS_NPUB));
-            key = key || (await window.appStore.kv.get(LS_KEY));
-            if (npub && key) {
-                localStorage.setItem(LS_NPUB, npub);
-                localStorage.setItem(LS_KEY, key);
-                const name = await window.appStore.kv.get(LS_NAME);
-                if (name) localStorage.setItem(LS_NAME, name);
-            }
-        } catch (e) { console.warn("[murmur] identity IDB load failed", e); }
-    }
-    return { npub, key };
-}
-
 // ── Identity Screen ──
 // Lesson #211 (Олег 2026-08-26 14:14): если signing key изменился, очистить cache
 // (старые blobs расшифрованы для СТАРОГО privkey — новый их не прочитает).
@@ -1326,7 +1284,9 @@ async function _handleCreate() {
         myNpub = res.data.npub;
         signKeyHex = res.data.signing_sk_hex;
         myAlias = myNpub;
-        await saveIdentityCredentials(myNpub, signKeyHex, myAlias);
+        localStorage.setItem(LS_NPUB, myNpub);
+        localStorage.setItem(LS_KEY, signKeyHex);
+        localStorage.setItem(LS_NAME, myAlias);
         await invalidateCacheIfKeyChanged();
         enterMessenger();
     } catch (e) {
@@ -1355,7 +1315,9 @@ window._handleRestore = async function() {
         myNpub = res.data.npub;
         signKeyHex = hex;
         myAlias = res.data.npub;
-        await saveIdentityCredentials(myNpub, signKeyHex, myAlias);
+        localStorage.setItem(LS_NPUB, myNpub);
+        localStorage.setItem(LS_KEY, signKeyHex);
+        localStorage.setItem(LS_NAME, myAlias);
         await invalidateCacheIfKeyChanged();
         enterMessenger();
     } catch (e) { $("identity-error").textContent = "Error: " + e.message; }
@@ -1370,7 +1332,9 @@ window._handleRestoreFromKey = async function(hex) {
     myNpub = res.data.npub;
     signKeyHex = hex;
     myAlias = res.data.npub;
-    await saveIdentityCredentials(myNpub, signKeyHex, myAlias);
+    localStorage.setItem(LS_NPUB, myNpub);
+    localStorage.setItem(LS_KEY, signKeyHex);
+    localStorage.setItem(LS_NAME, myAlias);
     await invalidateCacheIfKeyChanged();
     enterMessenger();
 };
@@ -1428,8 +1392,18 @@ function enterMessenger() {
     if (myNpubEl) { /* v157: элемент удалён из HTML, npub не показываем */ }
     const fullEl = $("my-npub-full");
     if (fullEl) fullEl.textContent = myNpub;
-    // v149/v160y23: relay routes by npub only; user_aliases table removed.
-    // Display name (murmur.name) and contact names stay local — never sent to relay.
+    // CRITICAL: Register alias immediately so history queries find us on either side.
+    // Use the user-chosen alias if available (LS_NAME key holds the chosen
+    // display name), otherwise fall back to npub for first-run. We then
+    // upsert the canonical alias under both names so the relay can find us
+    // regardless of whether the sender typed our display name or our npub.
+    const preferredAlias = myAlias || myNpub;
+    fetch(RELAY + "/api/register_alias", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ alias: preferredAlias, npub: myNpub })
+    }).then(r => r.json().then(j => console.log("register_alias on enter:", j)))
+      .catch(e => console.warn("register_alias on enter failed:", e));
     const copyBtn = $("btn-copy-npub");
     if (copyBtn && !copyBtn.dataset.bound) {
         copyBtn.dataset.bound = "1";
@@ -1632,44 +1606,35 @@ if (notifBtn && !notifBtn.dataset.bound) {
     notifBtn.addEventListener("click", async () => {
         notifBtn.disabled = true;
         try {
-            // v160y26: Do NOT await anything before we have decided the action.
-            // On iOS/macOS PWA the user gesture is consumed by the first await,
-            // and Notification.requestPermission() must be triggered while the
-            // gesture is still active. Read permission synchronously first.
-            const perm = Notification && Notification.permission;
-            if (perm === "granted") {
-                // Granted: this click may mean "turn off" if a subscription exists,
-                // or "re-subscribe" if it was lost (e.g. macOS reinstall).
-                let hasSub = false;
+            // v160q: ветка по ФАКТИЧЕСКОМУ наличию подписки, не по permission.
+            // Раньше granted + нет подписки (тёмный bell, title "нажми чтобы
+            // переподключить") попадал в toggle-off и СТИРАЛ записи —
+            // клики по тёмному колокольчику молча убивали пуши.
+            let hasSub = false;
+            try {
+                const reg = await navigator.serviceWorker.ready;
+                hasSub = !!(await reg.pushManager.getSubscription());
+            } catch (e) { /* нет SW — считаем подписки нет */ }
+            if (Notification && Notification.permission === "granted" && hasSub) {
+                // Включено → выключить: снять browser-подписку + серверные записи.
                 try {
                     const reg = await navigator.serviceWorker.ready;
-                    hasSub = !!(await reg.pushManager.getSubscription());
-                } catch (e) { /* no SW = no subscription */ }
-                if (hasSub) {
-                    // Toggle off: remove browser subscription + server records.
-                    try {
-                        const reg = await navigator.serviceWorker.ready;
-                        const sub = await reg.pushManager.getSubscription();
-                        if (sub) {
-                            await sub.unsubscribe();
-                            console.log("[push] browser subscription removed");
-                        }
-                    } catch (e) { /* ignore */ }
-                    if (myAlias) {
-                        fetch(RELAY + "/push/unsubscribe", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ alias: myAlias }),
-                        }).catch(() => {});
+                    const sub = await reg.pushManager.getSubscription();
+                    if (sub) {
+                        await sub.unsubscribe();
+                        console.log("[push] browser subscription removed");
                     }
-                } else {
-                    // Granted but no browser sub: recover silently.
-                    await setupPushSubscription();
+                } catch (e) { /* ignore */ }
+                // Also clear server-side records for this alias.
+                if (myAlias) {
+                    fetch(RELAY + "/push/unsubscribe", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ alias: myAlias }),
+                    }).catch(() => {});
                 }
             } else {
-                // default / denied / unknown — always invoke the real permission
-                // request on a genuine user gesture. This is the only recovery
-                // path on iOS PWA where permission may read "denied" falsely.
+                // Выключено ИЛИ granted-без-подписки → включить/переподключить.
                 await requestPushPermission();
             }
         } finally {
@@ -1978,40 +1943,6 @@ async function setupPushSubscription() {
     }
 }
 
-// v160y25: iOS/macOS PWA — permission только по user gesture (🔔).
-// Safari может показывать denied, хотя в Настройках «Разрешить» — нужен
-// сброс через Удалить данные сайта + переустановка PWA.
-function isStandalonePWA() {
-    return (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
-        || window.navigator.standalone === true;
-}
-function pushDeniedHelpText() {
-    const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
-    const mac = /Macintosh/.test(navigator.userAgent) && !ios;
-    if (ios && isStandalonePWA()) {
-        return "Уведомления заблокированы для PWA.\n\n"
-            + "1. Удалите иконку MurMur с экрана\n"
-            + "2. Настройки → Safari → Данные сайтов → murmur.senswifi.ru → Удалить\n"
-            + "3. Safari → murmur.senswifi.ru → На экран «Домой»\n"
-            + "4. Откройте PWA и нажмите 🔔\n\n"
-            + "Также: Настройки → Уведомления → MurMur → Разрешить";
-    }
-    if (mac) {
-        return "Уведомления заблокированы.\n\n"
-            + "Safari → Настройки → murmur.senswifi.ru → Уведомления → Разрешить\n"
-            + "Или: Системные настройки → Уведомления → MurMur\n\n"
-            + "После смены — нажмите 🔔 ещё раз.";
-    }
-    return "Уведомления заблокированы. Разрешите в настройках браузера для murmur.senswifi.ru, затем нажмите 🔔.";
-}
-
-// v160y26: iOS/macOS PWA — user gesture consumed by any await before
-// Notification.requestPermission(). Therefore the bell handler must call
-// requestPermission() SYNCHRONOUSLY and only await the result afterwards.
-// Also, Safari may report "denied" even when the user hasn't been prompted
-// (stale PWA state). Always invoke requestPermission() on a real click —
-// the OS will either allow the prompt, return the true setting, or give the
-// real denied state. Only after that do we show help text.
 async function requestPushPermission() {
     if (!("Notification" in window)) {
         alert("Браузер не поддерживает уведомления");
@@ -2019,24 +1950,17 @@ async function requestPushPermission() {
     }
     if (Notification.permission === "granted") {
         await setupPushSubscription();
-        await updateNotifBtnState();
         return;
     }
-    // v160y26: even if permission currently reads "denied" or "default",
-    // try a real requestPermission() call — on iOS PWA this is the only way
-    // to recover from a stale denied reading or a fresh install that has never
-    // been prompted. The user gesture is already consumed at this point, but
-    // we got here from a click, so Safari may still honor the request.
+    if (Notification.permission === "denied") {
+        alert("Уведомления заблокированы. Включите в Safari → Настройки сайтов → Уведомления.");
+        return;
+    }
     const result = await Notification.requestPermission();
     console.log("[push] permission:", result);
     if (result === "granted") {
         await setupPushSubscription();
-    } else if (result === "denied") {
-        alert(pushDeniedHelpText());
-    } else if (result === "default") {
-        alert("Нажмите на 🔔 ещё раз, чтобы разрешить уведомления.");
     }
-    await updateNotifBtnState();
 }
 
 function getTotalUnread() {
@@ -4089,8 +4013,19 @@ function connectWS() {
         wsConnected = true;
         wsReconnectDelay = WS_RECONNECT_BASE;
         console.log("WS connected");
-        ws.send(JSON.stringify({ type: "subscribe", npub: myNpub }));
+        ws.send(JSON.stringify({ type: "subscribe", alias: myAlias, npub: myNpub }));
     };
+
+    // Register alias→npub mapping via HTTP (works even if WS tunnel is down).
+    // This is what allows /api/history and /api/inbox to find messages for us.
+    if (myNpub && myAlias) {
+        fetch(RELAY + "/api/register_alias", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ alias: myAlias, npub: myNpub })
+        }).then(r => r.json().then(j => console.log("register_alias:", j)))
+          .catch(e => console.warn("register_alias failed:", e));
+    }
 
     ws.onmessage = (evt) => {
         try {
@@ -4618,8 +4553,7 @@ async function pollHistoryForPeer(peer) {
                                     const bubbleEl = document.querySelector(`.bubble[data-sig="${escFn(sig)}"]`);
                                     if (bubbleEl) {
                                         const bodyEl = bubbleEl.querySelector('.msg-body');
-                                        // v160y23: linkify после async decrypt (как renderMessages)
-                                        if (bodyEl && m.body) bodyEl.innerHTML = linkifyHtml(escapeHtml(m.body));
+                                        if (bodyEl && m.body) bodyEl.textContent = m.body;
                                     }
                                 }
                             }
@@ -5031,9 +4965,8 @@ window.showRedeemModal = showRedeemModal;
 
 // ── Auto-restore last identity on load ──
 async function tryAutoRestore() {
-    const creds = await loadIdentityCredentials();
-    const savedNpub = creds.npub;
-    const savedKey = creds.key;
+    const savedNpub = localStorage.getItem(LS_NPUB);
+    const savedKey = localStorage.getItem(LS_KEY);
     if (!savedNpub || !savedKey) {
         console.log("auto-restore: nothing saved");
         // v160f: invite в Safari (не-PWA) без личности → лендинг-инструкция,
@@ -5063,61 +4996,42 @@ async function tryAutoRestore() {
     }
 }
 
-// v160y24: await appStore.open before auto-restore (IDB identity keys)
-async function bootApp() {
-    if (window.appStore) {
-        try { await window.appStore.open(); } catch (e) { console.warn("[murmur] appStore open:", e); }
+// v160y19: auto-restore push subscription (clean, no diagnostic)
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", async () => { 
+        await requestNotificationPermission();
+        warmOutboxCache(); tryAutoRestore(); 
+        if ("PushManager" in window && Notification.permission === "granted") {
+            try {
+                const reg = await navigator.serviceWorker.ready;
+                const sub = await reg.pushManager.getSubscription();
+                if (!sub) await requestPushPermission();
+            } catch (e) { console.warn("[murmur] auto-subscribe failed", e); }
+        }
+    });
+} else {
+    requestNotificationPermission();
+    warmOutboxCache();
+    tryAutoRestore();
+    if ("PushManager" in window && Notification.permission === "granted") {
+        (async () => {
+            try {
+                const reg = await navigator.serviceWorker.ready;
+                const sub = await reg.pushManager.getSubscription();
+                if (!sub) await requestPushPermission();
+            } catch (e) { console.warn("[murmur] auto-subscribe failed", e); }
+        })();
     }
-    await warmOutboxCache();
-    await tryAutoRestore();
 }
 
-// v160y27: restore MVP v160y22 boot flow. On iOS PWA, Notification.permission
-// can read "default" after reinstall. Calling requestPermission() at boot
-// (no user gesture) returns "default" without a prompt; the user then taps 🔔.
-// If permission is already "granted", re-subscribe to handle VAPID key rotation.
 async function requestNotificationPermission() {
     if (!("Notification" in window)) return;
     try {
         if (Notification.permission === "default") {
-            console.log("[murmur] requesting notification permission at boot");
+            console.log("[murmur] requesting notification permission");
             await Notification.requestPermission();
         }
     } catch (e) { console.warn("[murmur] permission request failed", e); }
-}
-
-async function bootAppAndRestorePush() {
-    await bootApp();
-    await requestNotificationPermission();
-    if ("PushManager" in window && Notification.permission === "granted") {
-        try {
-            const reg = await navigator.serviceWorker.ready;
-            const sub = await reg.pushManager.getSubscription();
-            if (!sub) {
-                console.log("[push] boot: granted but no browser sub, subscribing");
-                await requestPushPermission();
-            } else {
-                await setupPushSubscription();
-            }
-        } catch (e) { console.warn("[murmur] boot auto-subscribe failed", e); }
-    }
-    await updateNotifBtnState();
-}
-
-if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => { bootAppAndRestorePush(); });
-} else {
-    bootAppAndRestorePush();
-}
-
-// v160y25: keep tryResubscribeIfGranted as a utility for explicit re-subscribe paths.
-async function tryResubscribeIfGranted() {
-    if (!("PushManager" in window) || !("Notification" in window)) return;
-    if (Notification.permission !== "granted") return;
-    try {
-        await setupPushSubscription();
-        await updateNotifBtnState();
-    } catch (e) { console.warn("[murmur] tryResubscribeIfGranted failed", e); }
 }
 
 // Повторный заход по ссылке в уже открытом приложении (PWA живёт в фоне).

@@ -378,25 +378,16 @@ function deriveFriendlyName(name, mime) {
 }
 
 // Fullscreen lightbox for images
-// v160y23: blob URL принадлежит превью в чате (__murmurBlobOwners) —
-// revoke только если overlay создал СВОЙ URL (как openVideoFullscreen).
 function openFullscreen(blobUrl, mime) {
     const overlay = document.createElement("div");
     overlay.className = "fullscreen-overlay";
-    const ownedByChat = window.__murmurBlobOwners &&
-        Array.from(window.__murmurBlobOwners.values()).includes(blobUrl);
-    const close = () => {
+    overlay.onclick = () => {
         overlay.remove();
-        if (!ownedByChat) URL.revokeObjectURL(blobUrl);
+        URL.revokeObjectURL(blobUrl);
     };
-    overlay.onclick = () => close();
     const img = document.createElement("img");
     img.src = blobUrl;
     img.className = "fullscreen-image";
-    // v160y27: revert to MVP v160y22 behavior — tap anywhere on the overlay
-    // closes the lightbox. On iOS PWA, trying to distinguish img vs overlay
-    // click via stopPropagation/e.target fails because the synthetic click
-    // may target the overlay or arrive with unexpected target after touch.
     overlay.appendChild(img);
     document.body.appendChild(overlay);
 }
@@ -515,8 +506,3 @@ window.murmurSetupVideoPreview = function (wrap, thumb, blobUrl) {
         });
     }
 };
-// Export fullscreen functions to window for app.js and other callers.
-if (typeof window !== "undefined") {
-    if (!window.openFullscreen) window.openFullscreen = openFullscreen;
-    if (!window.openVideoFullscreen) window.openVideoFullscreen = openVideoFullscreen;
-}
