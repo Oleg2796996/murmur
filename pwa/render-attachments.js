@@ -378,20 +378,28 @@ function deriveFriendlyName(name, mime) {
 }
 
 // Fullscreen lightbox for images
-// v160y23: blob URL принадлежит превью в чате (__murmurBlobOwners) —
-// revoke только если overlay создал СВОЙ URL (как openVideoFullscreen).
+// v160y26: open fullscreen image reliably on iOS PWA (touch + click).
 function openFullscreen(blobUrl, mime) {
     const overlay = document.createElement("div");
     overlay.className = "fullscreen-overlay";
     const ownedByChat = window.__murmurBlobOwners &&
         Array.from(window.__murmurBlobOwners.values()).includes(blobUrl);
-    overlay.onclick = () => {
+    const close = () => {
         overlay.remove();
         if (!ownedByChat) URL.revokeObjectURL(blobUrl);
+    };
+    overlay.onclick = (e) => {
+        if (e.target === overlay) close();
     };
     const img = document.createElement("img");
     img.src = blobUrl;
     img.className = "fullscreen-image";
+    img.onclick = (e) => e.stopPropagation();
+    // iOS PWA sometimes swallows click on standalone images; add touch handler.
+    img.addEventListener("touchend", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+    }, { passive: false });
     overlay.appendChild(img);
     document.body.appendChild(overlay);
 }
@@ -510,3 +518,8 @@ window.murmurSetupVideoPreview = function (wrap, thumb, blobUrl) {
         });
     }
 };
+// Export fullscreen functions to window for app.js and other callers.
+if (typeof window !== "undefined") {
+    if (!window.openFullscreen) window.openFullscreen = openFullscreen;
+    if (!window.openVideoFullscreen) window.openVideoFullscreen = openVideoFullscreen;
+}
