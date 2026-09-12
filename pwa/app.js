@@ -1066,15 +1066,12 @@ function renderOutgoingAttachment({ mime, name, url, size, poster, att }) {
         img.loading = "lazy";
         img.className = "attach-image";
         // v160y23: tap → fullscreen (как у входящих в render-attachments.js)
-        // v160y26: use addEventListener instead of onclick + add touchstart to
-        // make outgoing photos open reliably on iOS PWA (tap sometimes doesn't
-        // fire click on lazy-loaded images in standalone Safari).
-        const openImg = (e) => {
-            if (e && e.preventDefault) e.preventDefault();
+        // v160y27: revert v160y26 touchstart — it caused overlay to open on
+        // touchstart and then the delayed synthetic click hit the overlay,
+        // immediately closing the lightbox. Use plain onclick (MVP pattern).
+        img.onclick = () => {
             if (window.openFullscreen) window.openFullscreen(url, mime);
         };
-        img.addEventListener("click", openImg);
-        img.addEventListener("touchstart", openImg, { passive: false });
         // Lesson #225: register для auto-revoke на detach
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(img, url);
         figure.appendChild(img);
@@ -5075,29 +5072,52 @@ async function bootApp() {
     await tryAutoRestore();
 }
 
-// v160y25: НЕ запрашиваем permission на boot — iOS/macOS PWA требуют user gesture (🔔).
-// Если уже granted — тихо перерегистрируем подписку (VAPID mismatch fix в setupPushSubscription).
+// v160y27: restore MVP v160y22 boot flow. On iOS PWA, Notification.permission
+// can read "default" after reinstall. Calling requestPermission() at boot
+// (no user gesture) returns "default" without a prompt; the user then taps 🔔.
+// If permission is already "granted", re-subscribe to handle VAPID key rotation.
+async function requestNotificationPermission() {
+    if (!("Notification" in window)) return;
+    try {
+        if (Notification.permission === "default") {
+            console.log("[murmur] requesting notification permission at boot");
+            await Notification.requestPermission();
+        }
+    } catch (e) { console.warn("[murmur] permission request failed", e); }
+}
+
+async function bootAppAndRestorePush() {
+    await bootApp();
+    await requestNotificationPermission();
+    if ("PushManager" in window && Notification.permission === "granted") {
+        try {
+            const reg = await navigator.serviceWorker.ready;
+            const sub = await reg.pushManager.getSubscription();
+            if (!sub) {
+                console.log("[push] boot: granted but no browser sub, subscribing");
+                await requestPushPermission();
+            } else {
+                await setupPushSubscription();
+            }
+        } catch (e) { console.warn("[murmur] boot auto-subscribe failed", e); }
+    }
+    await updateNotifBtnState();
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => { bootAppAndRestorePush(); });
+} else {
+    bootAppAndRestorePush();
+}
+
+// v160y25: keep tryResubscribeIfGranted as a utility for explicit re-subscribe paths.
 async function tryResubscribeIfGranted() {
     if (!("PushManager" in window) || !("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
     try {
-        const reg = await navigator.serviceWorker.ready;
-        const sub = await reg.pushManager.getSubscription();
-        // setupPushSubscription: VAPID mismatch → unsubscribe + resubscribe + server register
         await setupPushSubscription();
-        if (!sub) console.log("[push] auto-resubscribe after boot (was granted, no browser sub)");
         await updateNotifBtnState();
-    } catch (e) { console.warn("[murmur] auto-resubscribe failed", e); }
-}
-
-if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", async () => {
-        await bootApp();
-        tryResubscribeIfGranted();
-    });
-} else {
-    bootApp();
-    tryResubscribeIfGranted();
+    } catch (e) { console.warn("[murmur] tryResubscribeIfGranted failed", e); }
 }
 
 // Повторный заход по ссылке в уже открытом приложении (PWA живёт в фоне).

@@ -378,7 +378,8 @@ function deriveFriendlyName(name, mime) {
 }
 
 // Fullscreen lightbox for images
-// v160y26: open fullscreen image reliably on iOS PWA (touch + click).
+// v160y23: blob URL принадлежит превью в чате (__murmurBlobOwners) —
+// revoke только если overlay создал СВОЙ URL (как openVideoFullscreen).
 function openFullscreen(blobUrl, mime) {
     const overlay = document.createElement("div");
     overlay.className = "fullscreen-overlay";
@@ -388,18 +389,14 @@ function openFullscreen(blobUrl, mime) {
         overlay.remove();
         if (!ownedByChat) URL.revokeObjectURL(blobUrl);
     };
-    overlay.onclick = (e) => {
-        if (e.target === overlay) close();
-    };
+    overlay.onclick = () => close();
     const img = document.createElement("img");
     img.src = blobUrl;
     img.className = "fullscreen-image";
-    img.onclick = (e) => e.stopPropagation();
-    // iOS PWA sometimes swallows click on standalone images; add touch handler.
-    img.addEventListener("touchend", (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-    }, { passive: false });
+    // v160y27: revert to MVP v160y22 behavior — tap anywhere on the overlay
+    // closes the lightbox. On iOS PWA, trying to distinguish img vs overlay
+    // click via stopPropagation/e.target fails because the synthetic click
+    // may target the overlay or arrive with unexpected target after touch.
     overlay.appendChild(img);
     document.body.appendChild(overlay);
 }
