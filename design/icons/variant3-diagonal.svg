@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="murmurBg3" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#2AABEE"/>
+      <stop offset="1" stop-color="#229ED9"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#murmurBg3)"/>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
+    <path stroke-width="26" d="M98 316 Q108 294 123 293 Q138 297 152 303 Q166 297 181 293 Q196 294 206 316 C199 341 178 355 152 355 C126 355 105 341 98 316 Z M98 316 Q152 328 206 316"/>
+    <path stroke-width="24" d="M211 278 A30 30 0 0 1 238 306 M218 251 A58 58 0 0 1 265 299"/>
+    <path stroke-width="26" d="M300 182 C308 154 334 144 360 148 C392 152 408 176 402 204 C397 228 378 246 356 252 C338 257 318 252 308 238"/>
+    <path stroke-width="26" d="M324 198 C328 182 344 174 360 180"/>
+  </g>
+</svg>

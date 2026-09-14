@@ -194,20 +194,6 @@ impl MessageStore {
                 "ALTER TABLE attachment_refs ADD COLUMN iv TEXT NOT NULL DEFAULT '';",
             )?;
         }
-        // v160f: identity transfer codes (перенос личности Safari → PWA на iOS,
-        // разные хранилища). Сервер хранит ТОЛЬКО шифротекст под hash(code):
-        // сам код (и ключ) серверу недоступны.
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS identity_transfers (
-                code_hash   CHAR(64) PRIMARY KEY,
-                ct_b64      TEXT NOT NULL,
-                created_at  INTEGER NOT NULL,
-                expires_at  INTEGER NOT NULL,
-                used        INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE INDEX IF NOT EXISTS idx_identity_transfers_expires ON identity_transfers(expires_at);
-            ",
-        )?;
         debug!(db_path = %path.display(), "message store initialised");
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
@@ -651,75 +637,6 @@ impl MessageStore {
     }
 
     /// v149: blob'ы без ссылок (orphan) — удалить. Вызывается из TTL-cron.
-    // ── v160f: identity transfer codes ─────────────────────────────────────
-
-    /// Сохранить шифротекст личности под hash(код). Возвращает expires_at.
-    /// Одноразовый: used=0; 10 мин TTL. Старые протухшие чистим при создании.
-    pub fn create_identity_transfer(
-        &self,
-        code_hash: &str,
-        ct_b64: &str,
-        now: i64,
-        ttl_secs: i64,
-    ) -> rusqlite::Result<i64> {
-        let expires = now + ttl_secs;
-        let c = self.conn.lock();
-        // Cleanup: удаляем все истёкшие/использованные (лёгкий housekeeping).
-        let _ = c.execute(
-            "DELETE FROM identity_transfers WHERE expires_at < ?1 OR used = 1",
-            rusqlite::params![now],
-        );
-        // Один активный код на шифротекст не ограничиваем (hash уникален),
-        // но ограничим частоту на уровне приложения — клиент генерит новый код
-        // только по явному клику.
-        c.execute(
-            "INSERT INTO identity_transfers (code_hash, ct_b64, created_at, expires_at, used) \
-             VALUES (?1, ?2, ?3, ?4, 0)
-             ON CONFLICT(code_hash) DO UPDATE SET ct_b64 = excluded.ct_b64, \
-             created_at = excluded.created_at, expires_at = excluded.expires_at, used = 0",
-            rusqlite::params![code_hash, ct_b64, now, expires],
-        )?;
-        Ok(expires)
-    }
-
-    /// Одноразовое потребление кода: атомарный UPDATE used=0→1 (защита от гонки).
-    pub fn consume_identity_transfer(&self, code_hash: &str) -> rusqlite::Result<Option<String>> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0) as i64;
-        let mut c = self.conn.lock();
-        let row: Option<(String, i64, i64)> = c
-            .query_row(
-                "SELECT ct_b64, expires_at, used FROM identity_transfers WHERE code_hash = ?1",
-                rusqlite::params![code_hash],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
-            )
-            .ok();
-        let Some((ct_b64, expires_at, used)) = row else {
-            return Ok(None);
-        };
-        if used == 1 || expires_at < now {
-            let _ = c.execute(
-                "DELETE FROM identity_transfers WHERE code_hash = ?1",
-                rusqlite::params![code_hash],
-            );
-            return Ok(None);
-        }
-        let n = c.execute(
-            "UPDATE identity_transfers SET used = 1 WHERE code_hash = ?1 AND used = 0",
-            rusqlite::params![code_hash],
-        )?;
-        if n == 0 {
-            return Ok(None); // проиграли гонку другому запросу
-        }
-        let _ = c.execute(
-            "DELETE FROM identity_transfers WHERE code_hash = ?1",
-            rusqlite::params![code_hash],
-        );
-        Ok(Some(ct_b64))
-    }
-
     /// v160o: blob'ы без ссылок (orphan) удаляем только если они старше
     /// retention_secs (сек от загрузки, created_at). Свежие orphan'ы — это
     /// чьи-то ещё не забранные видео/фото: они обязаны дожить до 24h.
@@ -823,8 +740,8 @@ mod tests {
             )
             .unwrap();
         // v149: envelopes + blobs (+attachment_refs). user_aliases удалена.
-        // v160f: + identity_transfers (итого 4).
-        assert_eq!(n, 4);
+        // v160p: identity_transfers удалена (итого 3).
+        assert_eq!(n, 3);
     }
 
     #[test]

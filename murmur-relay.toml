@@ -1,0 +1,4 @@
+name = "murmur-relay-hp"
+home_dir = "/home/oleg/projects/murmur/data"
+ws_bind = "0.0.0.0:8445"
+static_dir = "/home/oleg/projects/murmur/pwa"
