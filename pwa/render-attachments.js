@@ -27,9 +27,11 @@ function b64decode(b64) {
     return out;
 }
 
-// 1. Fetch blob ciphertext from server
-async function fetchBlob(blobId, abortSignal) {
-    const r = await fetch(`${ATTACH_API_BASE}/api/blob/${blobId}`, {
+// 1. Fetch blob ciphertext from server (v160p Phase 2: bearer token required —
+// att.blob_token arrives inside sealed envelope; server verifies SHA-256 hash).
+async function fetchBlob(blobId, abortSignal, blobToken) {
+    const tqs = blobToken ? `?t=${encodeURIComponent(blobToken)}` : "";
+    const r = await fetch(`${ATTACH_API_BASE}/api/blob/${blobId}${tqs}`, {
         method: "GET",
         credentials: "omit",
         // Lesson #210 (Олег 2026-08-26 13:38): pass abort signal to fetch so a
@@ -185,7 +187,7 @@ async function renderAttachment(att, containerEl, abortSignal) {
         // v160ka: 45s hard cap fails mid-download на 35MB через CF tunnel.
         // >5MB → 90s fetch window.
         const fetchMs = _sz > 5*1024*1024 ? 90000 : 45000;
-        const ct = await withTimeout(fetchBlob(att.blob_id, abortSignal), fetchMs, "fetchBlob");
+        const ct = await withTimeout(fetchBlob(att.blob_id, abortSignal, att.blob_token), fetchMs, "fetchBlob");
         if (abortSignal && abortSignal.aborted) { clearTimeout(safetyNetId); placeholder.remove(); return null; }
         // b. Unwrap AES key (ECIES)
         const key = await withTimeout(eciesUnwrapKey(att.wrapped_key, { self: !!(att && att._selfKey) }), 15000, "eciesUnwrap");
@@ -420,7 +422,7 @@ function openVideoFullscreen(blobUrl, mime, name, att) {
                     blob = await cache.get(att.blob_id);
                 }
                 if (!blob) {
-                    const ct = await withTimeout(fetchBlob(att.blob_id, null), 45000, "fetchBlob");
+                    const ct = await withTimeout(fetchBlob(att.blob_id, null, att.blob_token), 45000, "fetchBlob");
                     const key = await withTimeout(eciesUnwrapKey(att.wrapped_key, { self: !!att._selfKey }), 15000, "eciesUnwrap");
                     const iv = b64decode(att.iv);
                     const plain = await aesDecrypt({ ciphertext: ct, key, iv });

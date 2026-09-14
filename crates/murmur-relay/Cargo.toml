@@ -40,6 +40,10 @@ parking_lot = "0.12"
 sha3 = "0.10"
 rand = "0.8"
 sha2 = "0.10"
+hkdf = "0.12"
+# v160p Phase 2: AES-GCM for subscriptions.json at rest (encrypted with key
+# derived from a random store secret in home_dir).
+ring = "0.17"
 futures-lite = "2"
 clap = { version = "4", features = ["derive"] }
 

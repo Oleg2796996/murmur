@@ -241,6 +241,34 @@ impl MessageStore {
             Ok(())
         })
     }
+
+    /// v160p Phase 2: store SHA-256 of the bearer token for a blob.
+    /// Token itself (32 random bytes) is returned to the uploader once and kept
+    /// in the sealed envelope — server never sees the raw token.
+    pub fn insert_blob_token(&self, blob_id: &str, token_hash: &str) -> rusqlite::Result<()> {
+        self.with_conn(|c| {
+            c.execute(
+                "INSERT INTO blob_tokens (blob_id, token_hash) VALUES (?1, ?2) \
+                 ON CONFLICT(blob_id) DO UPDATE SET token_hash = excluded.token_hash",
+                params![blob_id, token_hash],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// v160p Phase 2: verify a bearer token for a blob download.
+    pub fn verify_blob_token(&self, blob_id: &str, token_hash: &str) -> rusqlite::Result<bool> {
+        self.with_conn(|c| {
+            let stored: Option<String> = c
+                .query_row(
+                    "SELECT token_hash FROM blob_tokens WHERE blob_id = ?1",
+                    params![blob_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            Ok(stored.map_or(false, |s| s == token_hash))
+        })
+    }
 }
 
 #[derive(Debug, Clone)]

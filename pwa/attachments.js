@@ -385,6 +385,11 @@ async function attachEncryptAndUpload({ file, peerNpub, selfNpub, onProgress }) 
         size: resp.size,
         name: file.name,
         publicName: publicName, // neutral f-…bin (тот же, что зарегистрирован на сервере)
+        // v160p Phase 2: bearer token for blob download. Goes INSIDE sealed ct
+        // (attachments_meta server-side copy carries it too — relay already
+        // knows the token hash, no extra leak). Recipient presents it at
+        // /api/blob/{id}?t=...
+        blob_token: resp.blob_token || null,
         wrapped_key: wrappedKey, // for recipient to unwrap with own privkey
         iv: b64encode(iv), // base64 — recipient decodes to 12-byte IV
         plaintext_b64: b64encode(new Uint8Array(ab)), // local cache for outgoing render

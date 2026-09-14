@@ -2090,10 +2090,26 @@ async function setupPushSubscription(forceResubscribe) {
             return false;
         }
         if (typeof pushDebugLog === "function") pushDebugLog("POST register_subscribe npub=" + myNpub.slice(0, 16) + "…", "setup");
+        // v160p Phase 2: proof-of-key — sign "push-register" challenge with our
+        // identity key (same canonical signature_input as envelope sig). Relay
+        // verifies → foreign endpoint cannot register for our npub.
+        let challengeSig = null;
+        try {
+            const wmod = await loadWasmModule();
+            const signRes = unwrap(wmod.sign_envelope(myNpub, new TextEncoder().encode("push-register")));
+            if (signRes.ok) challengeSig = signRes.data;
+        } catch (e) {
+            console.warn("[push] challenge sign failed", e);
+        }
+        if (!challengeSig) {
+            if (typeof pushDebugLog === "function") pushDebugLog("challenge sign FAIL — cannot register", "err");
+            _schedulePushRetry(forceResubscribe);
+            return false;
+        }
         const r = await fetch(RELAY + "/push/register_subscribe", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ npub: myNpub, subscription: subJson }),
+            body: JSON.stringify({ npub: myNpub, subscription: subJson, challenge_sig: challengeSig }),
         });
         if (!r.ok) {
             const errText = await r.text();
@@ -3650,6 +3666,9 @@ async function sendMessage() {
         const serverMeta = metaSnapshot.map((a) => ({
             blob_id: a.blob_id,
             sha256: a.sha256,
+            // v160p Phase 2: bearer token in server meta — relay already stores
+            // its hash (no extra leak); recipient reads it to download blob.
+            blob_token: a.blob_token || null,
             wrapped_key: a.wrapped_key,
             iv: a.iv,
             mime: a.mime,
@@ -3705,6 +3724,7 @@ async function sendMessage() {
             .map((a) => ({
                 blob_id: a.blob_id,
                 sha256: a.sha256,
+                blob_token: a.blob_token || null, // v160p Phase 2 (self-download after reload)
                 // v160o: wrapped_key ({r,s}) + iv нужны для self-decrypt после
                 // reload (когда plaintext из storage выброшен санитайзером —
                 // Lesson #349). Без них превью после перезахода становится чипом.

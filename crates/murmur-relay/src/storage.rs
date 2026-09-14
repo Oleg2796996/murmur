@@ -98,6 +98,14 @@ impl MessageStore {
             );
             CREATE INDEX IF NOT EXISTS idx_attachment_refs_envelope ON attachment_refs(envelope_hash);
             CREATE INDEX IF NOT EXISTS idx_attachment_refs_blob ON attachment_refs(blob_id);
+            -- v160p Phase 2: bearer tokens for blob download. Token = 32 random bytes,
+            -- server generates at upload, receiver presents at download. Stored server-side
+            -- only (never in plaintext envelope — client keeps it in sealed ct).
+            CREATE TABLE IF NOT EXISTS blob_tokens (
+                blob_id    TEXT PRIMARY KEY REFERENCES blobs(id),
+                token_hash CHAR(64) NOT NULL UNIQUE,
+                created_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS INTEGER))
+            );
             ",
         )?;
         // Migration: если таблица envelopes была создана раньше, добавить expires_at.
@@ -740,8 +748,8 @@ mod tests {
             )
             .unwrap();
         // v149: envelopes + blobs (+attachment_refs). user_aliases удалена.
-        // v160p: identity_transfers удалена (итого 3).
-        assert_eq!(n, 3);
+        // v160p: identity_transfers удалена, blob_tokens добавлена (итого 4).
+        assert_eq!(n, 4);
     }
 
     #[test]

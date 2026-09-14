@@ -149,13 +149,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(_) => {}
                 Err(err) => warn!(err=%err, "pending retention failed"),
             }
-            // v160o: blob'ы без ссылок удаляем только если им больше 24h от
-            // загрузки (свежие orphan'ы — ещё не забранные видео/фото).
+            // v160p: blob'ы без ссылок удаляем через 1h от загрузки (было 24h).
+            // 5 min слишком агрессивно: offline-получатель, забравший envelope на
+            // границе TTL-окна, не успел бы скачать blob. 1h = запас на offline +
+            // медленную сеть; уже скачанные blob'ы живут в IDB устройства независимо.
             let now_secs: i64 = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            match store_for_ttl.delete_orphan_blobs(now_secs, 86_400) {
+            match store_for_ttl.delete_orphan_blobs(now_secs, 3_600) {
                 Ok(files) if !files.is_empty() => {
                     info!(count = files.len(), "orphan blobs deleted");
                 }

@@ -60,6 +60,7 @@ use serde_json::Value as JsonValue;
 use base64::Engine;
 use jwt_simple::prelude::{ES256KeyPair, ECDSAP256PublicKeyLike};
 use base64::engine::general_purpose::STANDARD as BASE64;
+use murmur_transport::Envelope;
 
 /// Server-owned VAPID keypair. Persisted to disk on first generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,20 +155,99 @@ impl PushSubscription {
 /// On-disk persistent store of subscriptions.
 pub struct PushStore {
     path: PathBuf,
+    /// v160p Phase 2: 32-byte AES-GCM key for subscriptions.json at rest.
+    secret: Arc<Vec<u8>>,
     inner: Arc<Mutex<HashMap<String, PushSubscription>>>,
+}
+
+/// v160p Phase 2: encrypt/decrypt helpers for subscriptions.json.
+/// Format: [12-byte nonce][16-byte tag appended by ring seal] —
+/// ring's seal_in_place_append_tag produces nonce || ciphertext || tag.
+fn encrypt_json(plaintext: &str, key: &[u8]) -> Result<Vec<u8>, String> {
+    use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
+    let unbound = UnboundKey::new(&AES_256_GCM, key).map_err(|e| e.to_string())?;
+    let sealing_key = LessSafeKey::new(unbound);
+    let mut nonce_bytes = [0u8; 12];
+    use rand::RngCore;
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::assume_unique_for_key(nonce_bytes);
+    let mut buf = plaintext.as_bytes().to_vec();
+    sealing_key
+        .seal_in_place_append_tag(nonce, Aad::empty(), &mut buf)
+        .map_err(|e| e.to_string())?;
+    let mut out = nonce_bytes.to_vec();
+    out.extend_from_slice(&buf);
+    Ok(out)
+}
+
+fn decrypt_json(raw: &[u8], key: &[u8]) -> Result<String, String> {
+    use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
+    if raw.len() < 12 + 16 {
+        return Err("ciphertext too short".to_string());
+    }
+    let (nonce_bytes, ct) = raw.split_at(12);
+    let unbound = UnboundKey::new(&AES_256_GCM, key).map_err(|e| e.to_string())?;
+    let opening_key = LessSafeKey::new(unbound);
+    let nonce = Nonce::try_assume_unique_for_key(nonce_bytes).map_err(|e| e.to_string())?;
+    let mut buf = ct.to_vec();
+    let pt = opening_key
+        .open_in_place(nonce, Aad::empty(), &mut buf)
+        .map_err(|e| e.to_string())?;
+    String::from_utf8(pt.to_vec()).map_err(|e| e.to_string())
 }
 
 impl PushStore {
     pub fn new(home: &Path) -> anyhow::Result<Self> {
         let path = home.join("subscriptions.json");
+        // v160p Phase 2: subscriptions.json encrypted at rest (AES-256-GCM).
+        // Key: random 32-byte store secret in home_dir/store.key (created on
+        // first run, chmod 600). Legacy plaintext file: parsed, re-persisted
+        // encrypted. No secret → warn (should not happen).
+        let secret_path = home.join("store.key");
+        let key = if secret_path.exists() {
+            let bytes = std::fs::read(&secret_path)?;
+            if bytes.len() != 32 {
+                anyhow::bail!("store.key must be exactly 32 bytes, got {}", bytes.len());
+            }
+            bytes
+        } else {
+            use rand::RngCore;
+            let mut k = [0u8; 32];
+            rand::thread_rng().fill_bytes(&mut k);
+            std::fs::write(&secret_path, &k)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&secret_path, std::fs::Permissions::from_mode(0o600));
+            }
+            info!(path = %secret_path.display(), "generated new store secret (chmod 600)");
+            k.to_vec()
+        };
         let inner: HashMap<String, PushSubscription> = if path.exists() {
-            let text = std::fs::read_to_string(&path)?;
+            let raw = std::fs::read(&path)?;
+            let text = match decrypt_json(&raw, &key) {
+                Ok(t) => t,
+                Err(e) => {
+                    // Legacy plaintext (pre-Phase2) or corrupted: try plaintext.
+                    match String::from_utf8(raw.clone()) {
+                        Ok(pt) if pt.trim_start().starts_with('{') => {
+                            warn!(err = %e, "subscriptions.json is plaintext (legacy) — will re-persist encrypted");
+                            pt
+                        }
+                        _ => {
+                            warn!(err = %e, "subscriptions.json unreadable — starting empty");
+                            String::new()
+                        }
+                    }
+                }
+            };
             serde_json::from_str(&text).unwrap_or_default()
         } else {
             HashMap::new()
         };
         Ok(Self {
             path,
+            secret: Arc::new(key),
             inner: Arc::new(Mutex::new(inner)),
         })
     }
@@ -219,7 +299,9 @@ impl PushStore {
 
     fn persist_locked(&self, g: &HashMap<String, PushSubscription>) -> anyhow::Result<()> {
         let text = serde_json::to_string_pretty(g)?;
-        std::fs::write(&self.path, text)?;
+        // v160p Phase 2: persist encrypted at rest.
+        let ct = encrypt_json(&text, &self.secret).map_err(|e| anyhow::anyhow!("subs encrypt: {e}"))?;
+        std::fs::write(&self.path, ct)?;
         Ok(())
     }
 
@@ -227,6 +309,7 @@ impl PushStore {
     pub fn clone_handle(&self) -> Self {
         Self {
             path: self.path.clone(),
+            secret: self.secret.clone(),
             inner: self.inner.clone(),
         }
     }
@@ -691,6 +774,33 @@ async fn handle_register_subscribe(
         Some(s) => s.to_string(),
         None => return Ok(json_error(StatusCode::BAD_REQUEST, "missing auth")),
     };
+
+    // v160p Phase 2: proof-of-key. Client signs "push-register" challenge with
+    // its identity key (WASM sign_envelope — same canonical signature_input as
+    // envelope sig). Relay verifies via Envelope::verify → a foreign endpoint
+    // cannot be registered for someone else's npub.
+    let proof_sig_hex = match json.get("challenge_sig").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => return Ok(json_error(StatusCode::UNAUTHORIZED, "missing challenge_sig")),
+    };
+    {
+        let claimed_sender = match murmur_id::IdentityPublic::from_npub(&alias) {
+            Ok(s) => s,
+            Err(e) => return Ok(json_error(StatusCode::BAD_REQUEST, &format!("bad npub: {e}"))),
+        };
+        let sig_bytes = match hex::decode(&proof_sig_hex) {
+            Ok(b) if b.len() == 64 => b,
+            _ => return Ok(json_error(StatusCode::BAD_REQUEST, "bad challenge_sig format")),
+        };
+        let env = Envelope {
+            payload: b"push-register".to_vec(),
+            signature: sig_bytes,
+            sender_npub: alias.clone(),
+        };
+        if env.verify(&claimed_sender).is_err() {
+            return Ok(json_error(StatusCode::FORBIDDEN, "proof-of-key failed: signature does not match npub"));
+        }
+    }
 
     let entry = PushSubscription {
         id: uuid::Uuid::new_v4().to_string(),
@@ -1254,12 +1364,28 @@ async fn handle_api_upload(
 
     match upload_handle_upload(db, &home_dir, upload_req) {
         Ok(meta) => {
+            // v160p Phase 2: generate bearer token for this blob. Raw token goes
+            // to the uploader ONCE (kept inside sealed envelope), server stores
+            // only SHA-256(token). Download without token → 401.
+            let token_bytes: [u8; 32] = rand::random();
+            let token_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token_bytes);
+            let token_hash = {
+                use sha2::{Digest, Sha256};
+                let mut h = Sha256::new();
+                Digest::update(&mut h, token_b64.as_bytes());
+                hex::encode(Digest::finalize(h))
+            };
+            if let Err(e) = db.insert_blob_token(&meta.blob_id, &token_hash) {
+                // Not fatal: blob is uploaded, but log loudly — download will 401.
+                tracing::warn!(blob_id = %meta.blob_id, err = %e, "blob token persist failed");
+            }
             let resp = serde_json::json!({
                 "ok": true,
                 "blob_id": meta.blob_id,
                 "sha256": meta.sha256,
                 "size": meta.size,
                 "mime": meta.mime,
+                "blob_token": token_b64,
             });
             Ok(Response::builder()
                 .status(StatusCode::CREATED)
@@ -1284,6 +1410,31 @@ async fn handle_api_blob_download(
     let blob_id = req.uri().path().trim_start_matches("/api/blob/");
     if blob_id.is_empty() || blob_id.contains('/') {
         return Ok(json_error(StatusCode::BAD_REQUEST, "invalid blob_id"));
+    }
+
+    // v160p Phase 2: bearer-auth. Token arrives as `?t=<urlsafe-b64>`.
+    // Without a token → 401; wrong token → 403. Random 128-bit token is
+    // unguessable; raw token never stored server-side (only SHA-256).
+    let token = req
+        .uri()
+        .query()
+        .unwrap_or("")
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("t="))
+        .unwrap_or("");
+    if token.is_empty() {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "missing blob token"));
+    }
+    let token_hash = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        Digest::update(&mut h, token.as_bytes());
+        hex::encode(Digest::finalize(h))
+    };
+    match db.verify_blob_token(blob_id, &token_hash) {
+        Ok(true) => {}
+        Ok(false) => return Ok(json_error(StatusCode::FORBIDDEN, "invalid blob token")),
+        Err(e) => return Ok(json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("token verify: {e}"))),
     }
 
     let (path, meta) = match upload_handle_download(db, blob_id) {
