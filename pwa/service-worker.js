@@ -11,6 +11,16 @@
 const APP_DISPLAY_NAME = "MurMur";
 const SW_VERSION = "murmur-sw18"; // v160y22: fix ReferenceError isDesktop → platform split restored
 
+function pushDebugToClients(event, detail) {
+  try {
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      for (const c of clients) {
+        c.postMessage({ type: "push-debug", event, detail: String(detail || "") });
+      }
+    }).catch(() => {});
+  } catch (e) { /* ignore */ }
+}
+
 self.addEventListener("install", (event) => {
   // Никаких precache — сервер отдаёт всё с no-store.
   self.skipWaiting();
@@ -38,6 +48,7 @@ self.addEventListener("message", (event) => {
 });
 
 self.addEventListener("push", (event) => {
+  pushDebugToClients("push-received", "data=" + (event.data ? "yes" : "no"));
   // v160y (Олег 19:20): платформенный сплит против дубля заголовка.
   // macOS: title="" → система сама подставляет имя приложения ВТОРОЙ
   // строкой (скриншот 18:45: "murmur / murmur / Новое сообщение").
@@ -52,6 +63,7 @@ self.addEventListener("push", (event) => {
     }
   } catch (e) {
     console.warn("[murmur-sw] push payload not JSON", e);
+    pushDebugToClients("push-parse-error", e && e.message || String(e));
   }
   const text = payload.body || "Откройте приложение, чтобы прочитать сообщение";
   // WorkerNavigator.userAgent доступен в SW; iPad отдаёт Macintosh-UA →
@@ -77,10 +89,18 @@ self.addEventListener("push", (event) => {
       envelope_hash_hex: payload.envelope_hash_hex,
     },
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  pushDebugToClients("push-show", "isMac=" + isMac + " isIOS=" + isIOS + " title='" + title.slice(0, 40) + "' body='" + (options.body || "").slice(0, 40) + "' alias=" + (payload.alias || "?"));
+  event.waitUntil(
+    self.registration.showNotification(title, options).then(() => {
+      pushDebugToClients("push-shown", "ok tag=" + options.tag);
+    }).catch((e) => {
+      pushDebugToClients("push-show-error", e && e.message || String(e));
+    })
+  );
 });
 
 self.addEventListener("notificationclick", (event) => {
+  pushDebugToClients("notificationclick", "tag=" + (event.notification && event.notification.tag || "?"));
   event.notification.close();
   const targetUrl = "/";
   event.waitUntil(

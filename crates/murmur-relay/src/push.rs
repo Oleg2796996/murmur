@@ -78,7 +78,14 @@ impl VapidKeys {
         let path = home.join("vapid_keys.json");
         if path.exists() {
             let text = std::fs::read_to_string(&path)?;
-            let k: Self = serde_json::from_str(&text)?;
+            let mut k: Self = serde_json::from_str(&text)?;
+            // Config subject wins over stale vapid_keys.json (Lesson #413:
+            // Apple rejects .local domains in VAPID sub → BadJwtToken).
+            if k.subject != subject {
+                info!(old=%k.subject, new=%subject, "syncing VAPID subject from config");
+                k.subject = subject;
+                std::fs::write(&path, serde_json::to_string_pretty(&k)?)?;
+            }
             return Ok(k);
         }
 
@@ -180,6 +187,19 @@ impl PushStore {
         g.retain(|_, existing| existing.endpoint != sub.endpoint);
         g.insert(sub.id.clone(), sub);
         self.persist_locked(&g)
+    }
+
+    /// Replace all subscriptions for an npub with a single fresh record.
+    /// Apple issues a new endpoint on every force-resubscribe; keeping old
+    /// ones causes delivery to hit stale endpoints first (403) — Lesson #412.
+    pub fn replace_for_alias(&self, sub: PushSubscription) -> anyhow::Result<usize> {
+        let mut g = self.inner.lock();
+        let before = g.len();
+        g.retain(|_, existing| existing.alias != sub.alias && existing.endpoint != sub.endpoint);
+        let removed = before - g.len();
+        g.insert(sub.id.clone(), sub);
+        self.persist_locked(&g)?;
+        Ok(removed)
     }
 
     pub fn delete(&self, id: &str) -> anyhow::Result<()> {
@@ -366,6 +386,9 @@ impl PushServer {
         // Lesson #131.12). Dedup by endpoint before sending.
         let mut seen_endpoints: std::collections::HashSet<String> = std::collections::HashSet::new();
         subs.retain(|s| seen_endpoints.insert(s.endpoint.clone()));
+        // Newest registration first — stale Apple endpoints 403 before fresh
+        // ones get a chance if we iterate in insertion order (Lesson #412).
+        subs.sort_by(|a, b| b.registered_at.cmp(&a.registered_at));
         let client = IsahcWebPushClient::new()?;
         let body = payload.to_json();
         let mut delivered = 0usize;
@@ -393,14 +416,28 @@ impl PushServer {
             match client.send(msg).await {
                 Ok(_) => {
                     delivered += 1;
-                    info!(sub=%sub.id, alias=%payload.alias, "push delivered");
+                    info!(sub=%sub.id, alias=%payload.alias, endpoint=%sub.endpoint, "push delivered");
+                    // One successful delivery is enough; skip older stale subs.
+                    break;
                 }
                 Err(WebPushError::EndpointNotFound) | Err(WebPushError::EndpointNotValid) => {
                     warn!(sub=%sub.id, "endpoint gone, removing");
                     let _ = self.store.delete(&sub.id);
                 }
                 Err(e) => {
-                    warn!(err=?e, sub=%sub.id, "push delivery failed");
+                    // Apple returns 403 for two distinct reasons (Lesson #413):
+                    // - BadJwtToken: invalid VAPID sub claim (e.g. mailto:*.local)
+                    // - stale subscription: endpoint created with old VAPID key
+                    // Only delete the sub on stale-endpoint 403, NOT on BadJwtToken.
+                    let err_s = format!("{e:?}");
+                    if err_s.contains("BadJwtToken") {
+                        warn!(sub=%sub.id, alias=%payload.alias, err=%err_s, "VAPID BadJwtToken — check vapid_subject config");
+                    } else if err_s.contains("403") {
+                        warn!(sub=%sub.id, alias=%payload.alias, "403 stale subscription, removing");
+                        let _ = self.store.delete(&sub.id);
+                    } else {
+                        warn!(err=?e, sub=%sub.id, "push delivery failed");
+                    }
                 }
             }
         }
@@ -664,17 +701,21 @@ async fn handle_register_subscribe(
 
     let entry = PushSubscription {
         id: uuid::Uuid::new_v4().to_string(),
-        alias,
+        alias: alias.clone(),
         endpoint,
         p256dh_b64url,
         auth_b64url,
         registered_at: chrono::Utc::now().to_rfc3339(),
     };
     let id = entry.id.clone();
-    if let Err(e) = store.upsert_by_endpoint(entry) {
-        return Ok(json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("store: {e}")));
+    let removed = match store.replace_for_alias(entry) {
+        Ok(n) => n,
+        Err(e) => return Ok(json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("store: {e}"))),
+    };
+    if removed > 0 {
+        info!(alias=%alias, removed, "purged stale push subs on register");
     }
-    let body = serde_json::json!({ "ok": true, "id": id }).to_string();
+    let body = serde_json::json!({ "ok": true, "id": id, "removed": removed }).to_string();
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "application/json")

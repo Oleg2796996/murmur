@@ -33,6 +33,92 @@
 
 })();
 
+// ── Push debug panel (v160y22pushdebug1) ──
+// Visible overlay for push subscription/register/delivery diagnostics.
+(function () {
+    const MAX_LINES = 80;
+    const logs = [];
+    let panel = null;
+    let logEl = null;
+    let visible = true;
+
+    function ts() {
+        const d = new Date();
+        return d.toLocaleTimeString("ru-RU", { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0");
+    }
+
+    function ensurePanel() {
+        if (panel) return;
+        panel = document.createElement("div");
+        panel.id = "__push_debug_panel";
+        panel.style.cssText = "position:fixed;bottom:0;left:0;right:0;max-height:38vh;background:rgba(0,20,40,0.92);color:#7fd4ff;font-family:monospace;font-size:10px;z-index:99998;border-top:2px solid #229ED9;display:flex;flex-direction:column;";
+        const hdr = document.createElement("div");
+        hdr.style.cssText = "display:flex;gap:6px;padding:4px 8px;background:rgba(34,158,217,0.25);align-items:center;flex-shrink:0;";
+        const title = document.createElement("span");
+        title.textContent = "🔔 PUSH DEBUG";
+        title.style.fontWeight = "bold";
+        hdr.appendChild(title);
+        const mkBtn = (label, fn) => {
+            const b = document.createElement("button");
+            b.textContent = label;
+            b.style.cssText = "padding:2px 6px;font-size:10px;border:1px solid #229ED9;background:#17212b;color:#fff;cursor:pointer;border-radius:3px;";
+            b.onclick = fn;
+            return b;
+        };
+        hdr.appendChild(mkBtn("Скрыть", () => { visible = false; panel.style.display = "none"; }));
+        hdr.appendChild(mkBtn("Показать", () => { visible = true; panel.style.display = "flex"; }));
+        hdr.appendChild(mkBtn("Очистить", () => { logs.length = 0; if (logEl) logEl.textContent = ""; }));
+        hdr.appendChild(mkBtn("Копировать", () => {
+            const text = logs.map(l => l.t + " " + l.msg).join("\n");
+            navigator.clipboard.writeText(text).catch(() => {});
+        }));
+        hdr.appendChild(mkBtn("🔔 retry", () => {
+            if (typeof _schedulePushRetry === "function") _schedulePushRetry(true);
+            else if (typeof setupPushSubscription === "function") setupPushSubscription(true);
+        }));
+        logEl = document.createElement("pre");
+        logEl.style.cssText = "margin:0;padding:6px 8px;overflow:auto;white-space:pre-wrap;word-break:break-all;flex:1;";
+        panel.appendChild(hdr);
+        panel.appendChild(logEl);
+        (document.body || document.documentElement).appendChild(panel);
+    }
+
+    function render() {
+        if (!logEl) return;
+        logEl.textContent = logs.map(l => l.t + " " + l.msg).join("\n");
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    window.pushDebugLog = function (msg, level) {
+        const line = { t: ts(), msg: (level ? "[" + level + "] " : "") + String(msg) };
+        logs.push(line);
+        if (logs.length > MAX_LINES) logs.shift();
+        console.log("[push-debug]", line.msg);
+        try {
+            if (document.body) ensurePanel();
+            else document.addEventListener("DOMContentLoaded", ensurePanel, { once: true });
+            render();
+        } catch (e) { /* panel optional */ }
+    };
+
+    window.__PUSH_DEBUG__ = {
+        logs: () => logs.slice(),
+        show: () => { visible = true; ensurePanel(); panel.style.display = "flex"; },
+        hide: () => { visible = false; if (panel) panel.style.display = "none"; },
+    };
+
+    // SW → page push events
+    if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.addEventListener("message", (ev) => {
+            const d = ev.data;
+            if (!d || d.type !== "push-debug") return;
+            window.pushDebugLog("[SW] " + (d.event || "?") + ": " + (d.detail || ""), "sw");
+        });
+    }
+
+    window.pushDebugLog("panel init v160y22pushdebug2");
+})();
+
 // WASM boot via dynamic import() so this file can run as a CLASSIC script
 // (no <script type="module">). iOS PWA standalone has flaky module support,
 // and classic scripts with inline event handlers are 100% reliable.
@@ -1065,6 +1151,7 @@ function renderOutgoingAttachment({ mime, name, url, size, poster, att }) {
         img.alt = name || "image";
         img.loading = "lazy";
         img.className = "attach-image";
+        img.onclick = () => openFullscreen(url, mime);
         // Lesson #225: register для auto-revoke на detach
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(img, url);
         figure.appendChild(img);
@@ -1443,7 +1530,12 @@ function enterMessenger() {
     // connectWS();  // DISABLED: WS reconnect storm blocks fetches in browsers without proxying WS.
                        // Push via WebSocket is replaced by polling (pollHistoryForPeer + pollInbox).
     startPolling();
-    setupPushSubscription();
+    // Granted permission + stale Safari sub = 403 forever until force resubscribe.
+    // v160y22push2: use retry wrapper — myNpub may not be ready if enterMessenger
+    // races with async identity restore.
+    if (Notification.permission === "granted") {
+        _schedulePushRetry(true);
+    }
     updateBadge();
     setupInviteUI();
     // Deep-link invite: .../#invite=<npub> → открыть чат с этим контактом.
@@ -1489,15 +1581,18 @@ async function updateNotifBtnState() {
         } catch (e) { /* ignore — SW ещё не готов, считаем как нет подписки */ }
     }
 
-    if (perm === "granted" && (myAlias || myNpub)) {
+    if (perm === "granted" && (myNpub || myAlias)) {
         try {
-            // Try the user-chosen alias first (e.g. "Oleg"); fall back to npub
-            // if the user never set a display name.
+            // v160y22pushdebug2: npub is the canonical relay key (PushPayload.alias = to_npub).
+            // Human alias ("Oleg") is NOT stored on server — check npub first.
             const tried = [];
-            for (const candidate of [myAlias, myNpub].filter(Boolean)) {
-                const r = await fetch(RELAY + "/push/status?alias=" + encodeURIComponent(candidate), { cache: "no-store" });
+            for (const [param, candidate] of [
+                ["npub", myNpub],
+                ["alias", myAlias],
+            ].filter(([, v]) => v)) {
+                const r = await fetch(RELAY + "/push/status?" + param + "=" + encodeURIComponent(candidate), { cache: "no-store" });
                 const j = await r.json();
-                tried.push(candidate);
+                tried.push(param + "=" + candidate.slice(0, 12));
                 if (j && j.subscribed) {
                     serverHasSub = true;
                     serverCount = j.count;
@@ -1874,72 +1969,163 @@ function urlBase64ToUint8Array(base64String) {
     return out;
 }
 
-async function setupPushSubscription() {
-    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-        console.log("[push] PushManager not supported");
+// v160y22push2: retry push register when myNpub/SW not ready yet (Lesson #407).
+let _pushSetupPromise = null;
+let _pushSetupPendingForce = false;
+
+function _schedulePushRetry(force) {
+    if (force) _pushSetupPendingForce = true;
+    if (typeof pushDebugLog === "function") pushDebugLog("_schedulePushRetry force=" + force + " myNpub=" + (myNpub ? myNpub.slice(0, 16) : "null"), "retry");
+    if (_pushSetupPromise) {
+        if (typeof pushDebugLog === "function") pushDebugLog("retry already running — queued force=" + force, "retry");
         return;
     }
+    const wantForce = () => _pushSetupPendingForce;
+    _pushSetupPromise = (async () => {
+        for (let i = 0; i < 12; i++) {
+            if (typeof pushDebugLog === "function") pushDebugLog("retry attempt " + (i + 1) + "/12 force=" + wantForce(), "retry");
+            const ok = await setupPushSubscription(wantForce());
+            if (ok) {
+                if (typeof pushDebugLog === "function") pushDebugLog("retry SUCCESS on attempt " + (i + 1), "ok");
+                _pushSetupPendingForce = false;
+                return;
+            }
+            await new Promise(r => setTimeout(r, 500 + i * 250));
+        }
+        console.warn("[push] retry exhausted — tap 🔔 to register manually");
+        if (typeof pushDebugLog === "function") pushDebugLog("retry EXHAUSTED — tap 🔔", "err");
+        _pushSetupPendingForce = false;
+    })().finally(() => { _pushSetupPromise = null; });
+}
+
+async function setupPushSubscription(forceResubscribe) {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+        console.log("[push] PushManager not supported");
+        if (typeof pushDebugLog === "function") pushDebugLog("PushManager not supported", "err");
+        return false;
+    }
+    if (typeof pushDebugLog === "function") pushDebugLog("setupPushSubscription force=" + forceResubscribe + " perm=" + Notification.permission, "setup");
     try {
         const reg = await navigator.serviceWorker.ready;
         let sub = await reg.pushManager.getSubscription();
+        if (typeof pushDebugLog === "function") pushDebugLog("browser sub=" + (sub ? sub.endpoint.slice(0, 55) + "…" : "null"), "setup");
         // v160s: server VAPID key may have been regenerated (relay reinstall).
         // A browser subscription created with an OLD key gets 403 from Apple on
         // every delivery (VAPID signature mismatch) — and looks perfectly alive
         // client-side. Detect key mismatch and recreate the subscription.
-        const vapidKey = await fetch(RELAY + "/vapid_public_key").then(r => r.text());
+        const vapidKey = (await fetch(RELAY + "/vapid_public_key").then(r => r.text())).trim();
+        if (typeof pushDebugLog === "function") pushDebugLog("vapid key=" + (vapidKey ? vapidKey.slice(0, 20) + "…" : "EMPTY"), "setup");
         if (!vapidKey || vapidKey.length < 20) {
             console.warn("[push] vapid key invalid:", vapidKey);
-            return;
+            if (typeof pushDebugLog === "function") pushDebugLog("vapid key INVALID len=" + (vapidKey ? vapidKey.length : 0), "err");
+            return false;
+        }
+        if (forceResubscribe && sub) {
+            console.warn("[push] force resubscribe requested — dropping browser subscription");
+            if (typeof pushDebugLog === "function") pushDebugLog("force: unsubscribe old browser sub", "setup");
+            try { await sub.unsubscribe(); } catch (e) { /* ignore */ }
+            sub = null;
         }
         if (sub && sub.options && sub.options.applicationServerKey) {
             try {
                 const subKeyB64 = _u8ToBase64url(new Uint8Array(sub.options.applicationServerKey));
                 if (subKeyB64 !== vapidKey) {
                     console.warn("[push] subscription VAPID key mismatch (server rotated) — resubscribing");
+                    if (typeof pushDebugLog === "function") pushDebugLog("VAPID MISMATCH subKey≠server — resubscribing", "warn");
                     await sub.unsubscribe();
                     sub = null;
+                } else if (typeof pushDebugLog === "function") {
+                    pushDebugLog("VAPID key match OK", "setup");
                 }
             } catch (e) {
                 console.warn("[push] key compare failed:", e && e.message);
             }
+        } else if (sub && !forceResubscribe) {
+            // Safari/iOS often hides applicationServerKey — can't verify VAPID match.
+            // After relay reinstall stale subs get 403 from Apple forever (Lesson #404).
+            // Drop and recreate once per session so 🔔 isn't the only recovery path.
+            const LS_PUSH_RESUB = "murmur.push_resub_done";
+            if (!sessionStorage.getItem(LS_PUSH_RESUB)) {
+                console.warn("[push] Safari: VAPID key not inspectable — force resubscribe once this session");
+                if (typeof pushDebugLog === "function") pushDebugLog("Safari: key not inspectable — force resub once/session", "warn");
+                sessionStorage.setItem(LS_PUSH_RESUB, "1");
+                try { await sub.unsubscribe(); } catch (e) { /* ignore */ }
+                sub = null;
+            } else {
+                console.log("[push] existing subscription (VAPID key not inspectable) — re-registering on server");
+                if (typeof pushDebugLog === "function") pushDebugLog("Safari: key not inspectable — re-register on server only", "setup");
+            }
+        } else if (sub && forceResubscribe) {
+            // forceResubscribe=true (granted permission on load / 🔔 tap): always
+            // drop stale browser sub — sessionStorage gate must NOT block recovery.
+            console.warn("[push] force resubscribe — dropping browser subscription (Safari path)");
+            try { await sub.unsubscribe(); } catch (e) { /* ignore */ }
+            sub = null;
         }
         if (!sub) {
             const perm = Notification.permission;
             if (perm === "denied") {
                 console.warn("[push] notifications denied by user");
-                return;
+                if (typeof pushDebugLog === "function") pushDebugLog("permission denied — cannot subscribe", "err");
+                return false;
             }
             sub = await reg.pushManager.subscribe({
                 userVisibleOnly: true,
                 applicationServerKey: urlBase64ToUint8Array(vapidKey),
             });
             console.log("[push] created new browser subscription");
+            if (typeof pushDebugLog === "function") pushDebugLog("NEW browser sub endpoint=" + sub.endpoint.slice(0, 55) + "…", "ok");
         } else {
             console.log("[push] re-using existing browser subscription, endpoint=", sub.endpoint.slice(0, 60));
         }
         const subJson = sub.toJSON();
-        // Use the user-chosen alias (e.g. "Oleg", "Ирина") so the relay can
-        // match incoming envelopes whose `to_alias` is the human-readable name.
-        // Fall back to npub only if no alias has been chosen yet — this keeps
-        // pushes working through onboarding but breaks as soon as the user picks
-        // a real alias (the old npub subscription stops matching).
-        //
-        // CRITICAL (Lesson #131.10): always re-register on the server, even
-        // when reusing the existing browser subscription. Otherwise the server
-        // keeps the old `alias = npub1...` and never matches new envelopes.
-        const subAlias = myAlias || myNpub;
+        // v149/v160y22: relay matches push by recipient npub (PushPayload.alias = to_npub).
+        // Human alias ("Oleg") must NOT be used here — envelope routing is npub-only.
+        // CRITICAL (Lesson #131.10): always re-register on the server, even when reusing
+        // the existing browser subscription.
+        if (!myNpub) {
+            console.warn("[push] myNpub not ready yet — will retry");
+            if (typeof pushDebugLog === "function") pushDebugLog("myNpub NOT READY — scheduling retry", "warn");
+            _schedulePushRetry(forceResubscribe);
+            return false;
+        }
+        if (typeof pushDebugLog === "function") pushDebugLog("POST register_subscribe npub=" + myNpub.slice(0, 16) + "…", "setup");
         const r = await fetch(RELAY + "/push/register_subscribe", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ alias: subAlias, subscription: subJson }),
+            body: JSON.stringify({ npub: myNpub, subscription: subJson }),
         });
         if (!r.ok) {
-            console.warn("[push] register_subscribe HTTP", r.status, await r.text());
-        } else {
-            console.log("[push] registered on server as alias=", subAlias);
+            const errText = await r.text();
+            console.warn("[push] register_subscribe HTTP", r.status, errText);
+            if (typeof pushDebugLog === "function") pushDebugLog("register_subscribe FAIL HTTP " + r.status + " " + errText.slice(0, 80), "err");
+            return false;
         }
+        console.log("[push] registered on server as npub=", myNpub.slice(0, 16));
+        if (typeof pushDebugLog === "function") pushDebugLog("register_subscribe OK npub=" + myNpub.slice(0, 16) + "… endpoint=" + (subJson.endpoint || "").slice(0, 55) + "…", "ok");
+        // v160y22pushdebug2: verify server actually persisted the subscription.
+        try {
+            const vr = await fetch(RELAY + "/push/status?npub=" + encodeURIComponent(myNpub), { cache: "no-store" });
+            const vj = await vr.json();
+            const sc = (vj && vj.count) || 0;
+            const subd = !!(vj && vj.subscribed);
+            if (typeof pushDebugLog === "function") pushDebugLog("verify serverCount=" + sc + " subscribed=" + subd, subd ? "ok" : "err");
+            if (!subd || sc < 1) {
+                console.warn("[push] register OK but server verify failed: count=", sc);
+                if (typeof pushDebugLog === "function") pushDebugLog("VERIFY FAIL: HTTP 200 but serverCount=0 — will retry", "err");
+                return false;
+            }
+        } catch (ve) {
+            console.warn("[push] verify failed:", ve && ve.message);
+            if (typeof pushDebugLog === "function") pushDebugLog("verify fetch failed: " + (ve && ve.message || ve), "err");
+            return false;
+        }
+        if (typeof updateNotifBtnState === "function") updateNotifBtnState();
+        return true;
     } catch (e) {
         console.warn("[push] setup failed:", e && e.message);
+        if (typeof pushDebugLog === "function") pushDebugLog("setup FAILED: " + (e && e.message || e), "err");
+        return false;
     }
 }
 
@@ -1948,18 +2134,21 @@ async function requestPushPermission() {
         alert("Браузер не поддерживает уведомления");
         return;
     }
+    if (typeof pushDebugLog === "function") pushDebugLog("🔔 tap perm=" + Notification.permission, "btn");
     if (Notification.permission === "granted") {
-        await setupPushSubscription();
+        await setupPushSubscription(true);
         return;
     }
     if (Notification.permission === "denied") {
+        if (typeof pushDebugLog === "function") pushDebugLog("permission DENIED by user", "err");
         alert("Уведомления заблокированы. Включите в Safari → Настройки сайтов → Уведомления.");
         return;
     }
     const result = await Notification.requestPermission();
     console.log("[push] permission:", result);
+    if (typeof pushDebugLog === "function") pushDebugLog("requestPermission result=" + result, "btn");
     if (result === "granted") {
-        await setupPushSubscription();
+        await setupPushSubscription(true);
     }
 }
 
@@ -4996,32 +5185,18 @@ async function tryAutoRestore() {
     }
 }
 
-// v160y19: auto-restore push subscription (clean, no diagnostic)
+// v160y22push2: enterMessenger handles push via _schedulePushRetry after
+// identity restore. No duplicate auto-subscribe here — it raced before myNpub.
 if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", async () => { 
+    document.addEventListener("DOMContentLoaded", async () => {
         await requestNotificationPermission();
-        warmOutboxCache(); tryAutoRestore(); 
-        if ("PushManager" in window && Notification.permission === "granted") {
-            try {
-                const reg = await navigator.serviceWorker.ready;
-                const sub = await reg.pushManager.getSubscription();
-                if (!sub) await requestPushPermission();
-            } catch (e) { console.warn("[murmur] auto-subscribe failed", e); }
-        }
+        warmOutboxCache();
+        tryAutoRestore();
     });
 } else {
     requestNotificationPermission();
     warmOutboxCache();
     tryAutoRestore();
-    if ("PushManager" in window && Notification.permission === "granted") {
-        (async () => {
-            try {
-                const reg = await navigator.serviceWorker.ready;
-                const sub = await reg.pushManager.getSubscription();
-                if (!sub) await requestPushPermission();
-            } catch (e) { console.warn("[murmur] auto-subscribe failed", e); }
-        })();
-    }
 }
 
 async function requestNotificationPermission() {

@@ -378,12 +378,14 @@ function deriveFriendlyName(name, mime) {
 }
 
 // Fullscreen lightbox for images
+// blob URL НЕ ревокается — он принадлежит аттачу в чате (auto-revoke
+// через __murmurBlobOwners при удалении сообщения). Ревок здесь ломал
+// исходящие превью после закрытия fullscreen (v160y22fix2).
 function openFullscreen(blobUrl, mime) {
     const overlay = document.createElement("div");
     overlay.className = "fullscreen-overlay";
     overlay.onclick = () => {
         overlay.remove();
-        URL.revokeObjectURL(blobUrl);
     };
     const img = document.createElement("img");
     img.src = blobUrl;
@@ -452,6 +454,8 @@ if (typeof module !== "undefined" && module.exports) {
     module.exports = { renderAttachment };
 }
 window.MurmurRenderAttachments = { renderAttachment };
+window.openFullscreen = openFullscreen;
+window.openVideoFullscreen = openVideoFullscreen;
 
 // ═══════════════════════════════════════════════════════════════════
 // v160c: общий сетап видео-превью (входящие + исходящие).
