@@ -43,7 +43,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
     <link rel="shortcut icon" href="/favicon-2026b.ico">
     <link rel="mask-icon" href="/mask-icon.svg" color="#229ED9">
-    <meta name="app-version" content="v160p6">
+    <meta name="app-version" content="v160p6b">
     <link rel="stylesheet" href="styles.css?v=160q">
 </head>
 <body>
@@ -166,11 +166,11 @@
     <script src="blob-cache.js?v=160p" defer></script>
     <script src="app-store.js?v=160p" defer></script>
     <script src="render-attachments.js?v=160p" defer></script>
-    <script src="app.js?v=160p6" defer></script>
+    <script src="app.js?v=160p6b" defer></script>
     <script>
       if ("serviceWorker" in navigator) {
         // v160y20: чистый UI — только 🔔, без 💾📊, hover без нажатого эффекта
-        navigator.serviceWorker.register("/service-worker.js?v=160p6&t=" + Date.now()).then((reg) => {
+        navigator.serviceWorker.register("/service-worker.js?v=160p6b&t=" + Date.now()).then((reg) => {
           if (reg.waiting) {
             reg.waiting.postMessage({ type: "SKIP_WAITING" });
           }

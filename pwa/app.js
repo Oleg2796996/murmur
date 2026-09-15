@@ -94,11 +94,8 @@
         logs.push(line);
         if (logs.length > MAX_LINES) logs.shift();
         console.log("[push-debug]", line.msg);
-        try {
-            if (document.body) ensurePanel();
-            else document.addEventListener("DOMContentLoaded", ensurePanel, { once: true });
-            render();
-        } catch (e) { /* panel optional */ }
+        // v160p6b: panel hidden by default (запрос Олега) — only console.
+        // Panel opens on demand via window.__PUSH_DEBUG__.show() in console.
     };
 
     window.__PUSH_DEBUG__ = {
@@ -116,7 +113,7 @@
         });
     }
 
-    window.pushDebugLog("panel init v160y22pushdebug2");
+    window.pushDebugLog("panel init v160p6b (hidden; console-only, show via __PUSH_DEBUG__.show())");
 })();
 
 // WASM boot via dynamic import() so this file can run as a CLASSIC script
