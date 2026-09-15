@@ -4958,6 +4958,101 @@ function clearInviteCookie() {
 // B. Safari (не-PWA) + invite + нет личности → лендинг-инструкция вместо
 // «Создать аккаунт». Иначе юзер создаст аккаунт в Safari-контейнере, а PWA
 // получит пустое хранилище и сгенерит второго юзера (баг-репорт Олега 01.09).
+// Browser install instruction (per-browser detection, v160p6 variant B).
+function installInstructions() {
+    const ua = navigator.userAgent || "";
+    const iOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const isSafari = /Safari/.test(ua) && !/Chrome|Chromium|Edg|OPR|SamsungBrowser|Firefox/.test(ua);
+    const isSamsung = /SamsungBrowser/.test(ua);
+    const isFirefox = /Firefox/.test(ua);
+    const isEdge = /Edg\//.test(ua);
+    const isChrome = /Chrome|CriOS/.test(ua) && !isSamsung && !isEdge;
+    const isDesktop = !/Mobi|Android|iPhone|iPad/.test(ua);
+
+    if (iOS && isSafari) {
+        return [
+            "1. Внизу Safari жми ⟨Поделиться⟩ (квадрат со стрелкой)",
+            "2. Выбери ⟨На экран „Домой“⟩ → ⟨Добавить⟩",
+            "3. Открой murmur с новой иконки — аккаунт создастся сам, и чат уже будет ждать",
+        ];
+    }
+    if (iOS && isChrome) { // Chrome iOS: тоже шаринг, но без PWA-установки → Safari-совместимая инструкция
+        return [
+            "1. Внизу Chrome жми ⟨Поделиться⟩ (квадрат со стрелкой)",
+            "2. Выбери ⟨Открыть в Safari⟩",
+            "3. Дальше как в Safari: ⟨Поделиться⟩ → ⟨На экран „Домой“⟩ → ⟨Добавить⟩",
+        ];
+    }
+    if (/Android/.test(ua) && isChrome) {
+        return [
+            "1. В Chrome жми ⟨⋮⟩ (три точки справа сверху)",
+            "2. Выбери ⟨Добавить на главный экран⟩ / ⟨Установить приложение⟩",
+            "3. Подтверди ⟨Установить⟩ — аккаунт создастся сам, и чат уже будет ждать",
+        ];
+    }
+    if (isSamsung) {
+        return [
+            "1. В Samsung Internet жми ⟨≡⟩ (три полоски снизу справа)",
+            "2. Выбери ⟨Добавить страницу в⟩ → ⟨Экран „Домой“⟩",
+            "3. Открой murmur с новой иконки — аккаунт создастся сам, и чат уже будет ждать",
+        ];
+    }
+    if (isFirefox && !isDesktop) {
+        return [
+            "1. В Firefox жми ⟨⋮⟩ (три точки)",
+            "2. Выбери ⟨Установить⟩ / ⟨Добавить на главный экран⟩",
+            "3. Открой murmur с новой иконки — аккаунт создастся сам, и чат уже будет ждать",
+        ];
+    }
+    // Desktop
+    if (isEdge) {
+        return [
+            "1. В Edge жми ⟨⋯⟩ в адресной строке (иконка установки) или ⟨⋯ меню⟩ → ⟨Приложения⟩ → ⟨Установить этот сайт как приложение⟩",
+            "2. Подтверди ⟨Установить⟩",
+            "3. murmur откроется в отдельном окне — аккаунт создастся сам, и чат уже будет ждать",
+        ];
+    }
+    if (isChrome) {
+        return [
+            "1. В Chrome жми иконку установки в правой части адресной строки (монитор со стрелкой)",
+            "2. Или ⟨⋮ меню⟩ → ⟨Транслировать, сохранить и поделиться⟩ → ⟨Установить страницу как приложение…⟩",
+            "3. Подтверди ⟨Установить⟩ — аккаунт создастся сам, и чат уже будет ждать",
+        ];
+    }
+    if (isSafari) {
+        return [
+            "1. В Safari жми ⟨Файл⟩ (в строке меню Mac)",
+            "2. Выбери ⟨Добавить в Dock…⟩",
+            "3. Подтверди ⟨Добавить⟩ — аккаунт создастся сам, и чат уже будет ждать",
+        ];
+    }
+    // Fallback: generic
+    return [
+        "1. Найди в меню браузера пункт ⟨Добавить на главный экран⟩ / ⟨Установить приложение⟩",
+        "2. Подтверди установку",
+        "3. Открой murmur с новой иконки — аккаунт создастся сам, и чат уже будет ждать",
+    ];
+}
+
+// A. Invite → PWA-манифест: iOS запоминает start_url из манифеста в момент
+// «На экран Домой». Свапаем <link rel=manifest> на /manifest.json?invite=<npub>,
+// релей отдаёт копию с start_url="/?invite=<npub>" → PWA стартует сразу с чат.
+(function swapManifestForInvite() {
+    const invite = extractInviteNpub();
+    if (!invite) return;
+    const link = document.querySelector('link[rel="manifest"]');
+    if (!link) return;
+    // v160i: path-формат манифеста (уникальный URL бьёт кэш iOS, без query).
+    link.href = "/manifest/" + invite + ".json";
+    console.log("[invite] manifest swapped for PWA start_url:", link.href);
+})();
+
+// B. Safari (не-PWA) + invite + нет личности → лендинг-инструкция вместо
+// «Создать аккаунт». Иначе юзер создаст аккаунт в Safari-контейнере, а PWA
+// получит пустое хранилище и сгенерит второго юзера (баг-репорт Олега 01.09).
+// v160p6 variant B: детекция браузера (Safari/Chrome/Samsung/Firefox/Edge,
+// iOS/Android/десктоп) → одна правильная инструкция на экране; кнопка
+// «Продолжить в браузере» осталась с честным предупреждением о двух аккаунтах.
 function showInviteLanding(inviteNpub) {
     if (!identityScreen) return;
     const card = identityScreen.querySelector(".identity-card");
@@ -4965,13 +5060,9 @@ function showInviteLanding(inviteNpub) {
     const ov = document.createElement("div");
     ov.id = "invite-landing";
     ov.style.cssText = "padding:4px;";
-    const steps = isStandalonePWA()
-        ? [] // в standalone лендинг не нужен — чат откроется сам (start_url с invite)
-        : [
-            "1. Внизу Safari жми ⟨Поделиться⟩ (квадрат со стрелкой)",
-            "2. Выбери ⟨На экран „Домой“⟩ → ⟨Добавить⟩",
-            "3. Открой murmur с новой иконки — аккаунт создастся сам, и чат уже будет ждать",
-          ];
+    const standalone = isStandalonePWA();
+    // В standalone лендинг не нужен — чат откроется сам (start_url с invite)
+    const steps = standalone ? [] : installInstructions();
     ov.innerHTML =
         '<div style="font-size:15px;font-weight:600;margin-bottom:8px;">Тебя пригласили в murmur 👋</div>' +
         (steps.length
@@ -4987,15 +5078,20 @@ function showInviteLanding(inviteNpub) {
         if (!steps.length && typeof window._handleCreate === "function") window._handleCreate();
     });
     ov.appendChild(btnPwa);
-    const btnBrowser = document.createElement("button");
-    btnBrowser.className = "secondary";
-    btnBrowser.style.marginTop = "8px";
-    btnBrowser.textContent = "Продолжить в браузере (без установки)";
-    btnBrowser.addEventListener("click", () => {
-        ov.remove();
-        card.style.display = "";
-    });
-    ov.appendChild(btnBrowser);
+    if (!standalone) {
+        const btnBrowser = document.createElement("button");
+        btnBrowser.className = "secondary";
+        btnBrowser.style.marginTop = "8px";
+        btnBrowser.textContent = "Продолжить в браузере (без установки)";
+        btnBrowser.addEventListener("click", () => {
+            ov.remove();
+            card.style.display = "";
+            // Честное предупреждение: браузер и PWA — разные хранилища на iOS 17+,
+            // переписка не переносится между ними (два аккаунта у отправителя).
+            alert("Черновик в браузере: переписка здесь не сохранится при переходе в приложение. Для постоянного чата установи murmur по инструкции выше.");
+        });
+        ov.appendChild(btnBrowser);
+    }
     card.style.display = "none";
     card.parentNode.insertBefore(ov, card);
 }
