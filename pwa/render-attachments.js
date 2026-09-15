@@ -270,6 +270,22 @@ function renderByMime({ mime, name, blobUrl, size, poster, att }) {
         img.loading = "lazy";
         img.className = "attach-image";
         img.onclick = () => openFullscreen(blobUrl, mime);
+        // v160p7 diag + v160p9 FIX (Олег 20:40 «на маке опять мелки превью»):
+        // bubble (fit-content) схлопывается по ширине подписи до load img,
+        // max-width:100% зажимает img в эту ширину навсегда. Фикс: явная
+        // width из natural-размера (height CSS-capped 280px) — bubble растянется.
+        img.addEventListener("load", () => {
+            console.log("[attach-img] loaded", att && att.blob_id ? att.blob_id.slice(0, 8) : "?",
+                "natural=", img.naturalWidth + "x" + img.naturalHeight,
+                "rendered=", img.clientWidth + "x" + img.clientHeight,
+                "blobSize=", size);
+            const nw = img.naturalWidth, nh = img.naturalHeight;
+            if (nw && nh) {
+                let w = nw;
+                if (nh > 280) w = Math.round(nw * 280 / nh);
+                img.style.width = w + "px";
+            }
+        });
         // Lesson #225 (Олег 2026-08-26 16:05): register img element → blob URL
         // для MutationObserver auto-revoke на detach.
         if (window.__murmurBlobOwners) {

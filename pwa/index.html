@@ -44,7 +44,7 @@
     <link rel="shortcut icon" href="/favicon-2026b.ico">
     <link rel="mask-icon" href="/mask-icon.svg" color="#229ED9">
     <meta name="app-version" content="v160p6e">
-    <link rel="stylesheet" href="styles.css?v=160q">
+    <link rel="stylesheet" href="styles.css?v=160p8">
 </head>
 <body>
     <div id="identity-screen" class="screen">
@@ -56,6 +56,13 @@
         <div class="identity-card">
             <h1 class="brand">MurMur</h1>
             <p class="subtitle">приватный мессенджер</p>
+            <!-- v160p8: буллеты приватности (стиль лендинга v3, одобрен Олегом) -->
+            <div class="identity-why">
+                <div class="bullet"><span class="ic">🔐</span><div><b>Всё хранится на вашем устройстве</b> — сервер видит только зашифрованные сообщения</div></div>
+                <div class="bullet"><span class="ic">🧹</span><div><b>Переписка стирается с сервера</b> через минуты после доставки</div></div>
+                <div class="bullet"><span class="ic">🕶️</span><div><b>Нам не нужно знать</b> ваши имена, телефоны и почту</div></div>
+                <div class="bullet"><span class="ic">🛡️</span><div><b>Просьба передать данные?</b> Нам нечего передавать</div></div>
+            </div>
             <div class="identity-error" id="identity-error" hidden></div>
             <div class="identity-section">
                 <h2>Новый аккаунт</h2>
@@ -163,14 +170,15 @@
             } catch (e) { window.__APP_VERSION__ = "?"; }
         })();
     </script>
+    <script src="i18n.js?v=2" ></script>
     <script src="blob-cache.js?v=160p" defer></script>
     <script src="app-store.js?v=160p" defer></script>
-    <script src="render-attachments.js?v=160p" defer></script>
-    <script src="app.js?v=160p6e" defer></script>
+    <script src="render-attachments.js?v=160p9&i18n=1" defer></script>
+    <script src="app.js?v=160p9&i18n=2" defer></script>
     <script>
       if ("serviceWorker" in navigator) {
         // v160y20: чистый UI — только 🔔, без 💾📊, hover без нажатого эффекта
-        navigator.serviceWorker.register("/service-worker.js?v=160p6e&t=" + Date.now()).then((reg) => {
+        navigator.serviceWorker.register("/service-worker.js?v=160p9i18n&t=" + Date.now()).then((reg) => {
           if (reg.waiting) {
             reg.waiting.postMessage({ type: "SKIP_WAITING" });
           }

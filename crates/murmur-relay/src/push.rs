@@ -369,7 +369,7 @@ impl PushPayload {
             // iOS вставляет субтитл «from murmur» (скрин: murmur / from murmur / …).
             // Длинная action-фраза без имени приложения — Lesson #396 (2026-08-23).
             subtitle: "".to_string(),
-            body: "Откройте приложение, чтобы прочитать сообщение".to_string(),
+            body: "New message — open the app to read it".to_string(),
         }
     }
 
@@ -1635,7 +1635,7 @@ mod tests {
         // v160k9/v160v: subtitle пустой (минимум текста в пуше, ТЗ Олега) —
         // и тем самым full npub не утекает.
         assert_eq!(payload.subtitle, "", "subtitle must be empty: {}", payload.subtitle);
-        assert_eq!(payload.body, "Откройте приложение, чтобы прочитать сообщение");
+        assert_eq!(payload.body, "New message — open the app to read it");
         // JSON field `alias` carries the recipient npub (routing key).
         assert_eq!(payload.alias, "oleg-hp");
 

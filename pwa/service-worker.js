@@ -56,7 +56,7 @@ self.addEventListener("push", (event) => {
   // (первую строку app-name рисует ОС, неустранимо).
   // iOS: title="" как в v160w — чистая одна строка body (Lesson #395:
   // непустой title на iOS → субтитл "from murmur").
-  let payload = { alias: "unknown", title: "", subtitle: "", body: "Откройте приложение, чтобы прочитать сообщение" };
+  let payload = { alias: "unknown", title: "", subtitle: "", body: "New message — open the app to read it" };
   try {
     if (event.data) {
       payload = event.data.json();
@@ -65,7 +65,7 @@ self.addEventListener("push", (event) => {
     console.warn("[murmur-sw] push payload not JSON", e);
     pushDebugToClients("push-parse-error", e && e.message || String(e));
   }
-  const text = payload.body || "Откройте приложение, чтобы прочитать сообщение";
+  const text = payload.body || "New message — open the app to read it";
   // WorkerNavigator.userAgent доступен в SW; iPad отдаёт Macintosh-UA →
   // исключаем мобильные явно.
   const ua = (self.navigator && self.navigator.userAgent) || "";

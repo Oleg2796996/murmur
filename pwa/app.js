@@ -1149,6 +1149,20 @@ function renderOutgoingAttachment({ mime, name, url, size, poster, att }) {
         img.loading = "lazy";
         img.className = "attach-image";
         img.onclick = () => openFullscreen(url, mime);
+        // v160p9 FIX (Олег 20:40 «на маке опять мелки превью»): same fix —
+        // явная width из natural-размера после load (bubble не схлопывается).
+        img.addEventListener("load", () => {
+            console.log("[attach-img-out] loaded", att && att.blob_id ? att.blob_id.slice(0, 8) : "?",
+                "natural=", img.naturalWidth + "x" + img.naturalHeight,
+                "rendered=", img.clientWidth + "x" + img.clientHeight,
+                "blobSize=", size);
+            const nw = img.naturalWidth, nh = img.naturalHeight;
+            if (nw && nh) {
+                let w = nw;
+                if (nh > 280) w = Math.round(nw * 280 / nh);
+                img.style.width = w + "px";
+            }
+        });
         // Lesson #225: register для auto-revoke на detach
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(img, url);
         figure.appendChild(img);
@@ -2606,7 +2620,7 @@ function setupInviteUI() {
                     // Зашиваем ссылку В текст — тогда она доходит везде.
                     await navigator.share({
                         title: "murmur",
-                        text: "Присоединяйся в приватном мессенджере murmur! " + inviteLink,
+                        text: window.MurmurI18N.t("Присоединяйся в приватном мессенджере murmur!") + " " + inviteLink,
                     });
                     return;
                 } catch (e) {
@@ -3508,8 +3522,12 @@ function formatDayDivider(ts) {
     const today = startOf(now);
     const that = startOf(d);
     const diffDays = Math.round((today - that) / 86400000);
-    if (diffDays === 0) return "Сегодня";
-    if (diffDays === 1) return "Вчера";
+    // v160i18n: даты через словарь (Сегодня/Вчера) + Intl для месяцев
+    if (diffDays === 0) return window.MurmurI18N.t("Сегодня");
+    if (diffDays === 1) return window.MurmurI18N.t("Вчера");
+    if (window.MurmurI18N.isEn) {
+        return d.getDate() + " " + d.toLocaleString("en", { month: "short" });
+    }
     const months = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
     return d.getDate() + " " + months[d.getMonth()];
 }
@@ -5061,23 +5079,31 @@ function showInviteLanding(inviteNpub) {
     // v160p6c: без кнопок (запрос Олега) — описание + инструкция + ссылка.
     // В standalone лендинг не нужен — чат откроется сам (start_url с invite).
     const inviteUrl = location.origin + "/?invite=" + inviteNpub;
+    // v160p8 (Олег 18:59 «ставь на тест»): структура лендинга v3 (одобрена) —
+    // буллеты приватности с иконками + сокращённый текст + выровненная
+    // инструкция. Тап-копия ссылки сохранена (invite-url-box + hint).
     ov.innerHTML =
-        '<div style="text-align:center;margin-bottom:14px;">' +
-        '<img src="/icon-192.png" alt="" style="width:72px;height:72px;border-radius:16px;box-shadow:0 4px 16px rgba(79,163,255,0.25);" onerror="this.style.display=\'none\'">' +
-        '<div style="font-size:18px;font-weight:700;margin-top:8px;color:var(--text);">Приватный мессенджер <span style="color:var(--accent);">MurMur</span></div>' +
+        '<div style="text-align:center;margin-bottom:16px;">' +
+        '<img src="/i192-2026c.png" alt="" style="width:72px;height:72px;border-radius:16px;box-shadow:0 8px 24px rgba(34,158,217,0.3);" onerror="this.style.display=\'none\'">' +
+        '<div style="font-size:26px;font-weight:800;letter-spacing:-.5px;margin-top:10px;background:linear-gradient(90deg,#229ED9,#5eead4);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;display:inline-block;">MurMur</div>' +
+        '<div style="font-size:14px;color:#9fb0c3;margin-top:2px;">приватный мессенджер</div>' +
         '</div>' +
-        '<div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:14px;color:var(--text-muted);font-size:13.5px;line-height:1.75;">' +
-        'Тут вы можете не беспокоиться о приватности своей переписки. <b style="color:var(--text);">Все хранится на вашем устройстве.</b> Нам не нужно знать ваши имена, телефоны и почту. Если правительство или еще кто-то попросит нас передать им ваши данные — нам просто нечего им передавать. Наши серверы хорошо защищены и используются только для пересылки зашифрованных сообщений, а не для хранения ваших данных (переписка стирается с сервера через минуты после доставки). Даже если кто-то получит доступ к нашим серверам, ничего полезного не найдут.' +
+        '<div style="text-align:center;font-size:14.5px;font-weight:600;color:var(--text);margin-bottom:10px;">Почему это приватно</div>' +
+        '<div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:14px;">' +
+        '<div style="display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.55;color:var(--text-muted);margin-bottom:10px;"><span style="flex-shrink:0;">🔐</span><div><b style="color:var(--text);">Всё хранится на вашем устройстве</b> — сервер видит только зашифрованные сообщения</div></div>' +
+        '<div style="display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.55;color:var(--text-muted);margin-bottom:10px;"><span style="flex-shrink:0;">🧹</span><div><b style="color:var(--text);">Переписка стирается с сервера</b> через минуты после доставки</div></div>' +
+        '<div style="display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.55;color:var(--text-muted);margin-bottom:10px;"><span style="flex-shrink:0;">🕶️</span><div><b style="color:var(--text);">Нам не нужно знать</b> ваши имена, телефоны и почту</div></div>' +
+        '<div style="display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.55;color:var(--text-muted);"><span style="flex-shrink:0;">🛡️</span><div><b style="color:var(--text);">Просьба передать данные?</b> Нам нечего передавать</div></div>' +
         '</div>' +
-        '<div style="font-size:14.5px;font-weight:600;color:var(--text);margin-bottom:8px;">Чтобы принять приглашение:</div>' +
+        '<div style="font-size:14.5px;font-weight:600;color:var(--text);margin-bottom:8px;">Чтобы принять приглашение</div>' +
         '<div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;color:var(--text-muted);font-size:13.5px;line-height:1.8;">' +
-        '<div><b style="color:var(--text);">1)</b> Если MurMur уже установлен — <b style="color:var(--text);">нажмите на ссылку</b> — она скопируется, вставьте её в приложение:</div>' +
-        '<div id="invite-url-box" role="button" style="display:block;background:#0b1420;border:1px solid var(--accent);border-radius:8px;padding:9px 10px;margin:8px 0;font-family:monospace;font-size:11.5px;color:var(--accent);word-break:break-all;cursor:pointer;text-align:center;" title="Нажмите, чтобы скопировать">' + inviteUrl + '</div>' +
+        '<div><b style="color:var(--text);">1)</b> MurMur уже установлен? <b style="color:var(--text);">Нажмите на ссылку</b> — она скопируется, вставьте её в приложение:</div>' +
+        '<div id="invite-url-box" role="button" style="display:block;background:#0b1420;border:1px solid rgba(34,158,217,.4);background:rgba(34,158,217,.08);border-radius:8px;padding:9px 10px;margin:8px 0;font-family:monospace;font-size:11.5px;color:#7fd4f0;word-break:break-all;cursor:pointer;text-align:center;" title="Нажмите, чтобы скопировать">' + inviteUrl + '</div>' +
         '<div id="invite-copied-hint" style="display:none;color:#3fd07a;font-size:12.5px;text-align:center;margin-bottom:6px;">✓ Скопировано — вставьте в MurMur</div>' +
-        '<div><b style="color:var(--text);">2)</b> Если MurMur ещё не установлен — пара простых шагов:</div>' +
-        '<div style="margin-top:4px;"><b style="color:var(--text);">Safari</b> (iPhone/iPad): Поделиться → На экран «Домой» → Добавить</div>' +
-        '<div><b style="color:var(--text);">Chrome</b> (Android/ПК): ⋮ → Добавить на главный экран</div>' +
-        '<div><b style="color:var(--text);">Firefox</b>: меню → Установить</div>' +
+        '<div><b style="color:var(--text);">2)</b> Ещё не установлен? Пара шагов:</div>' +
+        '<div style="margin-top:4px;"><b style="color:#5eead4;">Safari</b> (iPhone/iPad): Поделиться → На экран «Домой»</div>' +
+        '<div><b style="color:#5eead4;">Chrome</b> (Android/ПК): ⋮ → Добавить на главный экран</div>' +
+        '<div><b style="color:#5eead4;">Firefox</b>: меню → Установить</div>' +
         '<div style="margin-top:6px;color:var(--text);">Откройте MurMur с новой иконки — аккаунт создастся сам, и чат уже будет ждать</div>' +
         '</div>';
 
