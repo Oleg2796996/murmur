@@ -1015,6 +1015,16 @@ async fn handle_post_envelope(
         from_npub_hint = None;
     }
 
+    // 3.5 v160p5: per-sender rate limit (after signature verification — only
+    // valid envelopes count). Excess → 429, closes backlog-flood DoS.
+    let from_for_rate = from_npub_hint.clone().unwrap_or_else(|| to_npub.clone());
+    if !envelope_rate_check(&from_for_rate) {
+        return Ok(json_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate limit exceeded: too many envelopes per minute",
+        ));
+    }
+
     // 4. Hand off to shared envelope logic.
     let push_arc = Arc::new(push.clone());
     match crate::envelope::accept_envelope(
@@ -1496,9 +1506,33 @@ fn base64_url_decode(s: &str) -> anyhow::Result<Vec<u8>> {
         .map_err(|e| anyhow::anyhow!("base64url decode: {e}"))
 }
 
+/// v160p5: per-sender rate limit for POST /envelope. Sliding window counter:
+/// max N envelopes per from-npub per minute. Closes DoS vectors: flooding a
+/// victim's undelivered backlog (24h retention would discard victim's real
+/// mail) and mailbox-stuffing DoS. Key = from_npub (anonymous npub, not PII).
+static ENVELOPE_RATE_LIMIT: std::sync::OnceLock<
+    Mutex<HashMap<String, (u64, u32)>>,
+> = std::sync::OnceLock::new();
+const ENVELOPE_RATE_MAX_PER_MIN: u32 = 60;
+
+fn envelope_rate_check(from_npub: &str) -> bool {
+    let map = ENVELOPE_RATE_LIMIT.get_or_init(|| Mutex::new(HashMap::new()));
+    let now_min = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() / 60)
+        .unwrap_or(0);
+    let mut map = map.lock();
+    let entry = map.entry(from_npub.to_string()).or_insert((now_min, 0));
+    if entry.0 != now_min {
+        *entry = (now_min, 1);
+        return true;
+    }
+    entry.1 += 1;
+    entry.1 <= ENVELOPE_RATE_MAX_PER_MIN
+}
+
 fn percent_decode(s: &str) -> String {
     // hyper doesn't decode percent-encoded query params, so we do it here.
-    // Replace %XX with the actual byte (keeping UTF-8).
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
