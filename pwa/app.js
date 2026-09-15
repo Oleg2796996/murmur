@@ -4013,6 +4013,9 @@ if (btnAttach && fileInput) {
                         // Privacy: server-visible meta keeps the NEUTRAL upload name
                         // (f-XXXXXXXX.bin); real filename lives only in the sealed ct.
                         publicName: result.publicName,
+                        // v160p2: bearer token from upload response — must be in
+                        // pendingAttachments or serverMeta ships blob_token:null → 401.
+                        blob_token: result.blob_token || null,
                         _uploading: false,
                         _progress: 1,
                     });
