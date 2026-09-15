@@ -5062,18 +5062,49 @@ function showInviteLanding(inviteNpub) {
     // В standalone лендинг не нужен — чат откроется сам (start_url с invite).
     const inviteUrl = location.origin + "/?invite=" + inviteNpub;
     ov.innerHTML =
-        '<div style="font-size:16px;font-weight:600;margin-bottom:10px;">Приватный мессенджер MurMur</div>' +
-        '<div style="color:#8a97a5;font-size:13px;line-height:1.7;margin-bottom:14px;">' +
-        'Тут вы можете не беспокоиться о приватности своей переписки. <b>Все хранится на вашем устройстве.</b> Нам не нужно знать ваши имена, телефоны и почту. Если правительство или еще кто-то попросит нас передать им ваши данные — нам просто нечего им передавать. Наши серверы хорошо защищены и используются только для пересылки зашифрованных сообщений, а не для хранения ваших данных (переписка стирается с сервера через минуты после доставки). Даже если кто-то получит доступ к нашим серверам, ничего полезного не найдут.</div>' +
-        '<div style="font-size:14px;font-weight:600;margin-bottom:6px;">Чтобы принять приглашение:</div>' +
-        '<div style="color:#8a97a5;font-size:13px;line-height:1.7;margin-bottom:14px;">' +
-        '<b>1)</b> Если у вас уже установлен MurMur — просто скопируйте эту ссылку и вставьте в приложение:<br>' +
-        '<span style="display:inline-block;background:#1c2630;color:#9ecbff;padding:6px 8px;border-radius:6px;font-family:monospace;font-size:11px;margin:4px 0;word-break:break-all;" id="invite-url-box">' + inviteUrl + '</span><br>' +
-        '<b>2)</b> Если MurMur ещё не установлен — пара простых шагов:<br>' +
-        '<b>Safari (iPhone/iPad):</b> Поделиться → На экран «Домой» → Добавить<br>' +
-        '<b>Chrome (Android/ПК):</b> ⋮ → Добавить на главный экран / Установить приложение<br>' +
-        '<b>Firefox:</b> меню → Установить / Добавить на главный экран<br>' +
-        'Откройте MurMur с новой иконки — аккаунт создастся сам, и чат уже будет ждать</div>';
+        '<div style="text-align:center;margin-bottom:14px;">' +
+        '<img src="/icon-192.png" alt="" style="width:72px;height:72px;border-radius:16px;box-shadow:0 4px 16px rgba(79,163,255,0.25);" onerror="this.style.display=\'none\'">' +
+        '<div style="font-size:18px;font-weight:700;margin-top:8px;color:var(--text);">Приватный мессенджер <span style="color:var(--accent);">MurMur</span></div>' +
+        '</div>' +
+        '<div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:14px;color:var(--text-muted);font-size:13.5px;line-height:1.75;">' +
+        'Тут вы можете не беспокоиться о приватности своей переписки. <b style="color:var(--text);">Все хранится на вашем устройстве.</b> Нам не нужно знать ваши имена, телефоны и почту. Если правительство или еще кто-то попросит нас передать им ваши данные — нам просто нечего им передавать. Наши серверы хорошо защищены и используются только для пересылки зашифрованных сообщений, а не для хранения ваших данных (переписка стирается с сервера через минуты после доставки). Даже если кто-то получит доступ к нашим серверам, ничего полезного не найдут.' +
+        '</div>' +
+        '<div style="font-size:14.5px;font-weight:600;color:var(--text);margin-bottom:8px;">Чтобы принять приглашение:</div>' +
+        '<div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;color:var(--text-muted);font-size:13.5px;line-height:1.8;">' +
+        '<div><b style="color:var(--text);">1)</b> Если MurMur уже установлен — <b style="color:var(--text);">нажмите на ссылку</b> — она скопируется, вставьте её в приложение:</div>' +
+        '<div id="invite-url-box" role="button" style="display:block;background:#0b1420;border:1px solid var(--accent);border-radius:8px;padding:9px 10px;margin:8px 0;font-family:monospace;font-size:11.5px;color:var(--accent);word-break:break-all;cursor:pointer;text-align:center;" title="Нажмите, чтобы скопировать">' + inviteUrl + '</div>' +
+        '<div id="invite-copied-hint" style="display:none;color:#3fd07a;font-size:12.5px;text-align:center;margin-bottom:6px;">✓ Скопировано — вставьте в MurMur</div>' +
+        '<div><b style="color:var(--text);">2)</b> Если MurMur ещё не установлен — пара простых шагов:</div>' +
+        '<div style="margin-top:4px;"><b style="color:var(--text);">Safari</b> (iPhone/iPad): Поделиться → На экран «Домой» → Добавить</div>' +
+        '<div><b style="color:var(--text);">Chrome</b> (Android/ПК): ⋮ → Добавить на главный экран</div>' +
+        '<div><b style="color:var(--text);">Firefox</b>: меню → Установить</div>' +
+        '<div style="margin-top:6px;color:var(--text);">Откройте MurMur с новой иконки — аккаунт создастся сам, и чат уже будет ждать</div>' +
+        '</div>';
+
+    // v160p6e: tap on link box → copy to clipboard (нажми → скопировалось)
+    setTimeout(() => {
+        const box = document.getElementById("invite-url-box");
+        const hint = document.getElementById("invite-copied-hint");
+        if (!box || !hint) return;
+        box.addEventListener("click", async () => {
+            const url = inviteUrl;
+            try {
+                await navigator.clipboard.writeText(url);
+            } catch (e) {
+                // Safari 17+/fallback: execCommand
+                const ta = document.createElement("textarea");
+                ta.value = url;
+                ta.style.cssText = "position:fixed;opacity:0;";
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand("copy"); } catch (e2) {}
+                ta.remove();
+            }
+            hint.style.display = "";
+            setTimeout(() => { hint.style.display = "none"; }, 3000);
+        });
+    }, 0);
+
     // v160p6c: кнопок нет — лендинг информационный. Нажимать ничего не нужно:
     // юзер копирует ссылку → вставляет в установленное приложение (или ставит
     // PWA по инструкции). card больше не показываем — иначе форма создания
