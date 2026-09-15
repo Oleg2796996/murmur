@@ -5058,37 +5058,29 @@ function showInviteLanding(inviteNpub) {
     ov.id = "invite-landing";
     ov.style.cssText = "padding:4px;";
     const standalone = isStandalonePWA();
-    // В standalone лендинг не нужен — чат откроется сам (start_url с invite)
-    const steps = standalone ? [] : installInstructions();
+    // v160p6c: без кнопок (запрос Олега) — описание + инструкция + ссылка.
+    // В standalone лендинг не нужен — чат откроется сам (start_url с invite).
+    const inviteUrl = location.origin + "/?invite=" + inviteNpub;
     ov.innerHTML =
-        '<div style="font-size:15px;font-weight:600;margin-bottom:8px;">Тебя пригласили в murmur 👋</div>' +
-        (steps.length
-            ? '<div style="color:#8a97a5;font-size:13px;line-height:1.7;margin-bottom:14px;">' + steps.map(s => s.replace(/⟨/g, "<b>").replace(/⟩/g, "</b>")).join("<br>") + "</div>"
-            : "");
-    const btnPwa = document.createElement("button");
-    btnPwa.className = "primary";
-    btnPwa.textContent = steps.length ? "Понятно, добавлю на домашний экран" : "Создать аккаунт и открыть чат";
-    btnPwa.addEventListener("click", () => {
-        ov.remove();
-        card.style.display = "";
-        // В standalone: сразу создаём аккаунт (тот же обработчик, что btn-create).
-        if (!steps.length && typeof window._handleCreate === "function") window._handleCreate();
-    });
-    ov.appendChild(btnPwa);
-    if (!standalone) {
-        const btnBrowser = document.createElement("button");
-        btnBrowser.className = "secondary";
-        btnBrowser.style.marginTop = "8px";
-        btnBrowser.textContent = "Продолжить в браузере (без установки)";
-        btnBrowser.addEventListener("click", () => {
-            ov.remove();
-            card.style.display = "";
-            // Честное предупреждение: браузер и PWA — разные хранилища на iOS 17+,
-            // переписка не переносится между ними (два аккаунта у отправителя).
-            alert("Черновик в браузере: переписка здесь не сохранится при переходе в приложение. Для постоянного чата установи murmur по инструкции выше.");
-        });
-        ov.appendChild(btnBrowser);
-    }
+        '<div style="font-size:16px;font-weight:600;margin-bottom:10px;">Добрый день! Мессенджер MurMur — это</div>' +
+        '<div style="color:#8a97a5;font-size:13px;line-height:1.7;margin-bottom:14px;">' +
+        '• <b>Приватность как у банков:</b> сквозное шифрование — сообщения и файлы читаются только у вас и адресата, сервер видит лишь «конверт» без содержимого<br>' +
+        '• <b>Свои правила:</b> переписка стирается с сервера через минуты после доставки, у вас остаётся только у вас<br>' +
+        '• <b>Файлы без ограничений:</b> фото, видео, документы — зашифрованные на вашем устройстве<br>' +
+        '• <b>Без имён и номеров:</b> регистрация не требует телефона или почты</div>' +
+        '<div style="font-size:14px;font-weight:600;margin-bottom:6px;">Чтобы принять приглашение:</div>' +
+        '<div style="color:#8a97a5;font-size:13px;line-height:1.7;margin-bottom:14px;">' +
+        '<b>1)</b> Если у вас уже установлен MurMur — просто скопируйте эту ссылку и вставьте в приложение:<br>' +
+        '<span style="display:inline-block;background:#1c2630;color:#9ecbff;padding:6px 8px;border-radius:6px;font-family:monospace;font-size:11px;margin:4px 0;word-break:break-all;" id="invite-url-box">' + inviteUrl + '</span><br>' +
+        '<b>2)</b> Если MurMur ещё не установлен — пара простых шагов:<br>' +
+        '<b>Safari (iPhone/iPad):</b> Поделиться → На экран «Домой» → Добавить<br>' +
+        '<b>Chrome (Android/ПК):</b> ⋮ → Добавить на главный экран / Установить приложение<br>' +
+        '<b>Firefox:</b> меню → Установить / Добавить на главный экран<br>' +
+        'Откройте MurMur с новой иконки — аккаунт создастся сам, и чат уже будет ждать</div>';
+    // v160p6c: кнопок нет — лендинг информационный. Нажимать ничего не нужно:
+    // юзер копирует ссылку → вставляет в установленное приложение (или ставит
+    // PWA по инструкции). card больше не показываем — иначе форма создания
+    // в браузере создаст второй аккаунт (баг-репорт Олега).
     card.style.display = "none";
     card.parentNode.insertBefore(ov, card);
 }
