@@ -48,7 +48,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let push_server = Arc::new(
         push::PushServer::new(&cfg.home_dir, cfg.push_bind.clone(), vapid.clone())?
             .with_static_dir(static_dir.clone())
-            .with_pending_hub(pending.clone(), hub.clone()),
+            .with_pending_hub(pending.clone(), hub.clone())
+            .with_stats_auth(cfg.stats_basic_auth.clone()),
     );
     info!(vapid_pub = %vapid.public_b64url(), "VAPID ready");
 

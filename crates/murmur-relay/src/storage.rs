@@ -57,6 +57,24 @@ pub struct HistoryResponse {
     pub next_before_ts: Option<i64>,
 }
 
+/// v160s: агрегаты для admin dashboard (только числа, без PII).
+#[derive(Debug, serde::Serialize)]
+pub struct StatsSnapshot {
+    pub generated_at: i64,
+    pub unique_peers_total: i64,
+    pub unique_peers_24h: i64,
+    pub envelopes_pending: i64,
+    pub envelopes_24h: i64,
+    pub envelopes_total: i64,
+    pub blobs_total: i64,
+    pub blobs_bytes_total: i64,
+    pub blobs_24h: i64,
+    /// (hour_bucket_unix, count) — 48h
+    pub msgs_hourly: Vec<(i64, i64)>,
+    /// (day_bucket_unix, count, bytes) — 7d
+    pub blobs_daily: Vec<(i64, i64, i64)>,
+}
+
 impl MessageStore {
     pub fn new(path: &Path) -> rusqlite::Result<Self> {
         #[allow(unused_mut)]
@@ -672,6 +690,10 @@ impl MessageStore {
             let c = self.conn.lock();
             let tx = c.unchecked_transaction()?;
             for (blob_id, storage_path) in &blob_ids {
+                // v160s: blob_tokens.blob_id REFERENCES blobs(id) — token-строки
+                // обязаны уйти ПЕРВЫМИ, иначе DELETE FROM blobs ловит
+                // «FOREIGN KEY constraint failed» каждые 5 минут (прод, 16.09).
+                tx.execute("DELETE FROM blob_tokens WHERE blob_id = ?1", params![blob_id])?;
                 tx.execute("DELETE FROM blobs WHERE id = ?1", params![blob_id])?;
                 if !storage_path.is_empty() {
                     deleted_files.push(storage_path.clone());
@@ -694,6 +716,100 @@ impl MessageStore {
     // Раньше здесь были unread_by_peer и mark_incoming_read — но клиент
     // теперь считает unread локально (см. lesson #125), серверная логика
     // для badge больше не нужна.
+
+    /// v160s (Олег 2026-09-16): агрегаты для admin dashboard.
+    /// ПРИВАТНОСТЬ: только ЧИСЛА — никаких npub-списков, тел, preview,
+    /// содержимого. Сервер и так не видит контент (E2E), а в дашборд не
+    /// утекают даже метаданные отдельных пользователей.
+    pub fn get_stats(&self) -> rusqlite::Result<StatsSnapshot> {
+        let c = self.conn.lock();
+        let q1 = |sql: &str| -> i64 {
+            c.query_row(sql, [], |r| r.get(0)).unwrap_or(0)
+        };
+        let now: i64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        // Уникальные npub за всё время (отправители + получатели, system:relay
+        // исключён — это нотификации релея, не пользователи).
+        let unique_peers_total = q1(
+            "SELECT COUNT(DISTINCT n) FROM (
+                SELECT from_npub n FROM envelopes WHERE from_npub != 'system:relay'
+                UNION
+                SELECT to_npub FROM envelopes WHERE to_npub != 'system:relay'
+            )",
+        );
+        let unique_peers_24h = q1(
+            "SELECT COUNT(DISTINCT n) FROM (
+                SELECT from_npub n FROM envelopes WHERE from_npub != 'system:relay' AND ts > ?1
+                UNION
+                SELECT to_npub FROM envelopes WHERE to_npub != 'system:relay' AND ts > ?1
+            )",
+        );
+        // Активность по часам за последние 48h (ts хранится в секундах).
+        let hourly_window = now.saturating_sub(48 * 3600);
+        let mut msgs_hourly: Vec<(i64, i64)> = Vec::new();
+        {
+            let mut s = match c.prepare(
+                "SELECT (ts / 3600) * 3600 AS hour_bucket, COUNT(*)
+                 FROM envelopes
+                 WHERE ts > ?1 AND from_npub != 'system:relay'
+                 GROUP BY hour_bucket ORDER BY hour_bucket",
+            ) {
+                Ok(s) => s,
+                Err(e) => return Err(e),
+            };
+            let rows = s
+                .query_map(params![hourly_window], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+                })?
+                .filter_map(|r| r.ok());
+            for r in rows {
+                msgs_hourly.push(r);
+            }
+        }
+        // Медиа по дням за 7 дней.
+        let daily_window = now.saturating_sub(7 * 86400);
+        let mut blobs_daily: Vec<(i64, i64, i64)> = Vec::new(); // (day, count, bytes)
+        {
+            let mut s = match c.prepare(
+                "SELECT (created_at / 86400) * 86400 AS day_bucket, COUNT(*), COALESCE(SUM(size), 0)
+                 FROM blobs
+                 WHERE created_at > ?1
+                 GROUP BY day_bucket ORDER BY day_bucket",
+            ) {
+                Ok(s) => s,
+                Err(e) => return Err(e),
+            };
+            let rows = s
+                .query_map(params![daily_window], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+                })?
+                .filter_map(|r| r.ok());
+            for r in rows {
+                blobs_daily.push(r);
+            }
+        }
+        Ok(StatsSnapshot {
+            generated_at: now,
+            unique_peers_total,
+            unique_peers_24h,
+            envelopes_pending: q1(
+                "SELECT COUNT(*) FROM envelopes WHERE expires_at > ?1", // ещё в TTL-окне (не снесены)
+            ),
+            envelopes_24h: q1(
+                "SELECT COUNT(*) FROM envelopes WHERE ts > ?1 AND from_npub != 'system:relay'",
+            ),
+            envelopes_total: q1(
+                "SELECT COUNT(*) FROM envelopes WHERE from_npub != 'system:relay'",
+            ),
+            blobs_total: q1("SELECT COUNT(*) FROM blobs"),
+            blobs_bytes_total: q1("SELECT COALESCE(SUM(size), 0) FROM blobs"),
+            blobs_24h: q1("SELECT COUNT(*) FROM blobs WHERE created_at > ?1"),
+            msgs_hourly,
+            blobs_daily,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]

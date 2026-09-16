@@ -26,6 +26,12 @@ pub struct RelayConfig {
     /// If missing, the push HTTP server still serves the API but not the PWA UI.
     #[serde(default)]
     pub static_dir: Option<PathBuf>,
+    /// v160s2 (Олег 2026-09-16): optional HTTP Basic auth for the admin stats
+    /// endpoint. Format: "user:password". Empty/absent = no auth (dev mode).
+    /// Needed because traffic to 8444 can bypass nginx (CF Worker / direct),
+    /// so nginx-only basic_auth is not sufficient.
+    #[serde(default)]
+    pub stats_basic_auth: Option<String>,
 }
 
 fn default_ws_bind() -> String {

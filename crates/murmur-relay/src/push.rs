@@ -396,6 +396,8 @@ pub struct PushServer {
     pub(crate) hub: crate::SubscriberHub,
     /// SQLite message store (contacts, history, unread).
     pub(crate) store_db: Option<crate::storage::MessageStore>,
+    /// v160s2: optional basic auth credentials ("user:password") for /api/stats.
+    pub(crate) stats_auth: Option<String>,
 }
 
 impl Clone for PushServer {
@@ -409,6 +411,7 @@ impl Clone for PushServer {
             pending: self.pending.clone(),
             hub: self.hub.clone(),
             store_db: self.store_db.clone(),
+            stats_auth: self.stats_auth.clone(),
         }
     }
 }
@@ -430,6 +433,7 @@ impl PushServer {
             pending: crate::PendingStore::new(&home_dir)?,
             hub: crate::SubscriberHub::new(),
             store_db: Some(db),
+            stats_auth: None,
         })
     }
 
@@ -449,6 +453,12 @@ impl PushServer {
         self.hub = hub;
         self
     }
+
+    /// v160s2: set optional basic auth credentials for the stats endpoint.
+    pub fn with_stats_auth(mut self, auth: Option<String>) -> Self {
+        self.stats_auth = auth.filter(|s| !s.trim().is_empty());
+        self
+ }
 
     pub fn vapid_public_b64url(&self) -> &str {
         self.vapid.public_b64url()
@@ -595,6 +605,20 @@ impl PushServer {
                             }
                             (Method::GET, "/api/history") => {
                                 handle_api_history(req, db.clone()).await
+                            }
+                            // v160s (Олег 2026-09-16): admin dashboard — агрегаты
+                            // без PII + живые счётчики WS/push. Защита: optional
+                            // stats_basic_auth в конфиге (трафик к 8444 может
+                            // обходить nginx — CF Worker / direct — так что
+                            // nginx-only basic_auth недостаточно).
+                            (Method::GET, "/api/stats") => {
+                                handle_api_stats(
+                                    req,
+                                    db.clone(),
+                                    hub.clone(),
+                                    Arc::clone(&push_self),
+                                )
+                                .await
                             }
                             (Method::POST, "/push/register_subscribe") => {
                                 handle_register_subscribe(req, store.clone_handle()).await
@@ -1232,6 +1256,89 @@ async fn handle_api_history(
         .header("access-control-allow-origin", "*")
         .body(Full::new(Bytes::from(resp.to_string())))
         .unwrap())
+}
+
+// ── API: admin stats (v160s, Олег 2026-09-16) ───────────────────────
+
+async fn handle_api_stats(
+    req: Request<Incoming>,
+    store: Option<crate::storage::MessageStore>,
+    hub: crate::SubscriberHub,
+    push: Arc<PushServer>,
+) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    // v160s2: optional basic auth (configured via stats_basic_auth in toml).
+    // Traffic to 8444 may bypass nginx (CF Worker / VPN DNAT), so nginx-only
+    // basic_auth is not sufficient — verify here too.
+    if let Some(expected) = &push.stats_auth {
+        let ok = req
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Basic "))
+            .map(|b64| {
+                use base64::engine::general_purpose::STANDARD as B64;
+                B64.decode(b64)
+                    .ok()
+                    .and_then(|raw| String::from_utf8(raw).ok())
+                    .map(|creds| constant_time_eq(creds.as_bytes(), expected.as_bytes()))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if !ok {
+            return Ok(Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .header("www-authenticate", "Basic realm=\"MurMur admin\"")
+                .header("content-type", "text/plain")
+                .header("cache-control", "no-store")
+                .body(Full::new(Bytes::from("unauthorized")))
+                .unwrap());
+        }
+    }
+    let db = match &store {
+        Some(db) => db,
+        None => {
+            return Ok(json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "message store not initialised",
+            ));
+        }
+    };
+    let snap = match db.get_stats() {
+        Ok(s) => s,
+        Err(e) => {
+            return Ok(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("get_stats: {e}"),
+            ));
+        }
+    };
+    // Живые счётчики: WS-соединения сейчас + push-подписки в store.
+    let ws_now = hub.count();
+    let push_subs = push.store.count();
+    let mut out = serde_json::to_value(&snap).unwrap_or(serde_json::json!({}));
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert("ws_connections_now".into(), serde_json::json!(ws_now));
+        obj.insert("push_subscriptions".into(), serde_json::json!(push_subs));
+    }
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/json")
+        .header("cache-control", "no-store")
+        .header("access-control-allow-origin", "*")
+        .body(Full::new(Bytes::from(out.to_string())))
+        .unwrap())
+}
+
+/// v160s2: constant-time comparison for basic auth credentials.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 fn json_error(status: StatusCode, msg: &str) -> Response<Full<Bytes>> {
