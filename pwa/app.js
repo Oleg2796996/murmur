@@ -5167,8 +5167,8 @@ function showVideoModal(src, poster) {
     m.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px;";
     m.innerHTML =
         '<div style="width:100%;max-width:360px;">' +
+        '<div style="display:flex;justify-content:center;margin-bottom:10px;"><button id="vid-close" style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:12px 36px;font-size:16px;font-weight:600;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.4);">← Назад</button></div>' +
         '<video src="' + src + '" poster="' + poster + '" controls playsinline style="width:100%;border-radius:12px;background:#000;"></video>' +
-        '<div style="text-align:center;margin-top:10px;"><button id="vid-close" style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 24px;font-size:14px;cursor:pointer;">Закрыть</button></div>' +
         '</div>';
     document.body.appendChild(m);
     const close = () => { const v = m.querySelector("video"); if (v) v.pause(); m.remove(); };
