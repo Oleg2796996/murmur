@@ -5105,6 +5105,16 @@ function showInviteLanding(inviteNpub) {
         '<div><b style="color:#5eead4;">Chrome</b> (Android/ПК): ⋮ → Добавить на главный экран</div>' +
         '<div><b style="color:#5eead4;">Firefox</b>: меню → Установить</div>' +
         '<div style="margin-top:6px;color:var(--text);">Откройте MurMur с новой иконки — аккаунт создастся сам, и чат уже будет ждать</div>' +
+        '</div>' +
+        // v160q: видео-инструкции (Олег 16.09) — 2 карточки под секцией шагов.
+        '<div style="font-size:14.5px;font-weight:600;color:var(--text);margin:14px 0 8px;">Видео-инструкция</div>' +
+        '<div style="display:flex;gap:10px;">' +
+        '<div role="button" class="vid-card" data-vid="safari" style="flex:1;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:10px;text-align:center;cursor:pointer;">' +
+        '<div style="font-size:20px;">🍎</div><div style="font-size:13px;font-weight:600;color:var(--text);margin-top:4px;">Safari</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">iPhone / iPad · 0:53</div>' +
+        '</div>' +
+        '<div role="button" class="vid-card" data-vid="chrome" style="flex:1;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:10px;text-align:center;cursor:pointer;opacity:.55;">' +
+        '<div style="font-size:20px;">🌐</div><div style="font-size:13px;font-weight:600;color:var(--text);margin-top:4px;">Chrome</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Android / ПК · скоро</div>' +
+        '</div>' +
         '</div>';
 
     // v160p6e: tap on link box → copy to clipboard (нажми → скопировалось)
@@ -5137,6 +5147,33 @@ function showInviteLanding(inviteNpub) {
     // в браузере создаст второй аккаунт (баг-репорт Олега).
     card.style.display = "none";
     card.parentNode.insertBefore(ov, card);
+
+    // v160q: тап на видео-карточку → модалка с <video controls> (не autoplay —
+    // iOS требует жеста; controls + playsinline достаточно).
+    ov.querySelectorAll(".vid-card").forEach(vc => {
+        vc.addEventListener("click", () => {
+            const vid = vc.getAttribute("data-vid");
+            if (vid === "safari") showVideoModal("/media/instruction-safari.mp4", "/media/instruction-safari-poster.jpg");
+            // chrome: пока нет видео — карточка приглушена, тап игнорируется
+        });
+    });
+}
+
+// v160q: модалка видео-инструкции (одна на экран, тап по фону закрывает).
+function showVideoModal(src, poster) {
+    if (document.getElementById("vid-modal")) return;
+    const m = document.createElement("div");
+    m.id = "vid-modal";
+    m.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px;";
+    m.innerHTML =
+        '<div style="width:100%;max-width:360px;">' +
+        '<video src="' + src + '" poster="' + poster + '" controls playsinline style="width:100%;border-radius:12px;background:#000;"></video>' +
+        '<div style="text-align:center;margin-top:10px;"><button id="vid-close" style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 24px;font-size:14px;cursor:pointer;">Закрыть</button></div>' +
+        '</div>';
+    document.body.appendChild(m);
+    const close = () => { const v = m.querySelector("video"); if (v) v.pause(); m.remove(); };
+    m.querySelector("#vid-close").addEventListener("click", close);
+    m.addEventListener("click", e => { if (e.target === m) close(); });
 }
 
 // v160f: модалка «код переноса» — генерация (отправитель, в мессенджере).
