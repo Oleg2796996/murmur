@@ -5091,9 +5091,8 @@ function showInviteLanding(inviteNpub) {
         '<div style="text-align:center;font-size:14.5px;font-weight:600;color:var(--text);margin-bottom:10px;">Почему это приватно</div>' +
         '<div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:14px;">' +
         '<div style="display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.55;color:var(--text-muted);margin-bottom:10px;"><span style="flex-shrink:0;">🔐</span><div><b style="color:var(--text);">Всё хранится на вашем устройстве</b> — сервер видит только зашифрованные сообщения</div></div>' +
-        '<div style="display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.55;color:var(--text-muted);margin-bottom:10px;"><span style="flex-shrink:0;">🧹</span><div><b style="color:var(--text);">Переписка стирается с сервера</b> через минуты после доставки</div></div>' +
+        '<div style="display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.55;color:var(--text-muted);margin-bottom:10px;"><span style="flex-shrink:0;">🧹</span><div><b style="color:var(--text);">Переписка удаляется с сервера</b> после доставки</div></div>' +
         '<div style="display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.55;color:var(--text-muted);margin-bottom:10px;"><span style="flex-shrink:0;">🕶️</span><div><b style="color:var(--text);">Нам не нужно знать</b> ваши имена, телефоны и почту</div></div>' +
-        '<div style="display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.55;color:var(--text-muted);"><span style="flex-shrink:0;">🛡️</span><div><b style="color:var(--text);">Просьба передать данные?</b> Нам нечего передавать</div></div>' +
         '</div>' +
         '<div style="font-size:14.5px;font-weight:600;color:var(--text);margin-bottom:8px;">Чтобы принять приглашение</div>' +
         '<div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;color:var(--text-muted);font-size:13.5px;line-height:1.8;">' +
@@ -5103,17 +5102,16 @@ function showInviteLanding(inviteNpub) {
         '<div><b style="color:var(--text);">2)</b> Ещё не установлен? Пара шагов:</div>' +
         '<div style="margin-top:4px;"><b style="color:#5eead4;">Safari</b> (iPhone/iPad): Поделиться → На экран «Домой»</div>' +
         '<div><b style="color:#5eead4;">Chrome</b> (Android/ПК): ⋮ → Добавить на главный экран</div>' +
-        '<div><b style="color:#5eead4;">Firefox</b>: меню → Установить</div>' +
         '<div style="margin-top:6px;color:var(--text);">Откройте MurMur с новой иконки — аккаунт создастся сам, и чат уже будет ждать</div>' +
         '</div>' +
         // v160q: видео-инструкции (Олег 16.09) — 2 карточки под секцией шагов.
         '<div style="font-size:14.5px;font-weight:600;color:var(--text);margin:14px 0 8px;">Видео-инструкция</div>' +
         '<div style="display:flex;gap:10px;">' +
         '<div role="button" class="vid-card" data-vid="safari" style="flex:1;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:10px;text-align:center;cursor:pointer;">' +
-        '<div style="font-size:20px;">🍎</div><div style="font-size:13px;font-weight:600;color:var(--text);margin-top:4px;">Safari</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">iPhone / iPad · 0:53</div>' +
+        '<div style="font-size:20px;">🍎</div><div style="font-size:13px;font-weight:600;color:var(--text);margin-top:4px;">Safari</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">iPhone / iPad</div>' +
         '</div>' +
         '<div role="button" class="vid-card" data-vid="chrome" style="flex:1;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:10px;text-align:center;cursor:pointer;">' +
-        '<div style="font-size:20px;">🤖</div><div style="font-size:13px;font-weight:600;color:var(--text);margin-top:4px;">Chrome</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Android · 0:55</div>' +
+        '<div style="font-size:20px;">🤖</div><div style="font-size:13px;font-weight:600;color:var(--text);margin-top:4px;">Chrome</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Android</div>' +
         '</div>' +
         '</div>';
 
