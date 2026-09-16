@@ -5113,7 +5113,7 @@ function showInviteLanding(inviteNpub) {
         '<div style="font-size:20px;">🍎</div><div style="font-size:13px;font-weight:600;color:var(--text);margin-top:4px;">Safari</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">iPhone / iPad · 0:53</div>' +
         '</div>' +
         '<div role="button" class="vid-card" data-vid="chrome" style="flex:1;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:10px;text-align:center;cursor:pointer;">' +
-        '<div style="font-size:20px;">🌐</div><div style="font-size:13px;font-weight:600;color:var(--text);margin-top:4px;">Chrome</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">iPhone · 0:53</div>' +
+        '<div style="font-size:20px;">🤖</div><div style="font-size:13px;font-weight:600;color:var(--text);margin-top:4px;">Chrome</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Android · 0:55</div>' +
         '</div>' +
         '</div>';
 
@@ -5154,7 +5154,7 @@ function showInviteLanding(inviteNpub) {
         vc.addEventListener("click", () => {
             const vid = vc.getAttribute("data-vid");
             if (vid === "safari") showVideoModal("/media/instruction-safari.mp4", "/media/instruction-safari-poster.jpg");
-            else if (vid === "chrome") showVideoModal("/media/instruction-chrome.mp4", "/media/instruction-chrome-poster.jpg");
+            else if (vid === "chrome") showVideoModal("/media/instruction-chrome-android.mp4", "/media/instruction-chrome-android-poster.jpg");
         });
     });
 }
