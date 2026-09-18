@@ -107,6 +107,23 @@ impl WsServer {
                                     let pong = serde_json::json!({ "type": "pong" });
                                     ws_tx.send(Message::Text(pong.to_string())).await?;
                                 }
+                                // v160t (Олег 2026-09-18): «печатает…» — эфемерное
+                                // событие. Relay видит только ФАКТ набора (без
+                                // текста), ничего не пишет в DB, не persist.
+                                // Broadcast к payload-подписчикам получателя
+                                // (живые WS/PWA-клиенты) голым JSON без push-обёртки.
+                                "typing" => {
+                                    let from = parsed.get("npub").and_then(|v| v.as_str()).unwrap_or("");
+                                    let to = parsed.get("to").and_then(|v| v.as_str()).unwrap_or("");
+                                    if !from.is_empty() && !to.is_empty() && from != to {
+                                        let ev = serde_json::json!({
+                                            "type": "typing",
+                                            "from_npub": from,
+                                            "ts": chrono::Utc::now().timestamp_millis(),
+                                        });
+                                        self.hub.broadcast_typing(&to.to_string(), ev.to_string());
+                                    }
+                                }
                                 _ => {
                                     send_err(&mut ws_tx, "unknown type").await?;
                                 }
@@ -134,11 +151,22 @@ impl WsServer {
                 }
                 outbound = poll_receivers_payload(&mut rx_list) => {
                     if let Some(payload) = outbound {
-                        let msg = serde_json::json!({
-                            "type": "push",
-                            "payload": payload.to_json_value(),
-                        });
-                        ws_tx.send(Message::Text(msg.to_string())).await?;
+                        // v160t: typing events ride the payload channel as
+                        // body = raw typing JSON (push body is generic server
+                        // text, never JSON — marker is unambiguous). Send as
+                        // bare Text frame so client sees {type:"typing",...}.
+                        // contains, не starts_with: serde_json Map сортирует
+                        // ключи алфавитно (from_npub < type), поэтому typing
+                        // JSON начинается с {"from_npub"...
+                        if payload.body.contains("\"type\":\"typing\"") {
+                            ws_tx.send(Message::Text(payload.body.clone())).await?;
+                        } else {
+                            let msg = serde_json::json!({
+                                "type": "push",
+                                "payload": payload.to_json_value(),
+                            });
+                            ws_tx.send(Message::Text(msg.to_string())).await?;
+                        }
                     }
                 }
             }
@@ -205,6 +233,7 @@ mod tests {
             push_bind: "127.0.0.1:0".into(),
             vapid_subject: "mailto:t@murmur.local".into(),
             static_dir: None,
+            stats_basic_auth: None,
         };
         let hub = SubscriberHub::new();
         let pending = PendingStore::new(&dir).unwrap();

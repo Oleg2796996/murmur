@@ -137,6 +137,29 @@ impl SubscriberHub {
         n
     }
 
+    /// v160t (Олег 2026-09-18): broadcast голого typing JSON ко всем
+    /// payload-подписчикам npub. Эфемерно: без PushPayload-контента, без DB,
+    /// без persist. Drop closed senders.
+    pub fn broadcast_typing(&self, npub: &str, json_text: String) {
+        let mut inner = self.inner.lock();
+        if let Some(list) = inner.payload_subs.get_mut(npub) {
+            list.retain(|h| {
+                // TypingPing reuses the payload channel with a marker variant;
+                // ws_server unwraps it as a raw Text frame.
+                h.tx.try_send(PushPayload {
+                    alias: String::new(),
+                    from_npub: String::new(),
+                    ts: 0,
+                    envelope_hash_hex: String::new(),
+                    title: String::new(),
+                    subtitle: String::new(),
+                    body: json_text.clone(),
+                    badge: 0,
+                }).is_ok()
+            });
+        }
+    }
+
     /// Number of unique subscribers across all npubs.
     pub fn count(&self) -> usize {
         let inner = self.inner.lock();

@@ -564,7 +564,9 @@ function loadOutboxForPeer(peerNpub) {
     }
     return result;
 }
-const WS_URL = RELAY.replace("https://", "wss://").replace("http://", "ws://");
+// v160t: WS endpoint — /ws (роутинг CF-туннеля + nginx → 8443). Корень ведёт
+// на push HTTP (8444), WS туда не подключается (200 fallback → handshake fail).
+const WS_URL = RELAY.replace("https://", "wss://").replace("http://", "ws://") + "/ws";
 const POLL_INTERVAL = 5000;
 const HISTORY_LIMIT = 100;
 const WS_RECONNECT_BASE = 1000;
@@ -1625,8 +1627,10 @@ function enterMessenger() {
     if (m) m.classList.remove("chat-open");
     renderChatList();
     loadContacts();
-    // connectWS();  // DISABLED: WS reconnect storm blocks fetches in browsers without proxying WS.
-                       // Push via WebSocket is replaced by polling (pollHistoryForPeer + pollInbox).
+    // v160t (Олег 18.09): «печатает…» требует WS-соединения. Reconnect storm
+    // фиксен backoff'ом (WS_RECONNECT_BASE 1s → MAX 60s, экспоненциальный +
+    // reconnect только при close), CF-туннель теперь роутит /ws → 8443.
+    connectWS();
     startPolling();
     // Granted permission + stale Safari sub = 403 forever until force resubscribe.
     // v160y22push2: use retry wrapper — myNpub may not be ready if enterMessenger
@@ -4040,9 +4044,62 @@ async function sendMessage() {
 // createNewChatFromInput удалена заодно — alias там всё равно не работал, только npub1…)
 
 // ── Input handling ──
+// ═══ v160t (Олег 18.09): «печатает…» индикатор ═══
+// Приватность: relay видит только ФАКТ набора (без текста), ничего не пишет
+// в DB, событие эфемерное (не persist). Отправка: WS {type:"typing", npub}
+// throttle 2.5с. Приём: WS push {type:"typing", from_npub, ts} —
+// показываем «печатает…» под именем в header чата 4с (auto-hide).
+let typingSendLast = 0;          // ms timestamp последней отправки typing
+const TYPING_SEND_GAP = 2500;    // throttle отправки
+const TYPING_SHOW_MS = 4000;     // сколько показываем индикатор
+let typingTimers = new Map();    // peer → setTimeout id
+
+function sendTypingPing() {
+    const now = Date.now();
+    if (now - typingSendLast < TYPING_SEND_GAP) return;
+    typingSendLast = now;
+    try {
+        if (ws && ws.readyState === WebSocket.OPEN && myNpub && activePeer) {
+            ws.send(JSON.stringify({ type: "typing", npub: myNpub, to: activePeer }));
+        }
+    } catch (e) { /* ignore */ }
+}
+
+function showTyping(peer) {
+    if (typeof peer !== "string") return;
+    const nameEl = document.getElementById("chat-peer-name");
+    if (!nameEl) return;
+    if (activePeer === peer) nameEl.textContent = "печатает…";
+    const old = typingTimers.get(peer);
+    if (old) clearTimeout(old);
+    typingTimers.set(peer, setTimeout(() => hideTyping(peer), TYPING_SHOW_MS));
+}
+
+function hideTyping(peer) {
+    const nameEl = document.getElementById("chat-peer-name");
+    if (nameEl && activePeer === peer) {
+        const nm = loadContactNames();
+        nameEl.textContent = nm[peer] || shortNpub(peer);
+    }
+    const t = typingTimers.get(peer);
+    if (t) { clearTimeout(t); typingTimers.delete(peer); }
+}
+
+function handleTypingEvent(env) {
+    if (!env || env.type !== "typing") return false;
+    const from = env.from_npub || env.from;
+    if (!from || from === myNpub) return true; // своё — скип
+    const peer = normalizePeer(from);
+    // Показываем только если этот peer — активный чат (иначе просто игнор).
+    if (activePeer === peer) showTyping(peer);
+    return true;
+}
+
 messageInput?.addEventListener("input", () => {
     messageInput.style.height = "auto";
     messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + "px";
+    // v160t: typing ping на любой ввод (throttle внутри).
+    sendTypingPing();
 });
 
 messageInput?.addEventListener("keydown", (e) => {
@@ -4399,6 +4456,9 @@ function connectWS() {
         try {
             const msg = JSON.parse(evt.data);
             // Relay wraps as {"type":"push","payload":{...}}
+            // v160t: typing events приходят голым {type:"typing", from_npub, ts}
+            // (не в push-payload — эфемерные, не хранятся).
+            if (handleTypingEvent(msg) || handleTypingEvent(msg.payload || {})) return;
             const envelope = msg.payload || msg;
             if (msg.type === "subscribed" || msg.type === "pong" || msg.type === "error") return;
             if (envelope && envelope.ts) handleIncomingEnvelope(envelope);
