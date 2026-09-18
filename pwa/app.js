@@ -260,9 +260,12 @@ function _sanitizeAttachmentForStorage(att) {
 // IDB put падает молча → кэш переписки не persists. Стримаем перед записью.
 function _sanitizeMessageForStorage(m) {
     if (!m || typeof m !== "object") return m;
-    if (!m._decrypt_promise && !(Array.isArray(m.attachments_meta) && m.attachments_meta.some(_sanitizeAttachmentNeedsCopy))) return m;
+    // v160r: reply_to (простой объект {sig, preview, ts}) должен пережить кэш —
+    // цитата рисуется после reload тоже.
+    if (!m._decrypt_promise && !m.reply_to && !(Array.isArray(m.attachments_meta) && m.attachments_meta.some(_sanitizeAttachmentNeedsCopy))) return m;
     const cm = Object.assign({}, m);
     delete cm._decrypt_promise;
+    if (cm.reply_to && typeof cm.reply_to === "object") cm.reply_to = Object.assign({}, cm.reply_to);
     if (Array.isArray(cm.attachments_meta)) cm.attachments_meta = cm.attachments_meta.map(_sanitizeAttachmentForStorage);
     return cm;
 }
@@ -296,7 +299,8 @@ async function saveMessagesCacheForPeer(peer) {
                 const d = await decryptEnvelopeForRender(raw);
                 // v160y2: пустой text + вложения = успех (фото без подписи).
                 if (decryptResultHasContent(d)) {
-                    const cm = _sanitizeMessageForStorage(Object.assign({}, m, { body: d.text || "" }));
+                    // v160r: reply_to из decrypt тоже в кэш — цитата рисуется после reload.
+                    const cm = _sanitizeMessageForStorage(Object.assign({}, m, { body: d.text || "", reply_to: d.reply_to || null }));
                     trimmed.push(cm);
                     continue;
                 }
@@ -607,6 +611,9 @@ let pollTimer = null;
 // Attachments (Олег 2026-08-24 11:00 MSK) — файлы прикрепленные к текущему сообщению.
 let pendingAttachments = [];        // [{name, mime, size, data_b64}] — уйдут в зашифрованный body
 let pendingAttachmentsMeta = [];   // [{name, mime, size}] — public metadata для relay
+// v160r (Олег 2026-09-17): reply-to — тап на bubble → бар «ответ на: …»,
+// отправка несёт reply_to {sig, preview} внутри E2E payload (релей не видит).
+let pendingReply = null;           // {sig, preview, ts} | null
 let ws = null;
 let wsConnected = false;
 let wsReconnectDelay = WS_RECONNECT_BASE;
@@ -865,7 +872,8 @@ async function decryptEnvelopeForRender(env) {
                 body += "\n📎 " + a.name + " (" + formatSize(a.size) + ")";
             }
         }
-        return { text: body, isBinary: false, attachments: plain.attachments || [], attachmentsMeta };
+        // v160r: reply_to из расшифрованного ct — несём в render (цитата в bubble).
+        return { text: body, isBinary: false, attachments: plain.attachments || [], attachmentsMeta, reply_to: plain.reply_to || null };
     } catch (e) {
         console.warn("decrypt failed:", e);
         // (Олег 2026-08-25 07:55 MSK): caller в loadHistory различает исходящие
@@ -1302,6 +1310,85 @@ function escapeHtml(str) {
 function shortNpub(s) {
     if (!s) return "anon";
     return s.slice(0, 6) + "..." + s.slice(-4);
+}
+
+// ═══ v160r (Олег 2026-09-17): reply-to ═══
+// Тап на bubble → бар «Ответ» над input-row. Отправка несёт reply_to
+// {sig, preview} внутри E2E payload — relay его не видит, приватность та же.
+// Цитата рендерится в bubble адресата над текстом; тап по цитате — scrollTo
+// оригинала (по data-sig в DOM).
+function previewForReplyTarget(m) {
+    try {
+        if (!m) return "";
+        const am = (Array.isArray(m.attachments_meta) && m.attachments_meta.length) ? m.attachments_meta : (Array.isArray(m.attachments) ? m.attachments : []);
+        if (am.length) {
+            const kindOf = (a) => { const mm = (a && a.mime) || ""; if (mm.startsWith("image/")) return "фото"; if (mm.startsWith("video/")) return "видео"; if (mm.startsWith("audio/")) return "аудио"; return "файл"; };
+            return "📎 " + kindOf(am[0]) + (am.length > 1 ? " +" + (am.length - 1) : "");
+        }
+        let t = String(m.body || "").trim();
+        if (t.startsWith("{")) return "🔒 зашифрованное";
+        if (t === "__DECRYPT_FAILED__") return "🔒 зашифрованное";
+        return t.split("\n").filter(line => !line.trim().startsWith("📎")).join(" ").trim().slice(0, 80);
+    } catch (e) { return ""; }
+}
+
+function showReplyBar(msg) {
+    const bar = document.getElementById("reply-bar");
+    const prev = document.getElementById("reply-bar-preview");
+    if (!bar || !prev) return;
+    pendingReply = {
+        sig: msg._sig || (msg.from + ":" + msg.ts),
+        hash: msg._hash || null,
+        ts: msg.ts,
+        preview: previewForReplyTarget(msg),
+    };
+    prev.textContent = pendingReply.preview || "сообщение";
+    bar.hidden = false;
+    if (window.innerWidth >= 480) messageInput?.focus();
+}
+
+function hideReplyBar() {
+    pendingReply = null;
+    const bar = document.getElementById("reply-bar");
+    if (bar) bar.hidden = true;
+}
+
+function wireReplyBarControls() {
+    const bar = document.getElementById("reply-bar");
+    const cancel = document.getElementById("btn-reply-cancel");
+    if (!bar || !cancel) return;
+    cancel.addEventListener("click", hideReplyBar);
+}
+
+// Тап на bubble → showReplyBar (кроме system/цитат — тап по цитате = скролл к оригиналу).
+function wireBubbleTap() {
+    const area = document.getElementById("messages-area");
+    if (!area) return;
+    if (area.__murmurReplyWired) return; // защита от повторного wiring
+    area.__murmurReplyWired = true;
+    area.addEventListener("click", (ev) => {
+        // 1) тап по цитате → скролл к оригиналу (data-qsig на quoted)
+        const q = ev.target.closest(".quoted[data-qsig]");
+        if (q) {
+            const target = area.querySelector(`[data-sig="${CSS.escape(q.dataset.qsig)}"]`);
+            if (target) {
+                target.scrollIntoView({ behavior: "smooth", block: "center" });
+                target.style.transition = "filter 0.4s";
+                target.style.filter = "brightness(1.35)";
+                setTimeout(() => { target.style.filter = ""; }, 600);
+            }
+            return; // не открываем reply-бар
+        }
+        // 2) тап по bubble → reply
+        const b = ev.target.closest(".bubble");
+        if (!b || b.classList.contains("bubble-system")) return;
+        const sig = b.getAttribute("data-sig");
+        if (!sig) return;
+        const peer = activePeer;
+        if (!peer || !messages[peer]) return;
+        const m = messages[peer].find((x) => (x._sig === sig) || ((x.from || x.from_npub || "") + x.ts === sig));
+        if (m) showReplyBar(m);
+    });
 }
 
 function loadContactNames() {
@@ -1835,6 +1922,14 @@ function loadUnreadMap() {
 }
 function saveUnreadMap(m) {
     try { localStorage.setItem(LS_UNREAD, JSON.stringify(m)); } catch {}
+    // v160b (Олег 2026-09-17): зеркало unread в IDB kv — SW (закрытое приложение)
+    // читает его в push-хендлере и ставит ТОЧНЫЙ badge. localStorage в SW-контексте
+    // недоступен, IDB — единственное разделяемое состояние страница↔SW.
+    try {
+        if (window.appStore && window.appStore.kv.set) {
+            window.appStore.kv.set("murmur.badge_unread", m).catch(() => {});
+        }
+    } catch (e) { /* ignore */ }
 }
 function getUnread(peer) {
     const m = loadUnreadMap();
@@ -2725,6 +2820,7 @@ function showInviteManualCopy(inviteLink) {
 function openChat(peer) {
     peer = normalizePeer(peer);
     activePeer = peer;
+    hideReplyBar(); // v160r: reply сброс при смене чата (не тащим чужой reply)
     const m = document.querySelector(".messenger");
     if (m) m.classList.add("chat-open");
     chatList.querySelectorAll(".chat-item").forEach(el => {
@@ -2882,10 +2978,12 @@ async function loadHistory(peer, beforeTs) {
                         cachedMsg.direction = apiDir; // fix stale direction
                         if (apiDir === "in") {
                             // Для входящих — расшифровываем body
-                            pDecrypt.push(decryptWithTimeout(m).then(({ text: newBody, attachments: newAttArr }) => {
+                            pDecrypt.push(decryptWithTimeout(m).then(({ text: newBody, attachments: newAttArr, reply_to: newReplyTo }) => {
                                 // v160y2: пустой text + вложения = успех (фото без подписи).
                                 if (decryptResultHasContent({ text: newBody, attachments: newAttArr })) {
                                     cachedMsg.body = newBody || "";
+                                    // v160r: reply_to тоже в кэш (цитата после reload).
+                                    if (newReplyTo) cachedMsg.reply_to = newReplyTo;
                                 }
                                 if (newAttArr && newAttArr.length > 0) {
                                     cachedMsg.attachments = newAttArr;
@@ -2991,7 +3089,7 @@ async function loadHistory(peer, beforeTs) {
                     // Нет локального — это сообщение отправлено с ДРУГОГО устройства
                     // или до установки PWA. Расшифровываем.
                 }
-                pDecrypt.push(decryptWithTimeout(m).then(async ({ text: bodyText, attachments: attArr, attachmentsMeta: mergedMeta }) => {
+                pDecrypt.push(decryptWithTimeout(m).then(async ({ text: bodyText, attachments: attArr, attachmentsMeta: mergedMeta, reply_to: mergedReplyTo }) => {
                     // Privacy v155: from_name из wire больше не читается — имена
                     // контактов пользователь задаёт сам, локально.
                     // Для исходящих от меня: если decrypt упал (__DECRYPT_FAILED__) —
@@ -3050,6 +3148,8 @@ async function loadHistory(peer, beforeTs) {
                         // Privacy v154: mergedMeta (= m/inner attachments_meta после слияния real names
                         // из ct в decryptEnvelopeForRender) — тогда чипы получают настоящее имя.
                         attachments_meta: outboxAttachmentsMeta || mergedMeta || m.attachments_meta || [],
+                        // v160r: reply_to из mergedMeta (decrypt paths) или inner (без E2E)
+                        reply_to: mergedReplyTo || (m._server_msg && m._server_msg.reply_to) || m.reply_to || null,
                     };
                     newMsgs.push(msg);
                     if (hash) existingHashSet.add(hash);
@@ -3225,6 +3325,27 @@ function renderMessages() {
         let div;
         let _rerenderAttachments = false;
         if (renderedSigs.has(sig)) {
+            // v160r2 (Олег 18.09 «входящее отображается без привязи, после
+            // обновления — как надо»): bubble уже отрисован БЕЗ цитаты, а
+            // reply_to пришёл ПОЗЖЕ (Phase-3 decrypt петля в pollHist: первый
+            // render идёт с reply_to=null, decrypt асинхронный). Skip-путь
+            // оставлял bubble без .quoted навсегда (до reload, где loadHistory
+            // расшифровывает ДО render). Фикс: вставляем .quoted in-place
+            // перед .msg-body, если цитата есть, а в bubble её ещё нет.
+            // Гард от дубля: только если .quoted отсутствует.
+            if (m.reply_to && m.reply_to.sig) {
+                try {
+                    const qBubble = messagesArea.querySelector(`[data-sig="${CSS.escape(sig)}"]`);
+                    if (qBubble && !qBubble.querySelector(".quoted")) {
+                        const q = document.createElement("div");
+                        q.className = "quoted";
+                        q.setAttribute("data-qsig", m.reply_to.sig);
+                        q.textContent = String(m.reply_to.preview || "сообщение").slice(0, 120);
+                        const qBody = qBubble.querySelector(".msg-body");
+                        qBubble.insertBefore(q, qBody || qBubble.firstChild);
+                    }
+                } catch (e) { /* ignore */ }
+            }
             // Lesson #348 (Олег 2026-08-30 15:45 MSK): rerender-attachments
             // ранее был ТОЛЬКО для direction "in". Исходящие, отрендеренные
             // из cache ДО подклейки plaintext из outbox (loadMessagesCacheForPeer
@@ -3303,7 +3424,20 @@ function renderMessages() {
             } else if (statusGlyph) {
                 statusHtml = " " + statusGlyph;
             }
+            // v160r: цитата (reply_to из расшифрованного ct) над текстом.
+            // m.reply_to пишется в msg-объектах (decrypt paths + optimistic).
+            // data-qsig = sig оригинала — тап по цитате скроллит к нему.
+            // Privacy v155: имя отправителя не светим (nameMap только локально,
+            // в quoted уходит превью текста — достаточно для привязки).
+            let quotedHtml = "";
+            if (m.reply_to && m.reply_to.sig) {
+                quotedHtml =
+                    "<div class='quoted' data-qsig='" + escapeHtml(m.reply_to.sig) + "'>" +
+                        escapeHtml(String(m.reply_to.preview || "сообщение").slice(0, 120)) +
+                    "</div>";
+            }
             div.innerHTML =
+                quotedHtml +
                 "<div class='msg-body'>" + bodyHtml + "</div>" +
                 "<span class='bubble-time'>" + formatTime(m.ts) + statusHtml + "</span>";
             messagesArea.appendChild(div);
@@ -3665,6 +3799,9 @@ async function sendMessage() {
             console.error("sendMessage: cannot resolve peer key for", activePeer);
             return;
         }
+        // v160r: reply-to snapshot ДО очистки (pendingReply сбрасывается после encrypt).
+        // reply_to живёт ВНУТРИ E2E payload — relay его не видит (приватность та же).
+        const replySnapshot = pendingReply ? Object.assign({}, pendingReply) : null;
         // Clone meta before clearing, to avoid race with subsequent edits.
         // Privacy split (Олег 2026-08-31):
         //  - attachments_meta (SERVER-VISIBLE) → publicName (f-…bin), no real filename
@@ -3672,11 +3809,15 @@ async function sendMessage() {
         const metaSnapshot = pendingAttachmentsMeta.map((a) => Object.assign({}, a));
         const sealedB64 = await encryptForRecipient(peerKey.npub, {
             body: text,
+            // v160r: reply_to внутри E2E — {sig, preview, ts} целиком зашифровано.
+            reply_to: replySnapshot ? { sig: replySnapshot.sig, preview: replySnapshot.preview, ts: replySnapshot.ts } : null,
             attachments: metaSnapshot.map((a) => ({ name: a.name, mime: a.mime, size: a.size,
                 // v160d: постер-кадр (data:image/jpeg) — только получателю, внутри E2E.
                 poster_data_url: a.poster_data_url || null,
             })),
         });
+        // v160r: reply сбрасываем после encrypt (снимок уже снят).
+        hideReplyBar();
         // Server-visible meta: replace real names with neutral ones, drop plaintext_b64.
         const serverMeta = metaSnapshot.map((a) => ({
             blob_id: a.blob_id,
@@ -3765,6 +3906,8 @@ async function sendMessage() {
             direction: "out", sig: sig.data, _sig: myNpub + msg.ts,
             status: "sent", isBinary: false, _hash: null,
             attachments_meta: attachmentsWithPlaintext, // [{blob_id, mime, name, size, plaintext_b64}]
+            // v160r: reply в optimistic render (цитата видна сразу после отправки)
+            reply_to: replySnapshot ? { sig: replySnapshot.sig, preview: replySnapshot.preview, ts: replySnapshot.ts } : null,
             _pendingServerAssign: true,
         };
         messages[activePeer].push(renderedMsg);
@@ -3879,6 +4022,9 @@ async function sendMessage() {
         attachmentsPreview.innerHTML = "";
         pendingAttachments = [];
         pendingAttachmentsMeta = [];
+        // v160r: reply тоже сбрасываем в finally — иначе при ошибке encrypt
+        // бар висит и следующий send унесёт чужой reply_to.
+        hideReplyBar();
         messageInput.value = "";
         messageInput.style.height = "auto";
         // 🔄 Lesson #196: перерендерить messages-area, чтобы новый bubble появился
@@ -4326,7 +4472,7 @@ function handleIncomingEnvelope(env) {
     }
 
     // E2E: если есть `ct` — расшифровываем async, иначе plaintext fallback.
-    decryptEnvelopeForRender(env).then(({ text: bodyText, isBinary, attachments, attachmentsMeta }) => {
+    decryptEnvelopeForRender(env).then(({ text: bodyText, isBinary, attachments, attachmentsMeta, reply_to: decryptedReplyTo }) => {
         // Privacy v155: from_name не читаем — имя контакта задаёт получатель локально.
 
         const msg = {
@@ -4337,6 +4483,8 @@ function handleIncomingEnvelope(env) {
             // Privacy v154: attachmentsMeta теперь содержит real names (_plainName),
             // слитые из расшифрованного ct → чипы показывают настоящее имя файла.
             attachments_meta: attachmentsMeta || [],
+            // v160r: reply_to из расшифрованного ct (внутри E2E, не на envelope)
+            reply_to: decryptedReplyTo || null,
         };
         messages[peer].push(msg);
 
@@ -4453,10 +4601,12 @@ async function pollHistoryForPeer(peer) {
                         (cachedMsg.body.includes("🔒") || cachedMsg.body.includes("шифрованное"));
                     if (cachedMsg && staleBody && !cachedMsg._decrypt_promise) {
                         cachedMsg._decrypt_promise = decryptWithTimeout(msg)
-                            .then(({ text: newBody, attachments: newAttArr, attachmentsMeta: newMeta }) => {
+                            .then(({ text: newBody, attachments: newAttArr, attachmentsMeta: newMeta, reply_to: newReplyTo }) => {
                                 // v160y2: пустой text + вложения = успех (фото без подписи).
                                 if (decryptResultHasContent({ text: newBody, attachments: newAttArr })) cachedMsg.body = newBody || "";
                                 if (newMeta && newMeta.length) cachedMsg.attachments_meta = newMeta;
+                                // v160r: reply_to тоже — цитата после decrypt.
+                                if (newReplyTo && !cachedMsg.reply_to) cachedMsg.reply_to = newReplyTo;
                                 if (activePeer === peer) renderMessages();
                             });
                     }
@@ -4599,6 +4749,9 @@ async function pollHistoryForPeer(peer) {
                 _server_msg: msg,
                 attachments: resolvedAttachments,
                 attachments_meta: resolvedAttachmentsMeta,
+                // v160r: reply_to внутри ct — неизвестен на этом этапе (sync extract
+                // его не достаёт). Заполняется Phase-3 decrypt-петлёй ниже.
+                reply_to: null,
             };
             messages[peer].push(envelope);
             added = true;
@@ -4704,6 +4857,8 @@ async function pollHistoryForPeer(peer) {
                                 if (m.direction === "in") {
                                     m.body = r.text || "";
                                     if (r.attachments) m.attachments = r.attachments;
+                                    // v160r: reply_to из расшифрованного ct — цитата в bubble.
+                                    if (r.reply_to && !m.reply_to) m.reply_to = r.reply_to;
                                     // Privacy v154: подтягиваем meta со слитыми real names
                                     // из расшифровки (иначе чипы навсегда f-…bin).
                                     if (r.attachmentsMeta && r.attachmentsMeta.length) {
@@ -5214,11 +5369,15 @@ if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", async () => {
         await requestNotificationPermission();
         warmOutboxCache();
+        wireReplyBarControls(); // v160r: reply-bar controls wiring
+        wireBubbleTap();        // v160r: тап на bubble → reply
         tryAutoRestore();
     });
 } else {
     requestNotificationPermission();
     warmOutboxCache();
+    wireReplyBarControls(); // v160r
+    wireBubbleTap();        // v160r
     tryAutoRestore();
 }
 

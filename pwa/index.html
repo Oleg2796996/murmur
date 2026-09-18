@@ -44,7 +44,7 @@
     <link rel="shortcut icon" href="/favicon-2026b.ico">
     <link rel="mask-icon" href="/mask-icon.svg" color="#229ED9">
     <meta name="app-version" content="v160p6e">
-    <link rel="stylesheet" href="styles.css?v=160p8">
+    <link rel="stylesheet" href="styles.css?v=160r">
 </head>
 <body>
     <div id="identity-screen" class="screen">
@@ -111,6 +111,14 @@
             </section>
             <footer id="input-area" class="input-area" hidden>
                 <div id="attachments-preview" class="attachments-preview"></div>
+                <div id="reply-bar" class="reply-bar" hidden>
+                    <div class="reply-bar-accent"></div>
+                    <div class="reply-bar-body">
+                        <div class="reply-bar-label">Ответ</div>
+                        <div id="reply-bar-preview" class="reply-bar-preview"></div>
+                    </div>
+                    <button id="btn-reply-cancel" class="reply-bar-cancel" title="Отменить ответ">✕</button>
+                </div>
                 <div class="input-row">
                     <button id="btn-attach" class="attach-btn" title="Прикрепить файл (до 50 МБ)">📎</button>
                     <input type="file" id="file-input" multiple accept="image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/ogg,audio/wav,video/mp4,application/pdf,text/plain" style="display:none" />
@@ -174,11 +182,11 @@
     <script src="blob-cache.js?v=160p" defer></script>
     <script src="app-store.js?v=160p" defer></script>
     <script src="render-attachments.js?v=160p9&i18n=1" defer></script>
-    <script src="app.js?v=160q6&i18n=2" defer></script>
+    <script src="app.js?v=160r2&i18n=2" defer></script>
     <script>
       if ("serviceWorker" in navigator) {
         // v160y20: чистый UI — только 🔔, без 💾📊, hover без нажатого эффекта
-        navigator.serviceWorker.register("/service-worker.js?v=160p9i18n&t=" + Date.now()).then((reg) => {
+        navigator.serviceWorker.register("/service-worker.js?v=160p9i18n&t=" + Date.now(), { updateViaCache: "none" }).then((reg) => {
           if (reg.waiting) {
             reg.waiting.postMessage({ type: "SKIP_WAITING" });
           }
