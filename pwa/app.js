@@ -2514,7 +2514,11 @@ function renderChatList() {
         // смену: пусто → финальный текст (или честное «Нет сообщений»).
         const isLockedPlaceholder = c.lastMessagePreview === "🔒 зашифрованное сообщение" || c.lastMessagePreview.startsWith("{");
         const noPreview = !c.lastMessagePreview || isLockedPlaceholder;
-        const preview = noPreview
+        // v160u (Олег 18.09): «печатает…» в превью списка чатов — как в Telegram.
+        // Эфемерный typingPeers имеет приоритет над preview (без persist).
+        const preview = typingPeers.has(c.peer)
+            ? window.MurmurI18N.t("печатает…")
+            : noPreview
             ? (contactsLoaded ? "Нет сообщений" : "")
             : (c.lastMessagePreview.length > 60 ? c.lastMessagePreview.slice(0, 60) + "…" : c.lastMessagePreview)
         const name = nameMap[c.peer];
@@ -4053,6 +4057,7 @@ let typingSendLast = 0;          // ms timestamp последней отправ
 const TYPING_SEND_GAP = 2500;    // throttle отправки
 const TYPING_SHOW_MS = 4000;     // сколько показываем индикатор
 let typingTimers = new Map();    // peer → setTimeout id
+let typingPeers = new Set();     // peer → сейчас печатает (для превью в списке)
 
 function sendTypingPing() {
     const now = Date.now();
@@ -4067,15 +4072,21 @@ function sendTypingPing() {
 
 function showTyping(peer) {
     if (typeof peer !== "string") return;
+    // v160u: превью в списке чатов тоже «печатает…» (как в Telegram).
+    // Эфемерно: contacts-объект в памяти, в setChatPreview не пишем (там
+    // ts-монотонность + persist) — свой typing-таймер восстанавливает
+    // финальный preview через hideTyping.
+    typingPeers.add(peer);
     const nameEl = document.getElementById("chat-peer-name");
     if (!nameEl) return;
-    if (activePeer === peer) nameEl.textContent = "печатает…";
+    if (activePeer === peer) nameEl.textContent = window.MurmurI18N.t("печатает…");
     const old = typingTimers.get(peer);
     if (old) clearTimeout(old);
     typingTimers.set(peer, setTimeout(() => hideTyping(peer), TYPING_SHOW_MS));
 }
 
 function hideTyping(peer) {
+    typingPeers.delete(peer);
     const nameEl = document.getElementById("chat-peer-name");
     if (nameEl && activePeer === peer) {
         const nm = loadContactNames();
@@ -4083,6 +4094,8 @@ function hideTyping(peer) {
     }
     const t = typingTimers.get(peer);
     if (t) { clearTimeout(t); typingTimers.delete(peer); }
+    // v160u: убрали «печатает…» из превью — перерисовываем список.
+    renderChatList();
 }
 
 function handleTypingEvent(env) {
@@ -4090,8 +4103,12 @@ function handleTypingEvent(env) {
     const from = env.from_npub || env.from;
     if (!from || from === myNpub) return true; // своё — скип
     const peer = normalizePeer(from);
-    // Показываем только если этот peer — активный чат (иначе просто игнор).
-    if (activePeer === peer) showTyping(peer);
+    // v160u: showTyping ВСЕГДА (typingPeers.add → превью в списке для любого
+    // peer). Header обновится только если peer — активный чат (условие внутри
+    // showTyping). Раньше showTyping был под if (activePeer === peer) —
+    // превью не рендерилось, пока чат закрыт.
+    showTyping(peer);
+    renderChatList();
     return true;
 }
 

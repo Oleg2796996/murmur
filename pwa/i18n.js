@@ -53,6 +53,7 @@
         "Загрузка…": "Loading…",
         "⏳ Не удалось загрузить историю. Плохой инет — ": "⏳ Failed to load history. Bad connection — ",
         "повторить": "retry",
+        "печатает…": "typing…",
 
         // app.js: invite UI / npub / key modal
         "Вставь invite-ссылку или npub собеседника:": "Paste invite link or peer npub:",
