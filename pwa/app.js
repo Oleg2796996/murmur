@@ -4702,6 +4702,37 @@ async function pollHistoryForPeer(peer) {
                 continue;
             }
 
+            // v160w: fallback-дедуп «потерянный POST-ответ». Если исходящее
+            // ушло (релей сохранил), но ответ POST потерян (сеть/сворачивание
+            // PWA) — optimistic остаётся с _hash=null, echo не матчится по
+            // hash → дубль. Матчим echo к ближайшей безhash-копии по ts
+            // (±120с; echo-тело зашифровано — по body не сравнить), бэкфиллим
+            // hash (в копию и outbox) и склеиваем.
+            if (fromNpub === myNpub && hash) {
+                let orphan = null, orphanDelta = Infinity;
+                for (const m of messages[peer]) {
+                    if (m.direction !== "out" || m._hash || m.isUndelivered) continue;
+                    const delta = Math.abs((m.ts || 0) - (msg.ts || 0));
+                    if (delta <= 120 && delta < orphanDelta) { orphan = m; orphanDelta = delta; }
+                }
+                if (orphan) {
+                    console.log("[pollHist] v160w orphan outgoing merged (POST answer lost), hash=", hash.slice(0, 12), "delta=", orphanDelta);
+                    orphan._hash = hash;
+                    orphan._server_msg = msg;
+                    if (orphan.status === "failed") orphan.status = "sent";
+                    // Бэкфилл hash в outbox — после reload plaintext резолвится по hash.
+                    try {
+                        const obKey = orphan._sig;
+                        const upd = (ob) => { if (ob && ob[obKey] && !ob[obKey]._hash) { ob[obKey]._hash = hash; return true; } return false; };
+                        const obIdb = (window.appStore ? await window.appStore.kv.get(LS_OUTBOX) : null);
+                        if (obIdb && upd(obIdb)) { await window.appStore.kv.set(LS_OUTBOX, obIdb); if (_outboxKVCache) _outboxKVCache = obIdb; }
+                        const obLs = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
+                        if (upd(obLs)) localStorage.setItem(LS_OUTBOX, JSON.stringify(obLs));
+                    } catch (e) { console.warn("[pollHist] v160w outbox hash backfill failed:", e); }
+                    continue;
+                }
+            }
+
             // Парсим body как JSON, чтобы обнаружить _kind.
             let parsedBody = null;
             try {
