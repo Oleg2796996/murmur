@@ -1619,8 +1619,7 @@ function enterMessenger() {
     // в заголовке чата. Никаких prompt() и LS_DISPLAY_NAME.
     if (chatView) chatView.style.display = "none";
     if (chatView) chatView.hidden = true;
-    if (noChat) noChat.style.display = "flex";
-    if (noChat) noChat.hidden = false;
+    updateNoChatVisibility(); // v160x3: вместо безусловного показа
     if (inputArea) inputArea.classList.remove("visible");
     if (inputArea) inputArea.hidden = true;
     const m = document.querySelector(".messenger");
@@ -2492,6 +2491,14 @@ function renderChatList() {
         })
         .sort((a, b) => b.lastTs - a.lastTs);
 
+    // v160x3 (Олег 2026-09-20 19:38): empty-state #no-chat («MurMur / Пригласите
+    // друга») — flex:1 сосед сайдбара на мобильном → делил экран 50/50.
+    // До v160x сайдбар переполнялся (min-height:auto) и выталкивал панель,
+    // после фикса сжатия она легла под списком. Показываем ТОЛЬКО когда
+    // видимых чатов нет (фильтр поиска не считаем — список рисует свой
+    // empty-state «ничего не найдено» внутри).
+    updateNoChatVisibility();
+
     if (sorted.length === 0) {
         const empty = document.createElement("div");
         empty.className = "chat-empty";
@@ -2570,6 +2577,19 @@ function renderChatList() {
 }
 
 // ── UI Helpers (Invite & Logout) ───
+// v160x3: #no-chat виден ТОЛЬКО когда нет видимых чатов (см. комментарий
+// в renderChatList). style.display обязателен: author-CSS перебивает
+// UA-стиль [hidden] (правило 659692d2). Вызывается из renderChatList,
+// btnBack и showMessenger-путей.
+function updateNoChatVisibility() {
+    const visibleChats = Object.values(contacts).filter(c => !isHiddenPeer(c.peer)).length;
+    const empty = visibleChats === 0;
+    if (noChat) {
+        noChat.hidden = !empty;
+        noChat.style.display = empty ? "flex" : "none";
+    }
+}
+
 function handleInviteHash() {
     // Deep-link invite, 3 формата (выполняем только в мессенджере, identity есть):
     //   …/#invite=<npub>        — старые share-ссылки
@@ -2863,7 +2883,7 @@ function openChat(peer) {
     renderChatList();  // обновить бейдж в списке чатов
     chatView.style.display = "flex";
     chatView.hidden = false;
-    noChat.style.display = "none";
+    noChat.style.display = "none"; // v160x3: чат открыт — панель не нужна
     noChat.hidden = true;
     inputArea.hidden = false;
     inputArea.classList.add("visible");
@@ -4431,9 +4451,8 @@ btnBack?.addEventListener("click", () => {
     activePeer = null;
     chatView.style.display = "none";
     chatView.hidden = true;
-    noChat.style.display = "flex";
+    updateNoChatVisibility(); // v160x3: панель только если чатов нет (было: всегда flex → 50/50 сплит)
     if (btnDeleteChat) btnDeleteChat.hidden = true; // Lesson #129
-    noChat.hidden = false;
     inputArea.classList.remove("visible");
     inputArea.hidden = true;
 });
