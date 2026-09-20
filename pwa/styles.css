@@ -165,7 +165,11 @@ button.small { padding: 8px 12px; font-size: 13px; }
        in <meta>, this gives full-screen layout without cutting off the input
        area below the home indicator. */
     height: 100vh;
-    height: 100dvh;
+    /* v160x4: --vvh ставит app.js из visualViewport.height (вкл. safe-зону).
+       100dvh на iOS standalone исключает нижний safe-inset → не доходил
+       до физического низа (пустота+светлая полоса body под input).
+       Фолбэк 100dvh остаётся для старых браузеров без visualViewport. */
+    height: var(--vvh, 100dvh);
     width: 100%;
     /* v160x (Олег 2026-09-20): padding-bottom safe-area УБРАН — он дублировал
        локальные резервы страниц: .input-area на чате (safe-bottom + 8px) и

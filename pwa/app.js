@@ -5555,9 +5555,20 @@ window.addEventListener("hashchange", () => {
     let typing = false;
     const isInput = (el) => !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
     const reset = () => { if (!typing && (window.scrollY || window.scrollX)) window.scrollTo(0, 0); };
+    // v160x4: --vvh = реальная видимая высота (вкл. safe-зону). На iOS standalone
+    // 100dvh ИСКЛЮЧАЕТ нижний safe-inset → .messenger не доходит до физического
+    // низа (светлая полоса body под input-area). Бонус: при клавиатуре vv.height
+    // сжимается → мессенджер сжимается → инпут всегда над клавиатурой.
+    const setVvh = () => {
+        try {
+            if (vv.scale && Math.abs(vv.scale - 1) > 0.01) return; // pinch-zoom — не трогаем
+            document.documentElement.style.setProperty("--vvh", Math.round(vv.height) + "px");
+        } catch (e) { /* ignore */ }
+    };
     document.addEventListener("focusin", (e) => { if (isInput(e.target)) typing = true; }, true);
     window.addEventListener("focusout", () => { typing = false; setTimeout(reset, 150); }, true);
-    vv.addEventListener("resize", reset);
+    vv.addEventListener("resize", () => { setVvh(); reset(); });
     vv.addEventListener("scroll", reset);
+    setVvh();
     reset();
 })();
