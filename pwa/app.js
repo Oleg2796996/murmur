@@ -5630,7 +5630,7 @@ window.addEventListener("hashchange", () => {
     if (!vv) return;
     let typing = false;
     const isInput = (el) => !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-    const reset = () => { if (!typing && (window.scrollY || window.scrollX)) window.scrollTo(0, 0); };
+    const reset = () => { if (window.scrollY || window.scrollX) window.scrollTo(0, 0); };
     // v160x4: --vvh = реальная видимая высота (вкл. safe-зону). На iOS standalone
     // 100dvh ИСКЛЮЧАЕТ нижний safe-inset → .messenger не доходит до физического
     // низа (светлая полоса body под input-area). Бонус: при клавиатуре vv.height
@@ -5652,9 +5652,26 @@ window.addEventListener("hashchange", () => {
             if (h && h > 100) document.documentElement.style.setProperty("--vvh", Math.round(h) + "px");
         } catch (e) { /* ignore */ }
     };
-    document.addEventListener("focusin", (e) => { if (isInput(e.target)) typing = true; }, true);
+    // v160x8 (Олег 21:00, diag-скрин): vvH=497/msBot=497 — сжатие верное, но
+    // iOS ПАНУЕТ layout viewport вверх на высоту клавиатуры (fixed-body
+    // уезжает, scrollY≈347) → инпут у верха экрана. Наше сжатие делает пан
+    // не нужным → сбрасываем scroll ВСЕГДА, вкл. печать: по scroll-событию
+    // (моментальный контр-пан) + серия догонов после focusin (анимация
+    // клавиатуры ~300мс). + pin списка сообщений к низу при сжатии.
+    const pinBottom = () => {
+        const ma = document.querySelector(".messages-area");
+        if (!ma) return;
+        if (ma.scrollHeight - ma.scrollTop - ma.clientHeight < 80) ma.scrollTop = ma.scrollHeight;
+    };
+    const onVv = () => { setVvh(); reset(); requestAnimationFrame(pinBottom); };
+    document.addEventListener("focusin", (e) => {
+        if (!isInput(e.target)) return;
+        typing = true;
+        [50, 150, 300, 500, 800].forEach(t => setTimeout(reset, t));
+    }, true);
     window.addEventListener("focusout", () => { typing = false; setTimeout(() => { setVvh(); reset(); }, 150); }, true);
-    vv.addEventListener("resize", () => { setVvh(); reset(); });
+    window.addEventListener("scroll", reset, { passive: true });
+    vv.addEventListener("resize", onVv);
     vv.addEventListener("scroll", reset);
     setVvh();
     reset();
