@@ -5559,14 +5559,25 @@ window.addEventListener("hashchange", () => {
     // 100dvh ИСКЛЮЧАЕТ нижний safe-inset → .messenger не доходит до физического
     // низа (светлая полоса body под input-area). Бонус: при клавиатуре vv.height
     // сжимается → мессенджер сжимается → инпут всегда над клавиатурой.
+    // v160x5: НЕ typing → высота ICB = document.body.getBoundingClientRect().height
+    // (fixed body = ровно layout viewport; в standalone он ВКЛЮЧАЕТ зону под
+    // home-indicator, в отличие от 100dvh и visualViewport.height, которые на
+    // iOS standalone её исключают — потому v160x4 не сдвинул пиллюлю).
+    // typing → vv.height (клавиатура сжала visual viewport) → инпут над ней.
     const setVvh = () => {
         try {
             if (vv.scale && Math.abs(vv.scale - 1) > 0.01) return; // pinch-zoom — не трогаем
-            document.documentElement.style.setProperty("--vvh", Math.round(vv.height) + "px");
+            let h;
+            if (typing) h = vv.height;
+            else {
+                const br = document.body && document.body.getBoundingClientRect();
+                h = (br && br.height > 100) ? br.height : window.innerHeight;
+            }
+            if (h && h > 100) document.documentElement.style.setProperty("--vvh", Math.round(h) + "px");
         } catch (e) { /* ignore */ }
     };
     document.addEventListener("focusin", (e) => { if (isInput(e.target)) typing = true; }, true);
-    window.addEventListener("focusout", () => { typing = false; setTimeout(reset, 150); }, true);
+    window.addEventListener("focusout", () => { typing = false; setTimeout(() => { setVvh(); reset(); }, 150); }, true);
     vv.addEventListener("resize", () => { setVvh(); reset(); });
     vv.addEventListener("scroll", reset);
     setVvh();
