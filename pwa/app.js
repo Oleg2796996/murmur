@@ -5640,14 +5640,23 @@ window.addEventListener("hashchange", () => {
     // home-indicator, в отличие от 100dvh и visualViewport.height, которые на
     // iOS standalone её исключают — потому v160x4 не сдвинул пиллюлю).
     // typing → vv.height (клавиатура сжала visual viewport) → инпут над ней.
+    // v160x9 (Олег 22:35, скрин «всё ещё дыра»): в gap-состоянии iOS после
+    // цикла клавиатуры держит layout viewport СЖАТЫМ (body≈744), но visual
+    // viewport честен (vv.height+offset=844). Брать только body (v160x5) —
+    // залипало 744 → тёмная полоса фона под input. Решение: НЕ-typing высота
+    // = MAX(vv.height+vv.offsetTop, body, innerHeight) — врёт один источник,
+    // другие вытягивают. typing → vv.height (клавиатура) как было.
     const setVvh = () => {
         try {
             if (vv.scale && Math.abs(vv.scale - 1) > 0.01) return; // pinch-zoom — не трогаем
             let h;
-            if (typing) h = vv.height;
-            else {
+            if (typing) {
+                h = vv.height;
+            } else {
                 const br = document.body && document.body.getBoundingClientRect();
-                h = (br && br.height > 100) ? br.height : window.innerHeight;
+                const bodyH = br && br.height > 100 ? br.height : 0;
+                const vvFull = (vv.height || 0) + (vv.offsetTop || 0);
+                h = Math.max(vvFull, bodyH, window.innerHeight || 0);
             }
             if (h && h > 100) document.documentElement.style.setProperty("--vvh", Math.round(h) + "px");
         } catch (e) { /* ignore */ }
@@ -5669,7 +5678,7 @@ window.addEventListener("hashchange", () => {
         typing = true;
         [50, 150, 300, 500, 800].forEach(t => setTimeout(reset, t));
     }, true);
-    window.addEventListener("focusout", () => { typing = false; setTimeout(() => { setVvh(); reset(); }, 150); }, true);
+    window.addEventListener("focusout", () => { typing = false; [150, 400, 800].forEach(t => setTimeout(() => { setVvh(); reset(); }, t)); }, true);
     window.addEventListener("scroll", reset, { passive: true });
     vv.addEventListener("resize", onVv);
     vv.addEventListener("scroll", reset);

@@ -50,6 +50,14 @@ body {
     padding-right: var(--safe-right);
 }
 
+/* v160x9 (Олег 22:35): под .messenger не должно быть НИЧЕГО светлее/темнее.
+   Залипшее --vvh (промежуточные высоты анимации клавиатуры) проявлялось как
+   тёмная полоса фона body под input-area. html крашится в тот же --bg —
+   любое расхождение высот становится невидимым. messenger поверх — шов исчез. */
+html {
+    background: var(--bg);
+}
+
 /* ================= SCREEN: IDENTITY (create / restore) ================= */
 .screen {
     position: fixed;
@@ -636,7 +644,10 @@ button.small { padding: 8px 12px; font-size: 13px; }
        .messenger теперь честная (--vvh до физического дна), пиллюля должна
        сидеть в самом краю. max() держит минимум 8px на Android/старых iOS. */
     padding: 8px 8px 8px 8px;
-    background: var(--panel);
+    /* v160x9: фон = цвет чата (как в Telegram iOS) — шов «панель темнее →
+       фон светлее» под пиллюлей исчезает; любые расхождения высот
+       становятся невидимыми. */
+    background: var(--bg);
     border-top: 1px solid var(--border);
     flex-shrink: 0;
 }
