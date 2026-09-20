@@ -5523,3 +5523,22 @@ async function requestNotificationPermission() {
 window.addEventListener("hashchange", () => {
     if (messenger && messenger.classList.contains("active")) handleInviteHash();
 });
+
+// v160x2 (Олег 2026-09-20): iOS standalone — после закрытия клавиатуры
+// visual viewport может остаться поднятым/сдвинутым → «пустота снизу»,
+// которая переживает перезапуск (WebKeviceKit не возвращает fixed-body сам).
+// Страховка: пока не печатаем — держим окно в (0,0) при каждом resize/scroll
+// visual viewport. Пока фокус в инпуте — НЕ трогаем (иначе уроним input над
+// клавиатурой).
+(function () {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    let typing = false;
+    const isInput = (el) => !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+    const reset = () => { if (!typing && (window.scrollY || window.scrollX)) window.scrollTo(0, 0); };
+    document.addEventListener("focusin", (e) => { if (isInput(e.target)) typing = true; }, true);
+    window.addEventListener("focusout", () => { typing = false; setTimeout(reset, 150); }, true);
+    vv.addEventListener("resize", reset);
+    vv.addEventListener("scroll", reset);
+    reset();
+})();

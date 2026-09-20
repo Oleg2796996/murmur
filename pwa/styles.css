@@ -31,6 +31,12 @@ html, body {
     overflow: hidden;
     width: 100%;
     position: fixed;
+    /* v160x2 (Олег 2026-09-20): fixed без явных координат — WebKit в iOS
+       standalone после клавиатуры НЕ возвращает body на место (сдвинутый
+       слой так и висит → пустота снизу, перезапуск не помогает). Якорим
+       жёстко в левый-верхний угол. */
+    top: 0;
+    left: 0;
 }
 
 body {
@@ -175,6 +181,11 @@ button.small { padding: 8px 12px; font-size: 13px; }
     display: flex;
     flex-direction: column;
     border-right: 1px solid var(--border);
+    /* v160x2 (Олег 2026-09-20): без min-height:0 flex-item не сжимается ниже
+       контента (min-height:auto) — сайдбар вылезал за низ вьюпорта на
+       высоту переполнения списка, последние чаты недоскролливались.
+       Тот же урок, что #234 для .chat-view. */
+    min-height: 0;
 }
 
 .sidebar-header {
@@ -352,6 +363,9 @@ button.small { padding: 8px 12px; font-size: 13px; }
     flex: 1;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
+    /* v160x2: flex-child с overflow — тоже нужен min-height:0, иначе не
+       сжимается и тянет .sidebar за вьюпорт. */
+    min-height: 0;
     /* v160x: последний чат не должен прятаться под home indicator
        при скролле в самый низ — свой safe-резерв вместо .messenger. */
     padding-bottom: max(calc(var(--safe-bottom) + 4px), 8px);
@@ -745,7 +759,7 @@ button.small { padding: 8px 12px; font-size: 13px; }
     /* When chat-open is set, hide the sidebar; when not set, hide the chat-view. */
     .messenger.chat-open .sidebar { display: none; }
     .messenger.chat-open .chat-view { display: flex; flex: 1; min-height: 0; }
-    .messenger:not(.chat-open) .sidebar { display: flex; flex: 1; }
+    .messenger:not(.chat-open) .sidebar { display: flex; flex: 1; min-height: 0; }
     .messenger:not(.chat-open) .chat-view { display: none; }
     .messenger:not(.chat-open) .no-chat { display: flex; flex: 1; }
     .messenger.chat-open .no-chat { display: none; }
