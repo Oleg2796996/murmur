@@ -5576,21 +5576,39 @@ async function requestNotificationPermission() {
         if (location.search.indexOf("diag=1") >= 0 || location.hash.indexOf("diag") >= 0) {
             try { localStorage.setItem("murmur_diag", "1"); } catch (e) {}
         }
-        let armed = 0, taps = 0;
-        document.addEventListener("click", (e) => {
-            const nameEl = document.getElementById("chat-peer-name");
-            if (!nameEl || !nameEl.contains(e.target)) return;
-            const now = Date.now();
-            if (now - armed > 2500) taps = 0;
-            armed = now;
-            if (++taps >= 7) {
-                taps = 0;
+        // v160x7b: триггер = долгое нажатие 1.2с на ЛЮБОМ месте шапки чата
+        // (центр — это имя flex:1, другого пустого места нет). Клик
+        // (переименование) подавляется, если long-press сработал.
+        // Повторное удержание выключает. contextmenu глушим (iOS long-press).
+        window.__buildVpDiag = build;
+        let lpTimer = null, lpFired = false, sx = 0, sy = 0;
+        document.addEventListener("contextmenu", (e) => {
+            const h = document.querySelector("#chat-view .chat-header");
+            if (h && h.contains(e.target)) e.preventDefault();
+        }, true);
+        document.addEventListener("pointerdown", (e) => {
+            const h = document.querySelector("#chat-view .chat-header");
+            if (!h || !h.contains(e.target) || e.target.closest("button")) return;
+            lpFired = false; sx = e.clientX; sy = e.clientY;
+            lpTimer = setTimeout(() => {
+                lpTimer = null; lpFired = true;
                 const on = (localStorage.getItem("murmur_diag") !== "1");
                 try { localStorage.setItem("murmur_diag", on ? "1" : "0"); } catch (err) {}
                 const ex = document.getElementById("vp-diag");
                 if (ex) ex.remove();
                 if (on) build();
-            }
+            }, 1200);
+        }, true);
+        const cancel = (e) => {
+            if (lpTimer && e && e.type === "pointermove" && Math.abs(e.clientX - sx) < 10 && Math.abs(e.clientY - sy) < 10) return;
+            if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
+        };
+        ["pointerup", "pointercancel", "pointermove"].forEach(t => document.addEventListener(t, cancel, true));
+        document.addEventListener("click", (e) => {
+            if (!lpFired) return;
+            const h = document.querySelector("#chat-view .chat-header");
+            if (h && h.contains(e.target)) { e.stopPropagation(); e.preventDefault(); }
+            lpFired = false;
         }, true);
         if (localStorage.getItem("murmur_diag") === "1") build();
     } catch (e) { /* ignore */ }
