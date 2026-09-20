@@ -5538,6 +5538,64 @@ async function requestNotificationPermission() {
     } catch (e) { console.warn("[murmur] permission request failed", e); }
 }
 
+// v160x6: viewport-diag overlay — 7 тапов по имени чата в шапке (или ?diag=1).
+// Слепые итерации x2–x5 закончились: смотрим РЕАЛЬНЫЕ высоты на устройстве.
+(function () {
+    const build = () => {
+        const box = document.createElement("div");
+        box.id = "vp-diag";
+        box.style.cssText = "position:fixed;left:4px;top:96px;z-index:99999;background:rgba(0,0,0,.8);color:#4f4;font:10px/1.4 monospace;padding:6px 8px;border-radius:6px;pointer-events:none;white-space:pre;max-width:82vw;";
+        document.body.appendChild(box);
+        const f = (v) => (v == null || isNaN(v) ? "-" : Math.round(v));
+        const tick = () => {
+            try {
+                const vv = window.visualViewport;
+                const r = (s) => { const el = document.querySelector(s); return el ? el.getBoundingClientRect() : null; };
+                const rms = r(".messenger"), ria = r("#input-area"), rcv = r("#chat-view"), rb = document.body.getBoundingClientRect(), rd = document.documentElement.getBoundingClientRect();
+                const cs = getComputedStyle(document.documentElement);
+                box.textContent =
+                    "APP=v160x6-diag\n" +
+                    "innerH=" + f(innerHeight) + " cliH=" + f(document.documentElement.clientHeight) + "\n" +
+                    "vvH=" + (vv ? f(vv.height) : "none") + " vvTop=" + (vv ? f(vv.offsetTop) : "-") + " sc=" + (vv ? vv.scale.toFixed(2) : "-") + "\n" +
+                    "bodyH=" + f(rb.height) + " bodyTop=" + f(rb.top) + " docH=" + f(rd.height) + " docTop=" + f(rd.top) + "\n" +
+                    "--vvh=" + (cs.getPropertyValue("--vvh") || "").trim() + " safeB=" + (cs.getPropertyValue("--safe-bottom") || "").trim() + "\n" +
+                    "msBot=" + f(rms && rms.bottom) + " msH=" + f(rms && rms.height) + " cvBot=" + f(rcv && rcv.bottom) + "\n" +
+                    "iaBot=" + f(ria && ria.bottom) + " iaPadB=" + (document.querySelector("#input-area") ? getComputedStyle(document.querySelector("#input-area")).paddingBottom : "-") + "\n" +
+                    "scrollY=" + f(scrollY);
+            } catch (e) { /* ignore */ }
+        };
+        setInterval(tick, 500);
+        window.addEventListener("resize", tick);
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener("resize", tick);
+            window.visualViewport.addEventListener("scroll", tick);
+        }
+        tick();
+    };
+    try {
+        if (location.search.indexOf("diag=1") >= 0 || location.hash.indexOf("diag") >= 0) {
+            try { localStorage.setItem("murmur_diag", "1"); } catch (e) {}
+        }
+        let armed = 0, taps = 0;
+        document.addEventListener("click", (e) => {
+            const nameEl = document.getElementById("chat-peer-name");
+            if (!nameEl || !nameEl.contains(e.target)) return;
+            const now = Date.now();
+            if (now - armed > 2500) taps = 0;
+            armed = now;
+            if (++taps >= 7) {
+                taps = 0;
+                const on = (localStorage.getItem("murmur_diag") !== "1");
+                try { localStorage.setItem("murmur_diag", on ? "1" : "0"); } catch (err) {}
+                const ex = document.getElementById("vp-diag");
+                if (ex) ex.remove();
+                if (on) build();
+            }
+        }, true);
+        if (localStorage.getItem("murmur_diag") === "1") build();
+    } catch (e) { /* ignore */ }
+})();
+
 // Повторный заход по ссылке в уже открытом приложении (PWA живёт в фоне).
 window.addEventListener("hashchange", () => {
     if (messenger && messenger.classList.contains("active")) handleInviteHash();
