@@ -161,8 +161,11 @@ button.small { padding: 8px 12px; font-size: 13px; }
     height: 100vh;
     height: 100dvh;
     width: 100%;
-    /* Add bottom safe-area so .input-area never falls under the home indicator */
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    /* v160x (Олег 2026-09-20): padding-bottom safe-area УБРАН — он дублировал
+       локальные резервы страниц: .input-area на чате (safe-bottom + 8px) и
+       .chat-list в списке. Двойной резерв давал ~76px мёртвой зоны снизу
+       на чате и тёмную полосу под списком. Каждая страница теперь резервирует
+       safe-area сама. */
 }
 
 /* SIDEBAR */
@@ -349,6 +352,10 @@ button.small { padding: 8px 12px; font-size: 13px; }
     flex: 1;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
+    /* v160x: последний чат не должен прятаться под home indicator
+       при скролле в самый низ — свой safe-резерв вместо .messenger. */
+    padding-bottom: max(calc(var(--safe-bottom) + 4px), 8px);
+    overscroll-behavior: contain; /* скролл не «протекает» в body */
 }
 
 .chat-item {
@@ -607,9 +614,8 @@ button.small { padding: 8px 12px; font-size: 13px; }
     display: flex;
     flex-direction: column;
     gap: 6px;
-    /* Combined inset: safe-area (home indicator) + visual breathing room.
-       Use max() so on Android/older iOS without safe-area we still have
-       at least 8px of padding. */
+    /* v160x: это ЕДИНСТВЕННЫЙ safe-резерв на странице чата (дубликат
+       из .messenger убран) — max() держит минимум 8px на Android/старых iOS. */
     padding: 8px 8px max(calc(var(--safe-bottom) + 8px), 12px) 8px;
     background: var(--panel);
     border-top: 1px solid var(--border);
@@ -974,4 +980,151 @@ button.small { padding: 8px 12px; font-size: 13px; }
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
+}
+
+/* ================= v160p8: LANDING-STYLE IDENTITY SCREEN =================
+   Стиль лендинга v3 (Олег одобрил) — на identity-screen (PWA по invite-ссылке).
+   Скоуп: #identity-screen — messenger не трогаем. btn-create/error сохранены. */
+#identity-screen {
+    background: #0f1620;
+    background-image:
+        radial-gradient(ellipse 60% 35% at 20% 0%, rgba(34,158,217,.13), transparent),
+        radial-gradient(ellipse 50% 45% at 85% 100%, rgba(94,234,212,.08), transparent);
+    padding: 24px 20px 16px;
+    overflow-y: auto;
+    align-items: flex-start;
+    justify-content: center;
+}
+#identity-screen .identity-card {
+    max-width: 460px;
+    width: 100%;
+    background: rgba(255,255,255,.045);
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 18px;
+    padding: 24px 18px 20px;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 12px 40px rgba(0,0,0,.35);
+    margin-top: max(28px, env(safe-area-inset-top));
+}
+#identity-screen .brand {
+    font-size: 34px;
+    font-weight: 800;
+    letter-spacing: -.5px;
+    text-align: center;
+    background: linear-gradient(90deg, #229ED9, #5eead4);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    display: block;
+}
+#identity-screen .subtitle {
+    text-align: center;
+    color: #9fb0c3;
+    font-size: 15px;
+    margin-bottom: 18px;
+}
+/* why-private bullets внутри identity-card */
+#identity-screen .identity-why {
+    margin: 0 0 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+#identity-screen .identity-why .bullet {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #9fb0c3;
+}
+#identity-screen .identity-why .bullet b { color: #e8eef5; font-weight: 600; }
+#identity-screen .identity-why .ic { flex-shrink: 0; width: 22px; text-align: center; font-size: 15px; }
+#identity-screen .identity-section h2 {
+    color: #9fb0c3;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 14.5px;
+}
+#identity-screen button.primary {
+    width: 100%;
+    padding: 14px;
+    border-radius: 14px;
+    border: none;
+    background: linear-gradient(135deg, #229ED9, #5eead4);
+    color: #fff;
+    font-size: 16px;
+    font-weight: 600;
+    box-shadow: 0 8px 24px rgba(34,158,217,.35);
+}
+#identity-screen .identity-error {
+    background: rgba(240, 108, 108, 0.12);
+    border: 1px solid rgba(240, 108, 108, 0.5);
+    color: #f0939f;
+    border-radius: 12px;
+}
+
+/* ═══ v160r (Олег 2026-09-17): reply-to — тап на bubble → бар «Ответ» ═══ */
+.reply-bar {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    padding: 6px 10px;
+    margin: 0 10px 4px;
+    background: rgba(128, 128, 128, 0.12);
+    border-radius: 12px;
+}
+.reply-bar[hidden] { display: none; }
+.reply-bar-accent {
+    width: 3px;
+    border-radius: 2px;
+    background: currentColor;
+    opacity: 0.6;
+    flex-shrink: 0;
+}
+.reply-bar-body { flex: 1; min-width: 0; }
+.reply-bar-label {
+    font-size: 12px;
+    font-weight: 600;
+    opacity: 0.7;
+    margin-bottom: 2px;
+}
+.reply-bar-preview {
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0.85;
+}
+.reply-bar-cancel {
+    align-self: center;
+    background: none;
+    border: none;
+    color: inherit;
+    font-size: 14px;
+    opacity: 0.6;
+    padding: 6px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+/* Цитата внутри bubble адресата */
+.bubble .quoted {
+    border-left: 3px solid currentColor;
+    opacity: 0.65;
+    padding: 2px 8px;
+    margin: 0 0 4px;
+    font-size: 13px;
+    border-radius: 6px;
+    background: rgba(128, 128, 128, 0.10);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+.bubble .quoted .quoted-name {
+    font-weight: 600;
+    font-size: 12px;
+    display: block;
+    margin-bottom: 1px;
 }

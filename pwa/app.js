@@ -2475,6 +2475,11 @@ function setChatPreview(peer, ts, preview) {
 
 function renderChatList() {
     const filter = chatSearch.value.toLowerCase().trim();
+    // v160x (Олег 2026-09-20): полный rebuild (innerHTML="") сбрасывал скролл
+    // списка на КАЖДОЕ входящее сообщение/typing-пинг (20 вызовов) — юзер
+    // скроллит, список прыгает к началу. Сохраняем позицию между перерисовками.
+    const prevScrollTop = chatList.scrollTop;
+    const prevHeight = chatList.scrollHeight;
     chatList.innerHTML = "";
     const nameMap = loadContactNames();
     const sorted = Object.values(contacts)
@@ -2547,6 +2552,21 @@ function renderChatList() {
         div.addEventListener("click", () => openChat(c.peer));
         chatList.appendChild(div);
     }
+    // v160x: вернуть скролл. Если высота не изменилась — точная позиция;
+    // если изменилась (новый чат/фильтр) — держим у низа, если был у низа,
+    // иначе клампим в допустимый диапазон (не дальше конца списка).
+    try {
+        if (chatList.scrollHeight === prevHeight) {
+            chatList.scrollTop = prevScrollTop;
+        } else {
+            const wasAtBottom = prevScrollTop + chatList.clientHeight >= prevHeight - 2;
+            if (wasAtBottom) {
+                chatList.scrollTop = chatList.scrollHeight;
+            } else {
+                chatList.scrollTop = Math.min(prevScrollTop, Math.max(0, chatList.scrollHeight - chatList.clientHeight));
+            }
+        }
+    } catch (e) { /* ignore */ }
 }
 
 // ── UI Helpers (Invite & Logout) ───
