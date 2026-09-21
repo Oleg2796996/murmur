@@ -151,7 +151,7 @@ async function loadWasmModule() {
         // v160g6-fix: cache-bust на pkg JS И wasm — Safari держит старый бинарник
         // без групповых экспортов (wasm.group_new_key is not a function).
         // Явный URL с query: import.meta.url resolution сьедает ?v= на relative path.
-        const bust = "v=160h6";
+        const bust = "v=160h7";
         const mod = await import("./pkg/murmur_id_wasm.js?" + bust);
         if (!_wasmReady) {
             const wasmUrl = new URL("pkg/murmur_id_wasm_bg.wasm?" + bust, location.href);
@@ -963,8 +963,22 @@ async function consumeGroupEnvelope(m) {
                     // inner.ct — ECIES 1:1 (расшифровывается моим приватным ключом).
                     if (typeof inner.ct === "string") {
                         const plain = await decryptEnvelope(inner.ct);
-                        if (plain && plain.body) {
-                            try { payload = JSON.parse(plain.body); } catch { payload = null; }
+                        // v160h7 (сим 21.09 22:35): decryptEnvelope может вернуть
+                        // СТРОКУ (base64 от payload-JSON — двойное кодирование на
+                        // отправке, сим: plain = "eyJncm91cF9pZCI6...", plain.body
+                        // undefined → JSON.parse(undefined) throw → payload=null →
+                        // инвайт отброшен молча). Нормализуем: строку → atob-декод →
+                        // JSON.parse; объект с body → как раньше.
+                        let plainBody = null;
+                        if (plain && typeof plain === "string") {
+                            try { plainBody = plain; } catch {}
+                        } else if (plain && typeof plain === "object" && plain.body) {
+                            plainBody = plain.body;
+                        }
+                        if (plainBody) {
+                            try { payload = JSON.parse(plainBody); } catch {
+                                try { payload = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(plainBody), c => c.charCodeAt(0)))); } catch { payload = null; }
+                            }
                         }
                     }
                 }
