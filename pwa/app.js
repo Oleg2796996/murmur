@@ -151,7 +151,7 @@ async function loadWasmModule() {
         // v160g6-fix: cache-bust на pkg JS И wasm — Safari держит старый бинарник
         // без групповых экспортов (wasm.group_new_key is not a function).
         // Явный URL с query: import.meta.url resolution сьедает ?v= на relative path.
-        const bust = "v=160h7";
+        const bust = "v=160h8";
         const mod = await import("./pkg/murmur_id_wasm.js?" + bust);
         if (!_wasmReady) {
             const wasmUrl = new URL("pkg/murmur_id_wasm_bg.wasm?" + bust, location.href);
@@ -3396,7 +3396,7 @@ async function loadHistory(peer, beforeTs) {
                     const gkind = gwire && typeof gwire._kind === "string" ? gwire._kind : (m._kind || null);
                     if (gkind === "group_msg" || gkind === "group_invite" || gkind === "group_key") {
                         if (gkind === "group_msg") await handleIncomingGroupMsg(m, fromNpub, hash);
-                        else if (fromNpub !== myNpub) await consumeGroupEnvelope(gwire || m);
+                        else if (fromNpub !== myNpub) await consumeGroupEnvelope(m);
                         continue;
                     }
                 }
