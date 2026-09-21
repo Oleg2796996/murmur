@@ -151,7 +151,7 @@ async function loadWasmModule() {
         // v160g6-fix: cache-bust на pkg JS И wasm — Safari держит старый бинарник
         // без групповых экспортов (wasm.group_new_key is not a function).
         // Явный URL с query: import.meta.url resolution сьедает ?v= на relative path.
-        const bust = "v=160h5";
+        const bust = "v=160h6";
         const mod = await import("./pkg/murmur_id_wasm.js?" + bust);
         if (!_wasmReady) {
             const wasmUrl = new URL("pkg/murmur_id_wasm_bg.wasm?" + bust, location.href);
@@ -3365,6 +3365,27 @@ async function loadHistory(peer, beforeTs) {
                 // v158: входящие hash'и → в очередь квитанций (backlog при первом
                 // открытии чата тоже квитуется; дубли фильтрует receipted-store).
                 if (fromNpub !== myNpub && hash) queueReceiptsForPeer(peer, [hash]);
+                // v160h5 (сим 21.09 22:00): group-роутер как в poll-пути — групповые
+                // конверты (свои эхо-фанауты с _kind:"group_msg"/"group_invite" И
+                // чужие) маршрутизируем ДО outbox-пути. Без этого loadHistory матчит
+                // эхо группового конверта через outbox-ts-fallback в фантомную
+                // out-копию 1:1 чата с участником («исходящие во всех чатах»).
+                {
+                    let gwire = null;
+                    try {
+                        if (typeof m.body === "string" && (m.body.startsWith("{") || m.body.startsWith("["))) gwire = JSON.parse(m.body);
+                        else if (typeof m.body_base64 === "string" && m.body_base64.length > 0) {
+                            const inner = decodeBody(m.body_base64);
+                            if (inner && inner.text && (inner.text.startsWith("{") || inner.text.startsWith("["))) gwire = JSON.parse(inner.text);
+                        }
+                    } catch (_e) { gwire = null; }
+                    const gkind = gwire && typeof gwire._kind === "string" ? gwire._kind : (m._kind || null);
+                    if (gkind === "group_msg" || gkind === "group_invite" || gkind === "group_key") {
+                        if (gkind === "group_msg") await handleIncomingGroupMsg(m, fromNpub, hash);
+                        else if (fromNpub !== myNpub) await consumeGroupEnvelope(gwire || m);
+                        continue;
+                    }
+                }
                 // Lesson #333 (Олег 2026-08-28 14:36 MSK): если hash в existingHashSet
                 // но cached msg имеет body "🔒 шифрованное сообщение" — запускаем
                 // decrypt для обновления body. Без этого кэш сам себя портит при
