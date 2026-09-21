@@ -151,7 +151,7 @@ async function loadWasmModule() {
         // v160g6-fix: cache-bust на pkg JS И wasm — Safari держит старый бинарник
         // без групповых экспортов (wasm.group_new_key is not a function).
         // Явный URL с query: import.meta.url resolution сьедает ?v= на relative path.
-        const bust = "v=160h3";
+        const bust = "v=160h4";
         const mod = await import("./pkg/murmur_id_wasm.js?" + bust);
         if (!_wasmReady) {
             const wasmUrl = new URL("pkg/murmur_id_wasm_bg.wasm?" + bust, location.href);
@@ -2821,7 +2821,7 @@ function renderChatList() {
                 "<span class='chat-item-time'>" + timeDisplay + "</span>" +
                 badge +
             "</div>";
-        div.addEventListener("click", () => openChat(c.peer));
+        div.addEventListener("click", () => openChat(c.peer, {fromUser: true}));
         chatList.appendChild(div);
     }
     // v160x: вернуть скролл. Если высота не изменилась — точная позиция;
@@ -3210,14 +3210,14 @@ function showInviteManualCopy(inviteLink) {
 }
 
 // ── Open Chat ──
-function openChat(peer) {
+function openChat(peer, opts) {
     peer = normalizePeer(peer);
     activePeer = peer;
-    // v160h3 (Олег 21.09 21:05 «исходящие во всех чатах, создаётся новый чат»):
-    // openChat НЕ сбрасывал currentGroup — после открытия группы тап на 1:1 чат
-    // оставлял currentGroup=gid, sendMessage уходил в групповой путь с чужим
-    // group_id → «исходящие во всех чатах» + фантомный чат.
-    if (currentGroup) currentGroup = null;
+    // v160h4: сброс currentGroup ТОЛЬКО при явном юзер-клике (opts.fromUser).
+    // v160h3 сбрасывал безусловно — программные openChat (входящие/полл/инвайт)
+    // выкидывали группу во время набора («полоска отскакивает на чат», Олег
+    // 21.09 21:15; сим: currentGroup=null сразу после openGroupChat).
+    if (opts && opts.fromUser && currentGroup) currentGroup = null;
     hideReplyBar(); // v160r: reply сброс при смене чата (не тащим чужой reply)
     const m = document.querySelector(".messenger");
     if (m) m.classList.add("chat-open");
@@ -3256,7 +3256,7 @@ function openChat(peer) {
         if (v === null) return;
         const trimmed = v.trim().slice(0, 24);
         saveContactName(peer, trimmed);
-        openChat(peer);
+        openChat(peer, {fromUser: true});
     };
     // Lesson #325 (Олег 2026-08-28 12:05 MSK): НЕ ОЧИЩАЕМ messages[peer] перед loadHistory.
     // Раньше: messages[peer] = [] убивал локальный кэш (включая attachments_meta
@@ -3329,7 +3329,7 @@ async function loadHistory(peer, beforeTs) {
         loadingEl.remove();
         const errEl = document.createElement("div");
         errEl.className = "error-msg";
-        errEl.innerHTML = "⏳ Не удалось загрузить историю. Плохой инет — <button class='link-btn' onclick='openChat(\"" + peer + "\")'>повторить</button>";
+        errEl.innerHTML = "⏳ Не удалось загрузить историю. Плохой инет — <button class='link-btn' onclick='openChat(\"" + peer + "\", {fromUser: true})'>повторить</button>";
         area.appendChild(errEl);
     }, 45000);
     // (Олег 2026-08-25 08:13 MSK) Lesson #158: WASM decrypt может зависнуть
