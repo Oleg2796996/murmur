@@ -151,7 +151,7 @@ async function loadWasmModule() {
         // v160g6-fix: cache-bust на pkg JS И wasm — Safari держит старый бинарник
         // без групповых экспортов (wasm.group_new_key is not a function).
         // Явный URL с query: import.meta.url resolution сьедает ?v= на relative path.
-        const bust = "v=160h4";
+        const bust = "v=160h5";
         const mod = await import("./pkg/murmur_id_wasm.js?" + bust);
         if (!_wasmReady) {
             const wasmUrl = new URL("pkg/murmur_id_wasm_bg.wasm?" + bust, location.href);
@@ -5386,6 +5386,27 @@ async function pollHistoryForPeer(peer) {
             // Lesson #128: дедуп по envelope_hash если есть, иначе по ts.
             const hash = msg.envelope_hash || msg.envelope_hash_hex || null;
             const sigKey = fromNpub + msg.ts;
+            // v160h5 (сим 21.09 21:50): групповые конверты (свои эхо-фанауты с
+            // _kind:"group_msg"/"group_invite" в body_base64 И чужие) маршрутизируем
+            // ДО exists/echo/orphan — иначе v160w orphan-merge матчит эхо группового
+            // конверта в фантомную out-копию в 1:1 чат с участником («исходящие
+            // сообщения отображаются помимо группы во всех чатах», Олег 21.09 20:18).
+            {
+                let gwire = null;
+                try {
+                    if (typeof msg.body === "string" && (msg.body.startsWith("{") || msg.body.startsWith("["))) gwire = JSON.parse(msg.body);
+                    else if (typeof msg.body_base64 === "string" && msg.body_base64.length > 0) {
+                        const inner = decodeBody(msg.body_base64);
+                        if (inner && inner.text && (inner.text.startsWith("{") || inner.text.startsWith("["))) gwire = JSON.parse(inner.text);
+                    }
+                } catch (_e) { gwire = null; }
+                const gkind = gwire && typeof gwire._kind === "string" ? gwire._kind : (msg._kind || null);
+                if (gkind === "group_msg" || gkind === "group_invite" || gkind === "group_key") {
+                    if (gkind === "group_msg") await handleIncomingGroupMsg(msg, fromNpub, hash);
+                    else if (fromNpub !== myNpub) await consumeGroupEnvelope(gwire || msg);
+                    continue;
+                }
+            }
             // v158: квитанции НЕ попадают в чат. Чужую — разобрать (✓✓), свою —
             // молча скипнуть ДО hash-дедупа (иначе своя квитанция после reload
             // прошла бы по outbox-resolution как «исходящее») и ДО Lesson #350
