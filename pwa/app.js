@@ -151,7 +151,7 @@ async function loadWasmModule() {
         // v160g6-fix: cache-bust на pkg JS И wasm — Safari держит старый бинарник
         // без групповых экспортов (wasm.group_new_key is not a function).
         // Явный URL с query: import.meta.url resolution сьедает ?v= на relative path.
-        const bust = "v=160h1";
+        const bust = "v=160h3";
         const mod = await import("./pkg/murmur_id_wasm.js?" + bust);
         if (!_wasmReady) {
             const wasmUrl = new URL("pkg/murmur_id_wasm_bg.wasm?" + bust, location.href);
@@ -3213,6 +3213,11 @@ function showInviteManualCopy(inviteLink) {
 function openChat(peer) {
     peer = normalizePeer(peer);
     activePeer = peer;
+    // v160h3 (Олег 21.09 21:05 «исходящие во всех чатах, создаётся новый чат»):
+    // openChat НЕ сбрасывал currentGroup — после открытия группы тап на 1:1 чат
+    // оставлял currentGroup=gid, sendMessage уходил в групповой путь с чужим
+    // group_id → «исходящие во всех чатах» + фантомный чат.
+    if (currentGroup) currentGroup = null;
     hideReplyBar(); // v160r: reply сброс при смене чата (не тащим чужой reply)
     const m = document.querySelector(".messenger");
     if (m) m.classList.add("chat-open");
@@ -5222,6 +5227,24 @@ async function handleIncomingEnvelope(env) {
     const gm = (env._kind === "json_envelope" && env.payload && typeof env.payload === "object") ? env.payload : env;
     if (gm._kind === "group_msg" && typeof gm.ct === "string") {
         await handleIncomingGroupMsg(gm, fromNpub, hash);
+        return;
+    }
+    // v160h2: WS-пуш не несёт контента (body = серверный текст «New message —
+    // open the app to read it», ct/body_base64 нет). Если рендерить — в чат
+    // попадает серверный текст, а реального сообщения нет (Олег 21:05 «адресату
+    // приходит только пуш, а сообщение не отображается»). Не рендерим — дёргаем
+    // poll: реальный конверт придёт из /api/history (body_base64 → _kind →
+    // group_msg/1:1 путь) и расшифруется там. Групповые копии хранятся per-member
+    // (to=myNpub), так что pollHistoryForPeer(fromNpub) их находит.
+    const isContentlessPush = hash && !env.ct && !env.body_base64 &&
+        (!env.body || env.body.indexOf("open the app") !== -1);
+    if (isContentlessPush) {
+        console.log("[WS] contentless push deferred to poll, hash=", (hash || "").slice(0, 12), "peer=", peer.slice(0, 12));
+        setTimeout(() => {
+            pollHistoryForPeer(peer).catch(() => {});
+            const gids = Object.keys(loadGroups() || {});
+            for (const gid of gids) { try { pollHistoryForGroup(gid); } catch (e) {} }
+        }, 400);
         return;
     }
     if (fromNpub !== myNpub && hash) queueReceiptsForPeer(peer, [hash]);
