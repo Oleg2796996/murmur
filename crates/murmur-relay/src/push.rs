@@ -44,6 +44,7 @@
 //! receive push for that alias. This is OK for an MVP we'll harden later.
 
 use parking_lot::Mutex;
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -333,6 +334,14 @@ pub struct PushPayload {
     /// platforms ignore the field.
     pub subtitle: String,
     pub body: String,
+    /// v160b4 (Олег 2026-09-17): точный badge для наклейки на иконке iOS
+    /// при свернутом/закрытом приложении. Сервер знает unread (число live
+    /// envelope'ов для получателя) — кладёт его прямо в payload, SW просто
+    /// вызывает navigator.setAppBadge(payload.badge) синхронно (как в sw19,
+    /// что сработал). Ноль IDB в SW, ноль гонок. 0 = не бэджить (клиент
+    /// сам перезапишет точным total при живой странице).
+    #[serde(default)]
+    pub badge: u32,
 }
 
 impl PushPayload {
@@ -346,7 +355,28 @@ impl PushPayload {
     /// The body is intentionally generic — relay never sees plaintext (end-to-end
     /// encryption), so we cannot show the message text here. Client decrypts
     /// when user opens the chat.
-    pub fn from_entry(entry: &crate::pending::PendingEntry, _store: Option<&crate::storage::MessageStore>) -> Self {
+    pub fn from_entry(
+        entry: &crate::pending::PendingEntry,
+        store: Option<&crate::storage::MessageStore>,
+        badge_override: Option<i64>,
+    ) -> Self {
+        // v160b4 (Олег 2026-09-17): badge = число live личных envelope'ов для
+        // получателя. Это unread при закрытом приложении. При открытой странице
+        // клиент перезапишет точным total. 0 = не бэджить из SW.
+        // v160w2: СТАРАЯ async-схема «+1 для текущего» — наблюдение 19.09:
+        // badge считается ПОСЛЕ insert (badge_override из envelope.rs), счётчик
+        // уже видит текущий envelope → «+1» задваивало: 1 msg → наклейка «2».
+        // v160w4b (Олег 2026-09-19): fallback-путь тоже БЕЗ «+1».
+        let badge: u32 = badge_override
+            .map(|b| b.max(0).clamp(0, u32::MAX as i64) as u32)
+            .unwrap_or_else(|| {
+                store
+                    .map(|s| {
+                        let unread = s.unread_badge_count(&entry.to_npub).max(0);
+                        unread.clamp(0, u32::MAX as i64) as u32
+                    })
+                    .unwrap_or(0)
+            });
         Self {
             alias: entry.to_npub.clone(),
             from_npub: entry.from_npub.clone(),
@@ -370,6 +400,7 @@ impl PushPayload {
             // Длинная action-фраза без имени приложения — Lesson #396 (2026-08-23).
             subtitle: "".to_string(),
             body: "New message — open the app to read it".to_string(),
+            badge,
         }
     }
 
@@ -509,7 +540,9 @@ impl PushServer {
             match client.send(msg).await {
                 Ok(_) => {
                     delivered += 1;
-                    info!(sub=%sub.id, alias=%payload.alias, endpoint=%sub.endpoint, "push delivered");
+                    // v160w-debug (Олег 2026-09-18): badge=N srv=N в логах —
+                    // диагностика «наклейка всегда 1» на тесте.
+                    info!(sub=%sub.id, alias=%payload.alias, endpoint=%sub.endpoint, badge=%payload.badge, "push delivered");
                     // One successful delivery is enough; skip older stale subs.
                     break;
                 }
@@ -621,7 +654,7 @@ impl PushServer {
                                 .await
                             }
                             (Method::POST, "/push/register_subscribe") => {
-                                handle_register_subscribe(req, store.clone_handle()).await
+                                handle_register_subscribe(req, Arc::clone(&push_self), store.clone_handle()).await
                             }
                             (Method::GET, "/push/status") => {
                                 handle_push_status(req, store.clone_handle(), db.clone()).await
@@ -759,6 +792,7 @@ fn mime_from_ext(ext: &str) -> &'static str {
 
 async fn handle_register_subscribe(
     req: Request<Incoming>,
+    push: Arc<PushServer>,
     store: PushStore,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let body = req.collect().await.unwrap().to_bytes();
@@ -839,6 +873,17 @@ async fn handle_register_subscribe(
         Ok(n) => n,
         Err(e) => return Ok(json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("store: {e}"))),
     };
+    // v160s4: aggregates-only статистика — new user учитывается при register
+    // (хэш npub, не сам npub; Олег 2026-09-16).
+    {
+        let now_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if let Err(e) = push.store_db.as_ref().expect("store_db").record_user_activity(&alias, now_ts) {
+            warn!(err=%e, "record_user_activity failed on register");
+        }
+    }
     if removed > 0 {
         info!(alias=%alias, removed, "purged stale push subs on register");
     }
@@ -1229,7 +1274,25 @@ async fn handle_api_history(
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
             let short_ttl = now + 300; // 5 minutes
+            // v160s4: aggregates-only статистика (Олег 2026-09-16).
+            // Пользователи/сообщения считаем в момент доставки — не зависим
+            // от 5-min TTL. Хэш npub (SHA-256), не сам npub.
+            if let Err(e) = db.record_user_activity(&npub, now) {
+                warn!(err=%e, "record_user_activity failed on /api/history");
+            }
+            // v160s6f (Олег 2026-09-17): только ВХОДЯЩИЕ сообщения (direction
+            // "in", from_npub != npub запрашивающего) считаем доставленными при
+            // /api/history. Ответ включает И исходящие (direction "out") —
+            // отправитель поллит свою же историю, и без фильтра исходящие
+            // сообщения сокращали TTL + считались «доставлено», хотя получатель
+            // их не забрал. Тест 17.09: iPhone offline, оба сообщения от мака
+            // показали «доставлено=2» вместо недоставлено=2. WS live-путь
+            // (envelope.rs) не трогаем — broadcast шлёт в WS получателя, n>0 =
+            // реальная доставка получателю.
             for m in &h.messages {
+                if m.from_npub == npub {
+                    continue; // исходящие запрашивающего — не «доставлено»
+                }
                 if let Err(e) = db.shorten_expires_at(&m.envelope_hash, short_ttl) {
                     warn!(err=%e, "shorten_expires_at failed on /api/history");
                 }
@@ -1319,6 +1382,25 @@ async fn handle_api_stats(
     if let Some(obj) = out.as_object_mut() {
         obj.insert("ws_connections_now".into(), serde_json::json!(ws_now));
         obj.insert("push_subscriptions".into(), serde_json::json!(push_subs));
+    }
+    // v160s4: aggregates-only сводная таблица (Олег 2026-09-16).
+    // total_users = нарастающий итог уникальных пользователей (по хэшам),
+    // stats_daily = [(day, new_users, active_users, msgs)] за 30 дней.
+    // Без PII: TTL сносит сообщения через 5 мин после доставки, поэтому
+    // envelope-счётчики не показывают активность — только aggregates.
+    if let Some(obj) = out.as_object_mut() {
+        match db.get_total_users() {
+            Ok(n) => {
+                obj.insert("total_users".into(), serde_json::json!(n));
+            }
+            Err(e) => warn!(err=%e, "get_total_users failed"),
+        }
+        match db.get_stats_daily() {
+            Ok(rows) => {
+                obj.insert("stats_daily".into(), serde_json::json!(rows));
+            }
+            Err(e) => warn!(err=%e, "get_stats_daily failed"),
+        }
     }
     Ok(Response::builder()
         .status(StatusCode::OK)
@@ -1710,6 +1792,7 @@ mod tests {
             title: "Murmur".into(),
             subtitle: "Ирина".into(),
             body: "new encrypted message (210 bytes)".into(),
+            badge: 3,
         };
         let s = p.to_json();
         let back: PushPayload = serde_json::from_str(&s).unwrap();
@@ -1736,7 +1819,7 @@ mod tests {
             envelope_bytes: vec![1, 2, 3, 4],
             envelope_hash_hex: "abc".into(),
         };
-        let payload = PushPayload::from_entry(&entry, Some(&store));
+        let payload = PushPayload::from_entry(&entry, Some(&store), None);
         // v160w: title "" (iOS рисует "from murmur" субтитлом при непустом title).
         assert_eq!(payload.title, "");
         // v160k9/v160v: subtitle пустой (минимум текста в пуше, ТЗ Олега) —

@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#17212b">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="murmur">
+    <!-- Lesson #219 (Олег 2026-08-26 15:42): iPhone PWA standalone mode кэширует
+     HTML агрессивно. Cache-Control: no-store в meta http-equiv не всегда
+     работает, но Cache-Control: no-cache + no-store + must-revalidate +
+     Pragma: no-cache + Expires: 0 — комбинация пробивает больше кэшей. -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>murmur</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+    <!-- Lesson #222 (Олег 2026-08-26 15:55): put version in meta tag AND inline
+     script. iOS Safari PWA cached HTML может не иметь inline-script (HTML cache
+     pre-bump). Meta tag читается через document.querySelector + .content
+     (работает даже если inline script не выполнился). -->
+    <meta name="app-version" content="v126">
+    <!-- Lesson #216: cache busting via ?v= query string. iOS Safari PWA
+     caches app.js via HTTP cache independently of SW. Query string forces
+     re-fetch on each version bump. SW CACHE_VERSION also bumps for SW
+     activation, but the app.js itself needs explicit URL change. -->
+    <link rel="stylesheet" href="styles.css?v=103">
+</head>
+<body>
+    <!-- ================= IDENTITY SCREEN (create/restore) ================= -->
+    <div id="identity-screen" class="screen">
+        <!-- DEBUG indicator: shows JS load status. Visible only if JS fails to load. -->
+        <noscript>
+            <div style="position:fixed;top:0;left:0;right:0;background:#ff3355;color:#fff;padding:12px;text-align:center;z-index:99999;">
+                murmur требует JavaScript. Включи JS в настройках Safari.
+            </div>
+        </noscript>
+        <div class="identity-card">
+            <h1 class="brand">murmur</h1>
+            <p class="subtitle">приватный мессенджер</p>
+
+            <div class="identity-error" id="identity-error" hidden></div>
+
+            <div class="identity-section">
+                <h2>Новый аккаунт</h2>
+                <button id="btn-create" class="primary">Создать</button>
+            </div>
+
+            <div class="identity-divider"><span>или</span></div>
+
+            <div class="identity-section">
+                <h2>Восстановить</h2>
+                <input id="restore-hex" type="text" placeholder="secret key (hex, 64 символа)" autocomplete="off" spellcheck="false">
+                <button id="btn-restore" class="secondary">Восстановить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= MESSENGER (sidebar + chat panel) ================= -->
+    <div id="messenger" class="messenger" hidden>
+        <!-- Lesson #212 (Олег 2026-08-26 14:21): version banner для debug SW update -->
+        <div id="version-banner" style="position:fixed;bottom:4px;right:4px;font-size:9px;color:#888;opacity:0.6;z-index:9999;font-family:monospace;pointer-events:none;background:rgba(0,0,0,0.3);padding:1px 4px;border-radius:3px;">…</div>
+        <!-- SIDEBAR: chat list -->
+        <aside id="sidebar" class="sidebar">
+            <header class="sidebar-header">
+                <button id="btn-logout" class="logout-btn" title="Выйти">Выйти</button>
+                <!-- Lesson #154: колокольчик возвращён. На iOS Notification.requestPermission()
+                     ТРЕБУЕТ user gesture (был причиной, почему мы его убрали).
+                     Один клик = gesture → permission → subscribe → UI on.
+                     Если браузер уже granted + есть подписка, клик отписывает. -->
+                <button id="btn-notifications" class="notif-btn" title="Включить уведомления">🔔</button>
+                <!-- Lesson #211+215: cache stats — скрыт по умолчанию, виден только
+                 если IndexedDB уже имеет > 0 записей (через app.js JS) -->
+                <button id="btn-cache-stats" class="notif-btn" title="Статистика кэша вложений" style="display:none;">💾</button>
+                <button id="btn-diag" class="notif-btn" title="Diagnostic dump">📊</button>
+                <div class="me">
+                    <div class="me-npub">
+                        <code id="my-npub" title="клик — копировать полный npub">…</code>
+                        <button id="btn-copy-npub" class="copy-btn" title="копировать npub">copy</button>
+                        <span id="my-npub-full" class="npub-full" hidden></span>
+                    </div>
+                </div>
+            </header>
+
+            <div class="chat-search-wrap">
+                <input id="chat-search" type="search" placeholder="поиск чатов…" autocomplete="off">
+            </div>
+
+            <div class="new-chat-wrap">
+                <input id="new-chat-input" type="text" placeholder="новый чат: alias или npub…" autocomplete="off" spellcheck="false">
+                <button id="btn-new-chat" class="primary small" title="создать чат">+</button>
+            </div>
+
+            <nav id="chat-list" class="chat-list" aria-label="Чаты">
+                <!-- populated by JS: each <button class="chat-item" data-peer="..."> -->
+            </nav>
+        </aside>
+
+        <!-- EMPTY STATE: shown when no chat is selected (mobile) -->
+        <section id="no-chat" class="no-chat" hidden>
+            <div class="no-chat-inner">
+                <h2>murmur</h2>
+                <p>Выберите чат слева или создайте новый.</p>
+            </div>
+        </section>
+
+        <!-- CHAT VIEW: messages + input -->
+        <main id="chat-view" class="chat-view">
+            <header class="chat-header">
+                <button id="btn-back" class="icon-btn back-btn" title="Назад" aria-label="назад к списку">&#8592;</button>
+                <div class="chat-peer">
+                    <div class="chat-peer-name" id="chat-peer-name">Выберите чат</div>
+                </div>
+                <button id="btn-delete-chat" class="icon-btn delete-btn" title="Удалить чат" aria-label="удалить чат" hidden>🗑</button>
+            </header>
+
+            <section id="chat-panel" class="chat-panel">
+                <div id="messages-area" class="messages-area"></div>
+            </section>
+
+            <footer id="input-area" class="input-area" hidden>
+                <div id="attachments-preview" class="attachments-preview"></div>
+                <div class="input-row">
+                    <button id="btn-attach" class="attach-btn" title="Прикрепить файл (до 50 МБ)">📎</button>
+                    <input type="file" id="file-input" multiple accept="image/jpeg,image/png,image/webp,image/gif,audio/mpeg,audio/ogg,audio/wav,video/mp4,application/pdf,text/plain" style="display:none" />
+                    <textarea id="message-input" placeholder="сообщение…" rows="1" autocomplete="off"></textarea>
+                    <button id="btn-send" class="send-btn" title="отправить">&#8594;</button>
+                </div>
+            </footer>
+        </main>
+    </div>
+
+    <script>
+      // ─── Inline handlers (classic script, NOT module) ───
+      // Inline script at end of <body> executes AFTER DOM is parsed (no DOMContentLoaded needed).
+      // This is critical for iOS PWA standalone where <script type="module"> has flaky support.
+      // The handlers check if app.js has loaded _handleCreate / _handleRestore on window yet.
+      function bindHandler(elemId, fnName, label) {
+        const el = document.getElementById(elemId);
+        if (!el) {
+          console.warn("[murmur] no element #" + elemId + " — will retry");
+          return false;
+        }
+        el.addEventListener("click", async function(ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          // If app.js handler is ready — call it immediately.
+          if (typeof window[fnName] === "function") {
+            try { await window[fnName](); }
+            catch (e) {
+              console.error("[murmur] handler error:", e);
+              const err = document.getElementById("identity-error");
+              if (err) { err.hidden = false; err.textContent = "Ошибка: " + (e.message || e); }
+            }
+            return;
+          }
+          // app.js not loaded yet — wait up to 30s for it (PWA cold-start on iPhone
+          // can take 10-20s when app.js + WASM module (181 KB) load over Cloudflare
+          // tunnel from Russian IP — Lesson #203 (Олег 2026-08-26)).
+          const err = document.getElementById("identity-error");
+          if (err) {
+            err.hidden = false;
+            err.textContent = "PWA загружается… подожди (до 30 сек)";
+          }
+          const deadline = Date.now() + 30000;
+          while (Date.now() < deadline && typeof window[fnName] !== "function") {
+            await new Promise(r => setTimeout(r, 200));
+          }
+          if (typeof window[fnName] === "function") {
+            if (err) { err.hidden = true; err.textContent = ""; }
+            try { await window[fnName](); }
+            catch (e) {
+              console.error("[murmur] handler error:", e);
+              if (err) { err.hidden = false; err.textContent = "Ошибка: " + (e.message || e); }
+            }
+            return;
+          }
+          if (err) { err.hidden = false; err.textContent = "PWA не загрузилась. Проверь интернет и обнови страницу."; }
+        }, { passive: false });
+        return true;
+      }
+      // Inline script at end of <body> — DOM is already parsed here.
+      bindHandler("btn-create", "_handleCreate", "Создать");
+      bindHandler("btn-restore", "_handleRestore", "Восстановить");
+      // Safety: if app.js was loaded before this script, handlers are already wired there.
+      console.log("[murmur] inline handlers bound");
+    </script>
+    <!-- Lesson #218 (Олег 2026-08-26 15:36): inline version detection.
+     `document.currentScript` возвращает null для `<script defer>` (известный bug
+     браузеров). Inline script сначала ставит `window.__APP_VERSION__` из
+     document.querySelector('script[src*="app.js"]').getAttribute('src'). -->
+    <script>
+        (function() {
+            try {
+                const s = document.querySelector('script[src*="app.js"]');
+                const m = s && s.getAttribute("src").match(/[?&]v=(\d+)/);
+                window.__APP_VERSION__ = m ? m[1] : "?";
+            } catch (e) { window.__APP_VERSION__ = "?"; }
+        })();
+    </script>
+    <!-- Lesson #216 (Олег 2026-08-26 15:18): ?v= cache busting — iOS Safari
+     HTTP cache не обновляет app.js по CACHE_VERSION bump alone.
+     Query string = guaranteed fresh load on each deploy. -->
+    <script src="blob-cache.js?v=103" defer></script>
+    <script src="messages-cache.js?v=133" defer></script>
+    <script src="render-attachments.js?v=103" defer></script>
+    <script src="app.js?v=132" defer></script>
+    <script>
+      // Register service worker for offline support & cache versioning.
+      // Bump CACHE_VERSION in service-worker.js to invalidate client caches.
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("/service-worker.js?v=103").then(reg => {
+          // Lesson #217 (Олег 2026-08-26 15:21): на iPhone PWA новый SW часто
+          // НЕ устанавливается даже после reinstall. Force-update check
+          // каждые 30 секунд пока PWA активна — гарантирует что клиент
+          // подхватит новый SW сразу как сервер его отдаст.
+          setInterval(() => reg.update().catch(() => {}), 30000);
+          // Принудительный reload если новый SW взяв control — но только если
+          // есть controlled client и не было manual user action (reload).
+          if (reg.waiting) {
+            // Если ждёт — попросить skipWaiting и reload клиентов
+            reg.waiting.postMessage({ type: "SKIP_WAITING" });
+          }
+        }).catch(console.error);
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          // Новый SW взял control — reload чтобы загрузить свежий app.js?в=v83
+          if (!sessionStorage.getItem("reloaded-by-sw")) {
+            sessionStorage.setItem("reloaded-by-sw", "1");
+            location.reload();
+          }
+        });
+      }
+    </script>
+</body>
+</html>

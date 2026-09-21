@@ -1,0 +1,1160 @@
+/* murmur PWA — messenger layout (Telegram-inspired).
+   Mobile-first: одна колонка; на ширине ≥720px — sidebar + chat panel рядом.
+   Все ID привязаны к каркасу в index.html.
+*/
+
+:root {
+    --bg: #17212b;           /* Telegram dark bg */
+    --panel: #0e1621;        /* sidebar / header */
+    --bubble-out: #2b5278;   /* my messages (blue) */
+    --bubble-in: #182533;    /* peer messages (dark) */
+    --text: #e1e9f0;
+    --text-muted: #708499;
+    --accent: #4fa3ff;
+    --accent-hover: #6cb6ff;
+    --border: #1f2c3a;
+    --danger: #f06c6c;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* HTML [hidden] attribute must beat any display:flex/block in this file.
+   Without this, the messenger view (.messenger { display: flex }) is
+   visible on top of the identity screen and blocks all clicks. */
+[hidden] { display: none !important; }
+
+html, body {
+    height: 100%;
+    overflow: hidden;
+    width: 100%;
+    position: fixed;
+    /* v160x2 (Олег 2026-09-20): fixed без явных координат — WebKit в iOS
+       standalone после клавиатуры НЕ возвращает body на место (сдвинутый
+       слой так и висит → пустота снизу, перезапуск не помогает). Якорим
+       жёстко в левый-верхний угол. */
+    top: 0;
+    left: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    font-size: 15px;
+    color: var(--text);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    padding-right: var(--safe-right);
+}
+
+/* v160x9 (Олег 22:35): под .messenger не должно быть НИЧЕГО светлее/темнее.
+   Залипшее --vvh (промежуточные высоты анимации клавиатуры) проявлялось как
+   тёмная полоса фона body под input-area. html крашится в тот же --bg —
+   любое расхождение высот становится невидимым. messenger поверх — шов исчез. */
+html {
+    background: var(--bg);
+}
+
+/* ================= SCREEN: IDENTITY (create / restore) ================= */
+.screen {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: var(--bg);
+}
+
+.identity-card {
+    width: 100%;
+    max-width: 380px;
+    background: var(--panel);
+    border-radius: 12px;
+    padding: 28px 20px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+}
+
+.brand {
+    font-size: 32px;
+    font-weight: 600;
+    text-align: center;
+    color: var(--accent);
+    margin-bottom: 4px;
+}
+
+.subtitle {
+    text-align: center;
+    color: var(--text-muted);
+    margin-bottom: 24px;
+    font-size: 13px;
+}
+
+.identity-error {
+    background: rgba(240, 108, 108, 0.15);
+    border: 1px solid var(--danger);
+    color: var(--danger);
+    padding: 10px 12px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    word-break: break-word;
+}
+
+.identity-section h2 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 10px;
+}
+
+.identity-section input {
+    width: 100%;
+    padding: 12px 14px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 10px;
+    font-size: 14px;
+    font-family: inherit;
+}
+
+.identity-section input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.identity-divider {
+    text-align: center;
+    margin: 20px 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    position: relative;
+}
+.identity-divider::before,
+.identity-divider::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    width: calc(50% - 24px);
+    height: 1px;
+    background: var(--border);
+}
+.identity-divider::before { left: 0; }
+.identity-divider::after { right: 0; }
+
+button.primary, button.secondary {
+    width: 100%;
+    padding: 12px 16px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+}
+button.primary { background: var(--accent); color: #fff; }
+button.primary:hover { background: var(--accent-hover); }
+button.secondary { background: var(--bubble-in); color: var(--text); border: 1px solid var(--border); }
+button.small { padding: 8px 12px; font-size: 13px; }
+
+/* ================= MESSENGER (sidebar + chat) ================= */
+.messenger {
+    display: flex;
+    flex-direction: column;  /* mobile-first: stack sidebar & chat vertically */
+    /* 100dvh = dynamic visual viewport on iOS Safari (excludes URL bar).
+       Falls back to 100vh on older browsers. Combined with viewport-fit=cover
+       in <meta>, this gives full-screen layout without cutting off the input
+       area below the home indicator. */
+    height: 100vh;
+    /* v160x4: --vvh ставит app.js из visualViewport.height (вкл. safe-зону).
+       100dvh на iOS standalone исключает нижний safe-inset → не доходил
+       до физического низа (пустота+светлая полоса body под input).
+       Фолбэк 100dvh остаётся для старых браузеров без visualViewport. */
+    height: var(--vvh, 100dvh);
+    width: 100%;
+    /* v160x (Олег 2026-09-20): padding-bottom safe-area УБРАН — он дублировал
+       локальные резервы страниц: .input-area на чате (safe-bottom + 8px) и
+       .chat-list в списке. Двойной резерв давал ~76px мёртвой зоны снизу
+       на чате и тёмную полосу под списком. Каждая страница теперь резервирует
+       safe-area сама. */
+}
+
+/* SIDEBAR */
+.sidebar {
+    width: 100%;
+    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    /* v160x2 (Олег 2026-09-20): без min-height:0 flex-item не сжимается ниже
+       контента (min-height:auto) — сайдбар вылезал за низ вьюпорта на
+       высоту переполнения списка, последние чаты недоскролливались.
+       Тот же урок, что #234 для .chat-view. */
+    min-height: 0;
+}
+
+.sidebar-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: calc(var(--safe-top) + 10px) 12px 10px 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+/* v160y18: вернули колокольчик 🔔 для ручного re-subscribe на macOS PWA */
+.sidebar-header .notif-btn {
+    display: inline-block;
+}
+
+.sidebar-footer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 12px calc(var(--safe-bottom) + 16px) 12px;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+}
+
+.invite-btn-green {
+    width: 100%;
+    max-width: 240px;
+    padding: 14px 16px;
+    background: #28a745;
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.2s;
+    text-align: center;
+}
+.invite-btn-green:hover { background: #218838; }
+
+.logout-btn-danger {
+    width: 100%;
+    max-width: 240px;
+    padding: 10px 16px;
+    background: transparent;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s;
+    text-align: center;
+}
+.logout-btn-danger:hover { background: var(--danger); color: #fff; }
+
+.notif-btn {
+    /* v160p (Олег 2026-09-08 21:45 «колокольчика нет и пуши не приходят»):
+       вернули кнопку. Lesson #242 (26.08, скрыть по просьбе Олега) отменён —
+       теперь колокольчик = индикатор состояния пушей + ручной re-subscribe. */
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 6px 10px;
+    border-radius: 8px;
+    margin-left: 6px;
+    transition: background 0.15s ease;
+}
+.notif-btn:hover { border-color: var(--accent); }
+.notif-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* v157 (Олег 31.08 «стрелка назад совсем мелкая»): нормальный tap-target.
+   Раньше у .back-btn не было собственных стилей размера — рендерился системным
+   дефолтом браузера (мелкий текст-глиф без паддинга). iOS-стиль chevron SVG
+   + 44×44px (Apple HIG minimal touch target). */
+.back-btn {
+    display: none;
+    background: transparent;
+    border: none;
+    color: var(--accent);
+    font-size: 26px;
+    line-height: 1;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    margin-left: -10px; /* оптическое выравнивание к краю экрана */
+    flex-shrink: 0;
+    cursor: pointer;
+    border-radius: 12px;
+    -webkit-tap-highlight-color: transparent;
+    align-items: center;
+    justify-content: center;
+}
+.back-btn:active { background: var(--surface-2); }
+.delete-btn {
+    margin-left: auto;
+    background: transparent;
+    border: none;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 6px 12px;
+    border-radius: 6px;
+    color: var(--muted);
+    transition: background 0.15s, color 0.15s;
+}
+.delete-btn:hover { color: #d33; background: var(--border); }
+.delete-btn:active { background: rgba(221,51,51,0.15); }
+
+.me {
+    flex: 1;
+    min-width: 0;
+}
+.me-name {
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--text);
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.me-npub {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+#my-npub {
+    cursor: pointer;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-decoration: underline dotted;
+}
+#my-npub:hover { color: var(--accent); }
+.copy-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    flex-shrink: 0;
+}
+.copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+.chat-search-wrap {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+}
+.chat-search-wrap input {
+    width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-family: inherit;
+}
+.chat-search-wrap input:focus { outline: none; border-color: var(--accent); }
+
+/* (.new-chat-wrap стили удалены 2026-08-31 вместе с полем) */
+
+.chat-list {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    /* v160x2: flex-child с overflow — тоже нужен min-height:0, иначе не
+       сжимается и тянет .sidebar за вьюпорт. */
+    min-height: 0;
+    /* v160x: последний чат не должен прятаться под home indicator
+       при скролле в самый низ — свой safe-резерв вместо .messenger. */
+    padding-bottom: max(calc(var(--safe-bottom) + 4px), 8px);
+    overscroll-behavior: contain; /* скролл не «протекает» в body */
+}
+
+.chat-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    cursor: pointer;
+    width: 100%;
+    text-align: left;
+    font-family: inherit;
+    font-size: 14px;
+}
+.chat-item:hover { background: var(--border); }
+.chat-item.active { background: var(--bubble-out); }
+.chat-item-avatar {
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 16px;
+    flex-shrink: 0;
+}
+.chat-item-body {
+    flex: 1;
+    min-width: 0;
+}
+.chat-item-name {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.chat-item-preview {
+    color: var(--text-muted);
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+}
+.chat-item-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    flex-shrink: 0;
+}
+.chat-item-time { font-size: 11px; color: var(--text-muted); }
+.chat-item-badge {
+    background: var(--accent);
+    color: #fff;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 10px;
+    min-width: 20px;
+    text-align: center;
+}
+.chat-item-peer-sub {
+    display: block;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 400;
+    margin-top: 1px;
+}
+.chat-item.active .chat-item-peer-sub { color: rgba(255,255,255,0.7); }
+.chat-item.active .chat-item-preview { color: rgba(255,255,255,0.8); }
+.chat-empty {
+    padding: 40px 20px;
+    color: var(--text-muted);
+    text-align: center;
+}
+.chat-empty-title { font-size: 16px; margin-bottom: 8px; color: var(--text); }
+.chat-empty-hint { font-size: 13px; line-height: 1.5; }
+.chat-empty-hint code { background: var(--border); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+
+/* CHAT VIEW */
+.chat-view {
+    display: none;
+    flex-direction: column;
+    flex: 1;
+    background: var(--bg);
+    min-width: 0;
+    /* Lesson #234 (Олег 2026-08-26 19:27): min-height: 0 ОБЯЗАТЕЛЬНО для
+       flex-column item. Без этого min-height: auto = контент растёт сверх
+       flex:1, flex:1 не ужимает → .chat-view выше viewport → body overflow
+       → скролл не работает. Симптом: вертикальная ориентация — input bar
+       не виден, bubbles обрезаны, scroll не работает. Горизонтальная
+       работает случайно (там flex-direction: row, проблема не проявляется). */
+    min-height: 0;
+}
+
+.chat-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: calc(var(--safe-top) + 10px) 12px 10px 12px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.chat-peer-name {
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    line-height: 1.15;
+    min-width: 0;
+    overflow: hidden;
+}
+.chat-peer-name .peer-name-main {
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.chat-peer-name .peer-name-sub {
+    font-weight: 400;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+}
+
+.chat-peer {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.chat-panel {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+/* ================= EMPTY STATE (.no-chat) ================= */
+.no-chat {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+}
+.no-chat-inner { text-align: center; }
+.no-chat h2 { color: var(--accent); margin-bottom: 8px; }
+
+.messages-area {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 12px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    /* Allow messages to scroll past the last bubble; otherwise iOS Safari
+       truncates the last message because content is taller than container. */
+    min-height: 0;
+}
+
+.bubble {
+    max-width: min(70%, 260px);
+    padding: 7px 11px 6px 11px;
+    border-radius: 14px;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    white-space: pre-wrap;
+    line-height: 1.35;
+    position: relative;
+    box-shadow: 0 1px 1px rgba(0,0,0,0.15);
+    display: flex;
+    flex-direction: column;
+}
+.bubble.out {
+    align-self: flex-end;
+    background: var(--bubble-out);
+    color: var(--text);
+    border-bottom-right-radius: 4px;
+    text-align: right;
+}
+.bubble.in {
+    align-self: flex-start;
+    background: var(--bubble-in);
+    color: var(--text);
+    border-bottom-left-radius: 4px;
+    text-align: left;
+}
+
+.bubble.bubble-system {
+    align-self: center;
+    background: rgba(240, 108, 108, 0.18);
+    color: var(--danger);
+    border: 1px solid rgba(240, 108, 108, 0.5);
+    border-radius: 10px;
+    max-width: min(85%, 320px);
+    text-align: center;
+    font-size: 13px;
+}
+.bubble.bubble-system .bubble-time { color: rgba(240, 108, 108, 0.7); }
+
+.error-msg {
+    padding: 12px;
+    margin: 8px;
+    background: var(--bubble-in);
+    color: var(--text);
+    border-radius: 8px;
+    text-align: center;
+    font-size: 13px;
+}
+.error-msg .link-btn {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    text-decoration: underline;
+    padding: 4px 8px;
+    font-size: 13px;
+}
+.bubble-time {
+    display: block;
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 3px;
+    text-align: right;
+}
+.bubble.out .bubble-time { color: rgba(225,233,240,0.6); }
+
+.day-divider {
+    align-self: center;
+    background: rgba(0,0,0,0.3);
+    color: var(--text-muted);
+    padding: 3px 10px;
+    border-radius: 10px;
+    font-size: 11px;
+    margin: 8px 0;
+}
+
+/* INPUT AREA */
+.input-area {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    /* v160x5 (Олег 20:20 «не сработало»): safe-bottom резерв УБРАН — высота
+       .messenger теперь честная (--vvh до физического дна), пиллюля должна
+       сидеть в самом краю. max() держит минимум 8px на Android/старых iOS. */
+    padding: 8px 8px 8px 8px;
+    /* v160x9: фон = цвет чата (как в Telegram iOS) — шов «панель темнее →
+       фон светлее» под пиллюлей исчезает; любые расхождения высот
+       становятся невидимыми. */
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.input-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+}
+
+#message-input {
+    flex: 1;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 9px 14px;
+    font-size: 15px;
+    font-family: inherit;
+    resize: none;
+    max-height: 120px;
+    line-height: 1.4;
+}
+#message-input:focus { outline: none; border-color: var(--accent); }
+
+.send-btn {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+    cursor: pointer;
+    flex-shrink: 0;
+    font-family: inherit;
+}
+.send-btn:hover { background: var(--accent-hover); }
+.send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Attach button + preview (Олег 2026-08-24 11:00 MSK) */
+.attach-btn {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+    cursor: pointer;
+    flex-shrink: 0;
+    padding: 0;
+}
+.attach-btn:hover { border-color: var(--accent); }
+.attachments-preview {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 4px;
+    min-height: 0;
+    max-height: 100px;
+    overflow-y: auto;
+}
+.attachments-preview:empty { display: none; }
+.attach-chip {
+    background: var(--accent);
+    color: #fff;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.attach-chip .x {
+    cursor: pointer;
+    opacity: 0.7;
+}
+.attach-chip .x:hover { opacity: 1; }
+.attach-chip.rejected {
+    background: rgba(255, 152, 0, 0.85); /* warning amber */
+    color: #1a1a1a;
+    font-weight: 600;
+}
+.attach-chip.uploading {
+    background: var(--accent);
+    opacity: 0.7;
+    font-style: italic;
+}
+}
+.attach-preview-img { max-width: 80px; max-height: 60px; border-radius: 6px; object-fit: cover; }
+
+/* In-message attachment preview (Олег 2026-08-24 11:00 MSK, image/video/audio) */
+.msg-attach-wrapper {
+    width: 100%;
+    margin-bottom: 4px;
+}
+.msg-attach-img { max-width: 100%; max-height: 220px; border-radius: 8px; display: block; cursor: pointer; }
+.msg-attach-video { max-width: 100%; border-radius: 8px; display: block; }
+.msg-attach-audio { width: 100%; }
+.msg-attach-file {
+
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 8px;
+    margin-top: 4px;
+    color: inherit;
+    text-decoration: none;
+}
+
+/* ================= DESKTOP (≥720px): two panels side-by-side ================= */
+@media (min-width: 720px) {
+    .messenger { flex-direction: row; }
+    .sidebar { width: 340px; flex-shrink: 0; }
+    .chat-view { display: flex; }
+    .back-btn { display: none; } /* no back on desktop — sidebar always visible */
+}
+
+/* ================= MOBILE: stacked sidebar & chat-view, switch via JS ================= */
+@media (max-width: 719px) {
+    .messenger { flex-direction: column; }
+    /* When chat-open is set, hide the sidebar; when not set, hide the chat-view. */
+    .messenger.chat-open .sidebar { display: none; }
+    .messenger.chat-open .chat-view { display: flex; flex: 1; min-height: 0; }
+    .messenger:not(.chat-open) .sidebar { display: flex; flex: 1; min-height: 0; }
+    .messenger:not(.chat-open) .chat-view { display: none; }
+    .messenger:not(.chat-open) .no-chat { display: flex; flex: 1; }
+    .messenger.chat-open .no-chat { display: none; }
+    .back-btn { display: flex; }
+}
+
+/* ================= STATUS (small text at bottom) ================= */
+#status, .status {
+    color: var(--text-muted);
+    font-size: 11px;
+    text-align: center;
+    padding: 4px;
+}
+
+/* ================= PHASE 3 ATTACHMENTS ================= */
+/* Telegram-style: image preview above text bubble, full-width, rounded.
+   Bubble-attach shows the file as a separate figure above text. */
+
+.msg-attach-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0 0 4px 0;
+    max-width: 100%;
+}
+
+.msg-attach-remote {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+}
+
+.attach-figure {
+    margin: 0;
+    padding: 0;
+    max-width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.attach-image {
+    max-width: 100%;
+    max-height: 280px;
+    width: auto;
+    border-radius: 10px;
+    display: block;
+    cursor: pointer;
+    background: #00000010;
+}
+
+.attach-video {
+    max-width: 100%;
+    max-height: 280px;
+    border-radius: 10px;
+    display: block;
+}
+
+/* v160: видео-превью в стиле WhatsApp — кадр + play-кнопка, тап → плеер */
+.video-preview {
+    position: relative;
+    max-width: 100%;
+    width: 260px;
+    max-height: 280px;
+    border-radius: 10px;
+    overflow: hidden;
+    cursor: pointer;
+    background: #000;
+    /* v160c: высота фиксируется aspect-ratio из JS (реальные пропорции);
+       до загрузки JS ставит 16/9 — wrap не схлопывается */
+    min-height: 60px;
+}
+.video-preview .video-thumb {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    max-height: 280px;
+}
+.video-preview .video-play-btn {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-left: 4px; /* оптическая центровка ▶ */
+    pointer-events: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+}
+.fullscreen-video {
+    max-width: 96vw;
+    max-height: 96vh;
+    border-radius: 6px;
+    background: #000;
+}
+
+.attach-audio {
+    width: 100%;
+    margin: 2px 0;
+}
+
+.attach-file {
+    display: inline-block;
+    padding: 8px 12px;
+    background: #ffffff14;
+    border-radius: 10px;
+    text-decoration: none;
+    color: inherit;
+    font-size: 14px;
+    word-break: break-all;
+}
+
+.attach-figure figcaption {
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 0 2px;
+}
+
+.attach-decrypting {
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 6px 8px;
+    background: #ffffff10;
+    border-radius: 8px;
+    font-style: italic;
+}
+
+.attach-error {
+    color: #ff6b6b;
+    font-size: 12px;
+    padding: 6px 8px;
+    background: #ff6b6b20;
+    border-radius: 8px;
+}
+
+.fullscreen-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.92);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    cursor: pointer;
+}
+
+.fullscreen-image {
+    max-width: 96vw;
+    max-height: 96vh;
+    border-radius: 6px;
+}
+
+/* v160k8 (Олег 19:23): галочки красятся когда прочитано.
+   ✓✓ (msg-read-check) — цветная (читано), ✓ (msg-sent-check) — muted (отправлено). */
+.msg-read-check {
+    color: #4ade80;
+    font-weight: 600;
+}
+.msg-sent-check {
+    color: var(--text-muted);
+}
+
+/* v160k9a (Олег 2026-09-05 23:48): Link Unfurl preview card */
+.unfurl-card {
+    display: flex;
+    flex-direction: column;
+    margin-top: 6px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    color: inherit;
+    text-decoration: none;
+    max-width: 320px;
+}
+.unfurl-card:active {
+    opacity: 0.85;
+}
+.unfurl-img {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.04);
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+}
+.unfurl-img img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.unfurl-meta {
+    padding: 8px 10px 10px;
+}
+.unfurl-site {
+    font-size: 11px;
+    opacity: 0.6;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 2px;
+}
+.unfurl-title {
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.3;
+    margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+.unfurl-desc {
+    font-size: 12px;
+    opacity: 0.7;
+    line-height: 1.35;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+/* ================= v160p8: LANDING-STYLE IDENTITY SCREEN =================
+   Стиль лендинга v3 (Олег одобрил) — на identity-screen (PWA по invite-ссылке).
+   Скоуп: #identity-screen — messenger не трогаем. btn-create/error сохранены. */
+#identity-screen {
+    background: #0f1620;
+    background-image:
+        radial-gradient(ellipse 60% 35% at 20% 0%, rgba(34,158,217,.13), transparent),
+        radial-gradient(ellipse 50% 45% at 85% 100%, rgba(94,234,212,.08), transparent);
+    padding: 24px 20px 16px;
+    overflow-y: auto;
+    align-items: flex-start;
+    justify-content: center;
+}
+#identity-screen .identity-card {
+    max-width: 460px;
+    width: 100%;
+    background: rgba(255,255,255,.045);
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 18px;
+    padding: 24px 18px 20px;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 12px 40px rgba(0,0,0,.35);
+    margin-top: max(28px, env(safe-area-inset-top));
+}
+#identity-screen .brand {
+    font-size: 34px;
+    font-weight: 800;
+    letter-spacing: -.5px;
+    text-align: center;
+    background: linear-gradient(90deg, #229ED9, #5eead4);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    display: block;
+}
+#identity-screen .subtitle {
+    text-align: center;
+    color: #9fb0c3;
+    font-size: 15px;
+    margin-bottom: 18px;
+}
+/* why-private bullets внутри identity-card */
+#identity-screen .identity-why {
+    margin: 0 0 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+#identity-screen .identity-why .bullet {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #9fb0c3;
+}
+#identity-screen .identity-why .bullet b { color: #e8eef5; font-weight: 600; }
+#identity-screen .identity-why .ic { flex-shrink: 0; width: 22px; text-align: center; font-size: 15px; }
+#identity-screen .identity-section h2 {
+    color: #9fb0c3;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 14.5px;
+}
+#identity-screen button.primary {
+    width: 100%;
+    padding: 14px;
+    border-radius: 14px;
+    border: none;
+    background: linear-gradient(135deg, #229ED9, #5eead4);
+    color: #fff;
+    font-size: 16px;
+    font-weight: 600;
+    box-shadow: 0 8px 24px rgba(34,158,217,.35);
+}
+#identity-screen .identity-error {
+    background: rgba(240, 108, 108, 0.12);
+    border: 1px solid rgba(240, 108, 108, 0.5);
+    color: #f0939f;
+    border-radius: 12px;
+}
+
+/* ═══ v160r (Олег 2026-09-17): reply-to — тап на bubble → бар «Ответ» ═══ */
+.reply-bar {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    padding: 6px 10px;
+    margin: 0 10px 4px;
+    background: rgba(128, 128, 128, 0.12);
+    border-radius: 12px;
+}
+.reply-bar[hidden] { display: none; }
+.reply-bar-accent {
+    width: 3px;
+    border-radius: 2px;
+    background: currentColor;
+    opacity: 0.6;
+    flex-shrink: 0;
+}
+.reply-bar-body { flex: 1; min-width: 0; }
+.reply-bar-label {
+    font-size: 12px;
+    font-weight: 600;
+    opacity: 0.7;
+    margin-bottom: 2px;
+}
+.reply-bar-preview {
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0.85;
+}
+.reply-bar-cancel {
+    align-self: center;
+    background: none;
+    border: none;
+    color: inherit;
+    font-size: 14px;
+    opacity: 0.6;
+    padding: 6px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+/* Цитата внутри bubble адресата */
+.bubble .quoted {
+    border-left: 3px solid currentColor;
+    opacity: 0.65;
+    padding: 2px 8px;
+    margin: 0 0 4px;
+    font-size: 13px;
+    border-radius: 6px;
+    background: rgba(128, 128, 128, 0.10);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+.bubble .quoted .quoted-name {
+    font-weight: 600;
+    font-size: 12px;
+    display: block;
+    margin-bottom: 1px;
+}

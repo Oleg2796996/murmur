@@ -37,6 +37,8 @@ thiserror = "1"
 futures = "0.3"
 async-channel = "2"
 parking_lot = "0.12"
+# v160s6: statvfs для disk free/total в дашборде
+rustix = { version = "0.38", features = ["fs"] }
 sha3 = "0.10"
 rand = "0.8"
 sha2 = "0.10"

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Приватный мессенджер MurMur</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  :root { --bg:#0f1620; --card:rgba(255,255,255,.045); --accent:#229ED9; --accent2:#5eead4; --text:#e8eef5; --muted:#9fb0c3; }
+  body {
+    min-height:100vh; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:28px 20px 40px;
+    background-image:
+      radial-gradient(ellipse 60% 35% at 20% 0%, rgba(34,158,217,.13), transparent),
+      radial-gradient(ellipse 50% 45% at 85% 100%, rgba(94,234,212,.08), transparent);
+  }
+  .wrap { max-width:460px; margin:0 auto; }
+  header { text-align:center; margin-bottom:26px; }
+  h1 {
+    font-size:34px; font-weight:800; letter-spacing:-.5px;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+  }
+  .sub { color:var(--muted); font-size:15px; margin-top:6px; }
+  .panel {
+    background:var(--card); border:1px solid rgba(255,255,255,.08);
+    border-radius:18px; padding:20px 18px;
+    backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
+    box-shadow:0 12px 40px rgba(0,0,0,.35);
+    margin-bottom:16px;
+  }
+  .panel-title { font-size:15px; font-weight:700; color:var(--text); margin-bottom:12px; }
+  .panel p.lead { font-size:14.5px; line-height:1.6; color:var(--muted); margin-bottom:12px; }
+  .panel p.lead b { color:var(--text); font-weight:600; }
+  .bullets { display:flex; flex-direction:column; gap:10px; }
+  .bullet { display:flex; gap:10px; align-items:flex-start; font-size:14px; line-height:1.5; color:var(--muted); }
+  .bullet b { color:var(--text); font-weight:600; }
+  .bullet .ic { flex-shrink:0; width:22px; text-align:center; font-size:15px; }
+  .num { display:inline-block; color:var(--accent2); font-weight:800; margin-right:2px; }
+  .step { margin-bottom:16px; }
+  .step:last-child { margin-bottom:0; }
+  .step-title { font-size:14.5px; line-height:1.55; color:var(--muted); }
+  .step-title b { color:var(--text); font-weight:600; }
+  .linkbox {
+    margin-top:10px; padding:12px 14px; border-radius:12px;
+    border:1px solid rgba(34,158,217,.4);
+    background:rgba(34,158,217,.08);
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:12px; line-height:1.6; color:#7fd4f0;
+    word-break:break-all; user-select:all; -webkit-user-select:all;
+  }
+  .install { margin-top:8px; display:flex; flex-direction:column; gap:8px; }
+  .install-row { display:flex; gap:10px; align-items:flex-start; font-size:14px; line-height:1.5; color:var(--muted); }
+  .install-row b { color:var(--text); font-weight:600; flex-shrink:0; }
+  .install-row .app { color:var(--accent2); font-weight:600; }
+  .foot { text-align:center; margin-top:22px; font-size:12px; color:#5a6b80; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>MurMur</h1>
+      <p class="sub">приватный мессенджер</p>
+    </header>
+
+    <div class="panel">
+      <div class="panel-title">Почему это приватно</div>
+      <div class="bullets">
+        <div class="bullet"><span class="ic">🔐</span><div><b>Всё хранится на вашем устройстве</b> — сервер видит только зашифрованные сообщения</div></div>
+        <div class="bullet"><span class="ic">🧹</span><div><b>Переписка стирается с сервера</b> через минуты после доставки</div></div>
+        <div class="bullet"><span class="ic">🕶️</span><div><b>Нам не нужно знать</b> ваши имена, телефоны и почту</div></div>
+        <div class="bullet"><span class="ic">🛡️</span><div><b>Просьба передать ваши данные?</b> Нам нечего передавать — даже при доступе к серверам ничего полезного не найдут</div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Чтобы принять приглашение</div>
+      <div class="step">
+        <div class="step-title"><span class="num">1)</span> MurMur уже установлен? <b>Нажмите на ссылку</b> — она скопируется, вставьте её в приложение:</div>
+        <div class="linkbox">https://murmur.senswifi.ru/?invite=npub1…</div>
+      </div>
+      <div class="step">
+        <div class="step-title"><span class="num">2)</span> Ещё не установлен? Пара шагов:</div>
+        <div class="install">
+          <div class="install-row"><span><span class="app">Safari</span> (iPhone/iPad):</span><div>Поделиться → На экран «Домой»</div></div>
+          <div class="install-row"><span><span class="app">Chrome</span> (Android/ПК):</span><div>⋮ → Добавить на главный экран</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">Децентрализованно · без слежки</div>
+  </div>
+</body>
+</html>

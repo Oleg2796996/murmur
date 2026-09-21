@@ -51,18 +51,14 @@ fn to_js<T: Serialize>(r: &JsCmdResult<T>) -> JsValue {
     let out = Out { ok: r.ok, data: r.data.as_ref(), error: r.error.as_ref() };
     let s = serde_json::to_string(&out)
         .unwrap_or_else(|e| format!("{{\"ok\":false,\"error\":\"serialize: {e}\"}}"));
-    // Allocate the string on the WASM linear heap and return an i32
-    // pointer + length instead of using the externref path. The JS glue
-    // produced by wasm-bindgen for String params uses i32 (pointer to
-    // utf-8 bytes), which is universally supported.
-    let bytes = s.into_bytes();
-    let len = bytes.len() as u32;
-    let ptr = bytes.as_ptr() as u32;
-    std::mem::forget(bytes);
-    let arr = js_sys::Array::new_with_length(2);
-    arr.set(0, JsValue::from_f64(ptr as f64));
-    arr.set(1, JsValue::from_f64(len as f64));
-    arr.into()
+    // v160g5-fix (Олег 2026-09-21 12:40 «Ошибка создания аккаунта: undefined»):
+    // НЕ возвращать [ptr,len] массив из linear memory — wasm-bindgen 0.2.127
+    // externref-ABI отдаёт его как голый JS Array, и glue takeObject НЕ декодирует
+    // → unwrap() получает Array → res.ok=undefined → «Ошибка: undefined».
+    // Простой robust-путь: JsValue::from_str — строка попадает в heap через
+    // cast intrinsic (String -> Externref), glue takeObject возвращает её как
+    // JS string. Работающий бэкап (pre-v160g1) именно так и возвращал.
+    JsValue::from_str(&s)
 }
 
 /// Bundle of public-key material returned by `identity_new()`.
@@ -89,6 +85,19 @@ fn hex_lower(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes { s.push_str(&format!("{:02x}", b)); }
     s
+}
+
+/// Parse a 64-char hex string into a 32-byte group master key.
+fn hex_to_key(s: &str) -> Result<[u8; 32], String> {
+    if s.len() != 64 || s.len() % 2 != 0 {
+        return Err(format!("group key must be 64 hex chars, got {}", s.len()));
+    }
+    let mut out = [0u8; 32];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16)
+            .map_err(|e| format!("group key hex: {e}"))?;
+    }
+    Ok(out)
 }
 
 /// Generate a new murmur identity. Stores the postcard-serialized secret
@@ -400,4 +409,68 @@ pub fn _start() {
         let msg = format!("[murmur-id-wasm panic] {info}");
         web_sys::console::error_1(&JsValue::from_str(&msg));
     }));
+}
+
+// ============================================================================
+// GROUP bindings (Олег 2026-09-21, вариант 3 — sender-keys + epoch)
+// ============================================================================
+//
+// JS-интерфейс:
+//   group_new_key() -> JsCmdResult<String>            // 32B master key, hex
+//   group_encrypt(group_key_hex, epoch, group_id, sender_npub, plaintext_b64)
+//     -> JsCmdResult<String>  // base64 [nonce12][ct+tag]
+//   group_decrypt(group_key_hex, epoch, group_id, sender_npub, sealed_b64)
+//     -> JsCmdResult<String>  // base64 plaintext
+//
+// AAD привязан к group_id + sender + epoch (replay между группами/эпохами
+// падает по тегу). Сервер видит только opaque ct в обычных 1:1 envelope'ах.
+
+/// Generate a fresh random 32-byte group master key (hex). Creator calls this
+/// once on group creation; the key is distributed to members via 1:1 ECIES.
+#[wasm_bindgen]
+pub fn group_new_key() -> JsValue {
+    let key = murmur_id::group_random_key(&mut rand_core::OsRng);
+    to_js(&JsCmdResult::ok(hex_lower(&key)))
+}
+
+/// Encrypt a group message (base64 in/out) with the per-epoch group key.
+/// AAD binds group_id + sender_npub + epoch — tamper/replay fails the tag.
+#[wasm_bindgen]
+pub fn group_encrypt(group_key_hex: String, epoch: u64, group_id: String, sender_npub: String, plaintext_b64: String) -> JsValue {
+    let key = match hex_to_key(&group_key_hex) {
+        Ok(k) => k,
+        Err(e) => return to_js(&JsCmdResult::<String>::err(format!("group key: {e}"))),
+    };
+    let plaintext = match base64_decode(&plaintext_b64) {
+        Ok(v) => v,
+        Err(e) => return to_js(&JsCmdResult::<String>::err(format!("plaintext base64: {e}"))),
+    };
+    let mut nonce = [0u8; murmur_id::GROUP_NONCE_LEN];
+    use rand_core::RngCore;
+    rand_core::OsRng.fill_bytes(&mut nonce);
+    match murmur_id::group_encrypt(&key, epoch, &group_id, &sender_npub, &plaintext, nonce) {
+        Ok(sealed) => {
+            to_js(&JsCmdResult::ok(base64_encode(&sealed)))
+        }
+        Err(e) => to_js(&JsCmdResult::<String>::err(e)),
+    }
+}
+
+/// Decrypt a group message (base64 in/out) with the per-epoch group key.
+#[wasm_bindgen]
+pub fn group_decrypt(group_key_hex: String, epoch: u64, group_id: String, sender_npub: String, sealed_b64: String) -> JsValue {
+    let key = match hex_to_key(&group_key_hex) {
+        Ok(k) => k,
+        Err(e) => return to_js(&JsCmdResult::<String>::err(format!("group key: {e}"))),
+    };
+    let sealed = match base64_decode(&sealed_b64) {
+        Ok(v) => v,
+        Err(e) => return to_js(&JsCmdResult::<String>::err(format!("sealed base64: {e}"))),
+    };
+    match murmur_id::group_decrypt(&key, epoch, &group_id, &sender_npub, &sealed) {
+        Ok(pt) => {
+            to_js(&JsCmdResult::ok(base64_encode(&pt)))
+        }
+        Err(e) => to_js(&JsCmdResult::<String>::err(e)),
+    }
 }

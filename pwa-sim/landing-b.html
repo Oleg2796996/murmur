@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>MurMur — приватный мессенджер</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    min-height:100vh; background:#0a0e14; color:#e8eef5;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    display:flex; align-items:center; justify-content:center; padding:24px;
+    background-image:
+      radial-gradient(circle 500px at 15% 10%, rgba(34,158,217,.14), transparent),
+      radial-gradient(circle 400px at 90% 90%, rgba(94,234,212,.07), transparent);
+  }
+  .wrap { width:100%; max-width:900px; }
+  .top { display:flex; align-items:center; gap:10px; margin-bottom:36px; }
+  .top .dot { width:34px; height:34px; border-radius:10px; background:linear-gradient(135deg,#229ED9,#5eead4); display:flex; align-items:center; justify-content:center; font-size:18px; }
+  .top .name { font-size:18px; font-weight:700; }
+  .grid { display:grid; grid-template-columns:1.15fr .9fr; gap:48px; align-items:center; }
+  h1 { font-size:46px; line-height:1.08; font-weight:800; letter-spacing:-1.5px; }
+  h1 .grad { background:linear-gradient(90deg,#229ED9,#5eead4); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  .sub { margin-top:16px; font-size:17px; color:#8b9bb0; line-height:1.6; max-width:44ch; }
+  .cta-row { margin-top:28px; display:flex; gap:12px; align-items:center; }
+  .cta { padding:14px 28px; border-radius:12px; background:linear-gradient(135deg,#229ED9,#5eead4); color:#fff; font-weight:600; font-size:15px; text-decoration:none; box-shadow:0 8px 24px rgba(34,158,217,.3); }
+  .ghost { padding:14px 20px; border-radius:12px; border:1px solid rgba(255,255,255,.15); color:#c8d4e0; font-size:15px; text-decoration:none; }
+  .feats { margin-top:34px; display:grid; grid-template-columns:1fr 1fr; gap:14px 22px; }
+  .feat { font-size:14px; color:#8b9bb0; display:flex; gap:8px; align-items:center; }
+  .feat b { color:#e8eef5; font-weight:600; }
+  /* phone mockup */
+  .phone { width:250px; height:500px; margin:0 auto; border-radius:36px; border:2px solid rgba(255,255,255,.12); background:#10161f; padding:14px; box-shadow:0 30px 80px rgba(0,0,0,.5), 0 0 60px rgba(34,158,217,.12); position:relative; }
+  .phone .notch { width:90px; height:22px; border-radius:12px; background:#0a0e14; margin:0 auto 12px; }
+  .phone .bubble { border-radius:14px; padding:9px 12px; font-size:12.5px; margin-bottom:10px; max-width:85%; line-height:1.4; }
+  .phone .in { background:#1c2733; color:#c8d4e0; }
+  .phone .out { background:linear-gradient(135deg,#229ED9,#2b7fd9); color:#fff; margin-left:auto; }
+  .phone .lock { font-size:10px; opacity:.75; margin-top:4px; }
+  .phone .ph-img { height:90px; border-radius:12px; background:linear-gradient(135deg,#26405c,#1a2a3f); margin-bottom:10px; display:flex; align-items:center; justify-content:center; font-size:22px; }
+  .phone .input { position:absolute; bottom:14px; left:14px; right:14px; background:#1c2733; border-radius:12px; padding:9px 12px; font-size:12px; color:#8b9bb0; }
+  @media (max-width:760px) {
+    .grid { grid-template-columns:1fr; gap:32px; text-align:center; }
+    h1 { font-size:34px; }
+    .sub { margin:14px auto 0; }
+    .cta-row { justify-content:center; }
+    .feats { grid-template-columns:1fr; max-width:320px; margin:28px auto 0; text-align:left; }
+    .phone { display:none; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top"><div class="dot">🦞</div><div class="name">MurMur</div></div>
+    <div class="grid">
+      <div>
+        <h1>Приватность.<br><span class="grad">Без компромиссов.</span></h1>
+        <p class="sub">Сквозное шифрование, децентрализация и полное отсутствие слежки. Ключи — только у вас, сервер не видит содержания.</p>
+        <div class="cta-row">
+          <a class="cta" href="/">Открыть MurMur</a>
+          <a class="ghost" href="/">Установить PWA</a>
+        </div>
+        <div class="feats">
+          <div class="feat">🔐 <b>E2E-шифрование</b></div>
+          <div class="feat">🕶️ <b>Без телефона/email</b></div>
+          <div class="feat">⚡ <b>Пуши на все платформы</b></div>
+          <div class="feat">📎 <b>Файлы до 50 МБ</b></div>
+        </div>
+      </div>
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="ph-img">🖼️</div>
+        <div class="bubble out">Смотри, какое море 🌊<div class="lock">🔐 зашифровано</div></div>
+        <div class="bubble in">Красиво! А сервер видит это?<div class="lock">🔓 расшифровано</div></div>
+        <div class="bubble out">Нет. Никто кроме нас 🔒<div class="lock">🔐 зашифровано</div></div>
+        <div class="input">сообщение…</div>
+        <div style="height:50px"></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

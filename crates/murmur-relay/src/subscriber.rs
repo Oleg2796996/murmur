@@ -116,7 +116,7 @@ impl SubscriberHub {
     /// Returns number of subscribers reached.
     pub fn broadcast(&self, entry: &PendingEntry, store: Option<&crate::storage::MessageStore>) -> usize {
         let msg = WsMessage::Push(entry.clone());
-        let payload = PushPayload::from_entry(entry, store);
+        let payload = PushPayload::from_entry(entry, store, None);
         let mut inner = self.inner.lock();
         let mut n = 0usize;
         if let Some(list) = inner.subs.get_mut(&entry.to_npub) {

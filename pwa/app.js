@@ -151,7 +151,7 @@ async function loadWasmModule() {
         // v160g6-fix: cache-bust на pkg JS И wasm — Safari держит старый бинарник
         // без групповых экспортов (wasm.group_new_key is not a function).
         // Явный URL с query: import.meta.url resolution сьедает ?v= на relative path.
-        const bust = "v=160g8";
+        const bust = "v=160h1";
         const mod = await import("./pkg/murmur_id_wasm.js?" + bust);
         if (!_wasmReady) {
             const wasmUrl = new URL("pkg/murmur_id_wasm_bg.wasm?" + bust, location.href);
@@ -5185,7 +5185,7 @@ async function handleIncomingEnvelope(env) {
     if (!env || !env.ts) return;
     // Handle both formats: {from_npub, to} and {from, to}
     const fromNpub = env.from_npub || env.from;
-    const toField = env.to || "";
+    const toField = env.to || env.alias || "";
     if (fromNpub !== myNpub && toField !== myNpub) return;
 
     const peer = normalizePeer(fromNpub === myNpub ? toField : fromNpub);

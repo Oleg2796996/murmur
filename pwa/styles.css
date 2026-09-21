@@ -28,15 +28,15 @@
 
 html, body {
     height: 100%;
-    overflow: hidden;
     width: 100%;
-    position: fixed;
-    /* v160x2 (Олег 2026-09-20): fixed без явных координат — WebKit в iOS
-       standalone после клавиатуры НЕ возвращает body на место (сдвинутый
-       слой так и висит → пустота снизу, перезапуск не помогает). Якорим
-       жёстко в левый-верхний угол. */
-    top: 0;
-    left: 0;
+    /* v160x15 (Олег 10:15, пример Авито): position:fixed + overflow:hidden
+    на html/body — ПРИЧИНА сталой 783px-поверхности: документ не скроллится,
+    iOS после клавиатуры не пересчитывает viewport и не перерисовывает низ.
+    У Авито документ скроллируемый (fixed нет) — композер честно доходит до
+    физического низа (пиксель-разбор: pill bottom 794.7 = 844 - 49). Убираем
+    fixed и overflow:hidden: body 100%, messenger = 100dvh обычно ничего не
+    скроллит, но документ СКОЛЛИРУЕМ → iOS пересчитывает viewport и репейнтит,
+    а settle() (scroll 0,1→0,0) наконец-то РАБОТАЕТ (на fixed body был no-op). */
 }
 
 body {
@@ -490,6 +490,10 @@ button.small { padding: 8px 12px; font-size: 13px; }
     background: var(--panel);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    /* v160x17 (Telegram Web K): при открытой клавиатуре шапка скрыта —
+       нижняя часть клавиатуры не пережимает низ колонки, и композер
+       (обычный flex-child) прижимается к низу без дыры. */
+    body.keyboard-visible & { display: none; }
 }
 .chat-peer-name {
     font-weight: 600;
@@ -532,6 +536,8 @@ button.small { padding: 8px 12px; font-size: 13px; }
     display: flex;
     flex-direction: column;
     position: relative;
+    /* v160x17: композер снова в потоке — резерв НЕ нужен, убираем. */
+    padding-bottom: 0;
 }
 
 /* ================= EMPTY STATE (.no-chat) ================= */
@@ -640,16 +646,21 @@ button.small { padding: 8px 12px; font-size: 13px; }
     display: flex;
     flex-direction: column;
     gap: 6px;
-    /* v160x5 (Олег 20:20 «не сработало»): safe-bottom резерв УБРАН — высота
-       .messenger теперь честная (--vvh до физического дна), пиллюля должна
-       сидеть в самом краю. max() держит минимум 8px на Android/старых iOS. */
-    padding: 8px 8px 8px 8px;
-    /* v160x9: фон = цвет чата (как в Telegram iOS) — шов «панель темнее →
-       фон светлее» под пиллюлей исчезает; любые расхождения высот
-       становятся невидимыми. */
+    /* v160x17 (research: Telegram Web A/K source-verified): убрали fixed-композер
+       — он красился на промежуточной фазе закрытия клавиатуры и НЕ перерисовывался
+       (WebKit bug 254861, family). Telegram-подход: композер — ОБЫЧНЫЙ flex-child
+       в конце колонки (tweb: flex: 0 0 auto), шапка ЧАТА СКРЫТА при открытой
+       клавиатуре (body.keyboard-visible) — низ клавиатуры прижимается к низу
+       колонки, высота освобождается, никаких fixed-элементов внизу вообще. */
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    z-index: 30;
+    flex-shrink: 0;
+    padding: 8px 8px calc(var(--safe-bottom, 0px) + 8px) 8px;
+    /* v160x9: фон = цвет чата (как в Telegram iOS) — шов исчезает. */
     background: var(--bg);
     border-top: 1px solid var(--border);
-    flex-shrink: 0;
 }
 
 .input-row {
@@ -767,6 +778,11 @@ button.small { padding: 8px 12px; font-size: 13px; }
     .sidebar { width: 340px; flex-shrink: 0; }
     .chat-view { display: flex; }
     .back-btn { display: none; } /* no back on desktop — sidebar always visible */
+    /* v160x17: на десктопе клавиатуры нет — keyboard-visible не ставится,
+       шапка всегда видима; композер в потоке как раньше. */
+    .input-area { position: static; }
+    .chat-panel { padding-bottom: 0; }
+    .chat-header { display: flex !important; }
 }
 
 /* ================= MOBILE: stacked sidebar & chat-view, switch via JS ================= */

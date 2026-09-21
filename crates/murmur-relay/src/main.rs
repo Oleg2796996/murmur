@@ -93,6 +93,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(expired) if !expired.is_empty() => {
                     info!(count = expired.len(), "TTL cleanup: processing expired envelopes");
                     for e in &expired {
+                        // v160s6d (Олег 2026-09-17): различаем «истёк НЕ забранным
+                        // (прожил полные 24ч: expires_at - ts > 600)» от «истёк
+                        // ПОСЛЕ доставки (TTL сокращён до 5 мин при живой доставке,
+                        // v160m honest relay)». Нотификация «undelivered» — ТОЛЬКО
+                        // для никогда не доставленных. Доставленные — тихо удаляем
+                        // (приватность #131: отправитель уже получил ✓✓, фейковое
+                        // «адресат не забрал» — мусор). Тест 17.09: iPhone в
+                        // авиарежиме не при чём — доставленные сообщения давали
+                        // «недоставлено 3→7» от system:relay нотификаций.
+                        let lived_full_ttl = e.expires_at - e.ts > 600;
+                        if lived_full_ttl {
                         // Получатель так и не зашел в сеть за 24h.
                         // v149: уведомление уходит отправителю напрямую по его
                         // npub (from_npub) — alias-lookup удалён.
@@ -113,6 +124,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Err(err) => {
                                 warn!(err=%err, "failed to create undelivered notification");
                             }
+                        }
+                        } else {
+                            // доставленное истекло по 5-мин TTL — тихо, без нотификации
+                            info!(envelope_hash = %e.envelope_hash, "expired after delivery — silent delete (no undelivered notification)");
                         }
                         // Удаляем просроченный envelope (v160o: refs сносятся,
                         // blob'ы остаются как orphan до 24h от created_at).

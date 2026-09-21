@@ -9,7 +9,7 @@
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
 const APP_DISPLAY_NAME = "MurMur";
-const SW_VERSION = "murmur-sw18"; // v160y22: fix ReferenceError isDesktop → platform split restored
+const SW_VERSION = "murmur-sw23"; // v160b4: badge из push payload (сервер кладёт точный unread)
 
 function pushDebugToClients(event, detail) {
   try {
@@ -90,25 +90,25 @@ self.addEventListener("push", (event) => {
     },
   };
   pushDebugToClients("push-show", "isMac=" + isMac + " isIOS=" + isIOS + " title='" + title.slice(0, 40) + "' body='" + (options.body || "").slice(0, 40) + "' alias=" + (payload.alias || "?"));
+  // v160b4 (Олег 2026-09-17): badge из push payload — сервер кладёт точный
+  // unread (unread_badge_count) прямо в payload.badge, SW просто вызывает
+  // setAppBadge синхронно (как в sw19, что сработал: WebKit разрешает
+  // setAppBadge в push-хендлере, iOS 16.4+). Ноль IDB в SW, ноль гонок.
+  // IDB-зеркало в app.js осталось для страницы (localStorage недоступен SW,
+  // но страница перезаписывает точным total при живом приложении и так).
+  try {
+    const b = typeof payload.badge === "number" && payload.badge > 0 ? payload.badge : 1;
+    if (navigator.setAppBadge) {
+      navigator.setAppBadge(b).then(() => {
+        pushDebugToClients("badge-sw-set", "badge=" + b + " srv=" + (payload.badge || 0));
+      }).catch((e) => {
+        pushDebugToClients("badge-sw-error", e && e.message || String(e));
+      });
+    }
+  } catch (e) { pushDebugToClients("badge-sw-error", e && e.message || String(e)); }
   event.waitUntil(
-    self.registration.showNotification(title, options).then(() => {
-      pushDebugToClients("push-shown", "ok tag=" + options.tag);
-    }).catch((e) => {
-      pushDebugToClients("push-show-error", e && e.message || String(e));
-    })
-  );
-});
-
-self.addEventListener("notificationclick", (event) => {
-  pushDebugToClients("notificationclick", "tag=" + (event.notification && event.notification.tag || "?"));
-  event.notification.close();
-  const targetUrl = "/";
-  event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((wcls) => {
-      for (const c of wcls) {
-        if (c.url.endsWith("/") && "focus" in c) return c.focus();
-      }
-      if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
-    })
+    self.registration.showNotification(title, options)
+      .then(() => { pushDebugToClients("push-shown", "ok tag=" + options.tag); })
+      .catch((e) => { pushDebugToClients("push-show-error", e && e.message || String(e)); })
   );
 });

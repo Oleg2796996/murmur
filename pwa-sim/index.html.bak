@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="theme-color" content="#0f1419">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+    <title>Murmur</title>
+    <link rel="stylesheet" href="styles.v7.css?v=1787152345">
+    <link rel="manifest" href="manifest.json">
+    <script>
+    // Inline SW-killer (runs before module load)
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister()));
+    }
+    if (window.caches) {
+        caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
+    }
+    </script>
+</head>
+<body>
+    <div id="root"></div>
+    <noscript>Murmur requires JavaScript.</noscript>
+    <script type="module" src="app_final_v5.js?v=1787155030" onload="window.__murmurModuleLoaded=true;console.log('[murmur] module script load event')" onerror="console.error('[murmur] module script FAILED to load')"></script>
+    <script>
+    // 4-sec failsafe: if module didn't execute, show warning
+    setTimeout(() => {
+        if (!window.__murmurModuleLoaded) {
+            const bar = document.createElement('div');
+            bar.style.cssText = 'position:fixed;top:0;left:0;right:0;background:orange;color:black;padding:12px;text-align:center;font-weight:bold;z-index:99999;';
+            bar.textContent = '⚠️ JS-модуль не загрузился. Жёсткий refresh (Cmd+Shift+R).';
+            document.body.appendChild(bar);
+        }
+    }, 4000);
+    </script>
+</body>
+</html>

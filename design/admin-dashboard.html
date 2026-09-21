@@ -152,15 +152,19 @@ async function load() {
     const s = await r.json();
     document.getElementById("refreshed").textContent =
       "обновлено " + new Date().toLocaleTimeString("ru-RU", {hour:"2-digit", minute:"2-digit", second:"2-digit"});
+    // v160s4: aggregates-only (Олег 2026-09-16). total_users = нарастающий
+    // итог по хэшам (без PII); stats_daily = сводная таблица по дням.
+    // envelope-счётчики вторичны (TTL 5 мин после доставки сносит всё).
+    const todayRow = (s.stats_daily || []).find(r => r[0] === Math.floor(Date.now()/1000/86400)*86400);
     document.getElementById("cards").innerHTML = [
-      card("Пользователи (npub, всего)", fmt(s.unique_peers_total), "уникальные идентичности, увиденные релеем", "accent"),
-      card("Активные 24ч", fmt(s.unique_peers_24h), "npub с активностью за сутки", "good"),
-      card("Push-подписки", fmt(s.push_subscriptions), "зарегистрированные устройства"),
+      card("Пользователи всего", fmt(s.total_users ?? s.unique_peers_total), "нарастающий итог · без хранения npub", "accent"),
+      card("Активные сегодня", fmt(todayRow ? todayRow[2] : 0), "уникальные пользователи за сегодня", "good"),
+      card("Сообщения сегодня", fmt(todayRow ? todayRow[3] : 0), "доставленные за сегодня"),
+      card("В TTL-окне", fmt(s.envelopes_pending), "недоставленные · сотрутся сами"),
       card("WS сейчас", fmt(s.ws_connections_now), "живые соединения"),
-      card("Сообщения 24ч", fmt(s.envelopes_24h), `всего ${fmt(s.envelopes_total)} · в TTL-окне ${fmt(s.envelopes_pending)}`),
       card("Медиа всего", fmt(s.blobs_total), `${fmtBytes(s.blobs_bytes_total)} · за 24ч ${fmt(s.blobs_24h)}`),
     ].join("");
-    renderChart(document.getElementById("chart-msgs"), s.msgs_hourly, hourLabel, 1);
+    renderChart(document.getElementById("chart-msgs"), (s.stats_daily || []).slice(0, 14).map(r => [r[0], r[3]]).reverse(), dayLabel, 1);
     renderChart(document.getElementById("chart-blobs"), s.blobs_daily, dayLabel, 1);
   } catch (e) {
     const cards = document.getElementById("cards");

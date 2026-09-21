@@ -186,6 +186,17 @@ pub fn accept_envelope(
         return Err("json envelope: missing 'sig' field".to_string());
     }
 
+    // v160s6c (Олег 2026-09-17): is_receipt вычисляем РАНЬШЕ (до persist),
+    // чтобы record_msg_envelope не считал receipts/служебные envelope'ы как
+    // сообщения. Тест 17.09: 2 msgs → "4 отправлено" — каждое полученное
+    // сообщение генерирует receipt (✓✓), receipt идёт через /api/envelope
+    // как обычный envelope и попадал в счётчик.
+    let is_service = parsed.json_path
+        && serde_json::from_slice::<serde_json::Value>(&parsed.payload)
+            .ok()
+            .and_then(|v| v.get("_kind").and_then(|k| k.as_str()).map(|s| s != ""))
+            .unwrap_or(false);
+
     // 3. Hash the inner payload.
     let mut hasher = Sha3_256::new();
     hasher.update(&parsed.payload);
@@ -220,6 +231,14 @@ pub fn accept_envelope(
             }
         };
         if inserted {
+            // v160s5: счётчик сообщений инкрементится при ПРИЁМЕ envelope релеем
+            // (1 раз, dedupe по hash — без дублей от повторных опросов).
+            // Хэш npub (SHA-256), не сам npub (Олег 2026-09-16).
+            // v160s6c: is_service = false — НЕ считать receipts/служебные
+            // envelope'ы (✓✓) как отправленные сообщения.
+            if let Err(e) = store.record_msg_envelope(&hash_hex, &parsed.sender_npub, ts as i64, is_service) {
+                warn!(err=%e, "record_msg_envelope failed");
+            }
             // v149: серверный unread удалён (клиент считает сам, lesson #125).
         } else {
             // Duplicate envelope — re-broadcast (peer мог подключиться между
@@ -230,8 +249,10 @@ pub fn accept_envelope(
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs() as i64)
                     .unwrap_or(0);
-                if let Err(e) = store.shorten_expires_at(&hash_hex, now + 300) {
-                    warn!(err=%e, "shorten_expires_at failed (dup)");
+                // v160w4c: WS live-доставка НЕ читает сообщение — не ставим read_at=1,
+                // иначе наклейка не растёт (badge всегда 1 при живом WS у получателя).
+                if let Err(e) = store.shorten_expires_at_keep_unread(&hash_hex, now + 300) {
+                    warn!(err=%e, "shorten_expires_at_keep_unread failed (dup)");
                 }
             }
             return Ok((hash_hex, n));
@@ -239,6 +260,18 @@ pub fn accept_envelope(
     }
 
     // 6. Broadcast to WS subscribers.
+    // v160w3 (Олег 2026-09-18 22:41): badge для web-push считается ЗДЕСЬ —
+    // синхронно после insert и до broadcast/push-delivery. Гонка «async
+    // deliver vs клиентский read_at=1» убрана.
+    // v160w4b (Олег 2026-09-19 11:00): БЕЗ «+1» — insert случился ДО этого
+    // подсчёта, unread_badge_count уже видит текущий envelope (read_at=0,
+    // получатель ещё не забрал). «+1» от старой async-схемы задваивал:
+    // 1 сообщение → наклейка «2» (логи 19.09: badge=2 при delivered=1).
+    // Моментальная гонка «poll ставит read_at=1 до подсчёта» → badge=0 —
+    // не страшно: страница живая и перезапишет точным total.
+    let badge_at_accept: i64 = store
+        .map(|s| s.unread_badge_count(&recipient_npub).max(0))
+        .unwrap_or(0);
     let n = hub.broadcast(&entry, store);
     info!(to=%recipient_npub, hash=%hash_hex, subs=n, "envelope accepted + fanout");
 
@@ -257,8 +290,11 @@ pub fn accept_envelope(
                 .unwrap_or(0);
             let short_ttl = now + 300; // 5 minutes после live-доставки
 
-            if let Err(e) = store.shorten_expires_at(&hash_hex, short_ttl) {
-                warn!(err=%e, "shorten_expires_at failed");
+            // v160w4c (Олег 2026-09-19): keep_unread — live-WS доставка НЕ
+            // помечает прочитанным. Раньше read_at=1 здесь обнулял unread между
+            // пушами → iPhone-наклейка застревала на 1 (badge=1,1,1 в логах).
+            if let Err(e) = store.shorten_expires_at_keep_unread(&hash_hex, short_ttl) {
+                warn!(err=%e, "shorten_expires_at_keep_unread failed");
             }
         }
     }
@@ -278,7 +314,7 @@ pub fn accept_envelope(
             info!(to=%recipient_npub, "receipt envelope: WS-only, no web-push");
         } else {
         let push = push.clone();
-        let payload = crate::push::PushPayload::from_entry(&entry, store);
+        let payload = crate::push::PushPayload::from_entry(&entry, store, Some(badge_at_accept));
         let npub_for_log = recipient_npub.clone();
         tokio::spawn(async move {
             match push.deliver(&payload).await {
