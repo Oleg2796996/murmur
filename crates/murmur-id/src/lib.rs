@@ -600,3 +600,165 @@ mod tests {
         assert_eq!(id.public().agreement_pubkey(), restored.agreement_pubkey());
     }
 }
+
+// ============================================================================
+// GROUP crypto — sender-keys + epoch (Олег 2026-09-21, вариант 3)
+// ============================================================================
+//
+// Групповые сообщения шифруются СИММЕТРИЧНЫМ ключом группы (AES-256-GCM),
+// который раздаётся участникам через существующий 1:1 ECIES канал. Ключ
+// привязан к ЭПОХЕ: HKDF-SHA256(salt=GROUP_SALT, ikm=group_key,
+// info="murmur-group-v1-epoch-<N>"). При выходе участника epoch
+// инкрементится -> новый ключ -> старый недействителен для НОВЫХ сообщений.
+//
+// Сервер не видит ни ключей, ни plaintext — только opaque ciphertext в
+// обычных 1:1 envelope'ах (клиент-сайд фанаут).
+
+/// HKDF salt — domain separation для групповых ключей.
+pub const GROUP_SALT: &[u8] = b"murmur-group-v1";
+/// Nonce length for group AES-256-GCM.
+pub const GROUP_NONCE_LEN: usize = 12;
+
+/// Derive the per-epoch AES-256-GCM key from the group's master key.
+///
+/// key = HKDF-SHA256(salt=GROUP_SALT, ikm=group_master_key,
+///                   info="murmur-group-v1-epoch-<epoch>")[0..32]
+pub fn group_epoch_key(group_master_key: &[u8; 32], epoch: u64) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(Some(GROUP_SALT), group_master_key);
+    let mut out = [0u8; 32];
+    hk.expand(format!("murmur-group-v1-epoch-{}", epoch).as_bytes(), &mut out)
+        .expect("hkdf expand group epoch key (32 bytes always fits)");
+    out
+}
+
+/// Generate a fresh random group master key (creator calls this on group create).
+pub fn group_random_key<R: RngCore + CryptoRng>(rng: &mut R) -> [u8; 32] {
+    let mut k = [0u8; 32];
+    rng.fill_bytes(&mut k);
+    k
+}
+
+/// Encrypt a group message with the per-epoch key.
+///
+/// Layout (same as SealedEnvelope minus ephemeral): [nonce: 12][ct + 16B tag].
+/// AAD binds group_id + epoch + sender_npub — cross-group/wrong-epoch replay
+/// of a stolen ciphertext fails tag verification.
+pub fn group_encrypt(
+    group_master_key: &[u8; 32],
+    epoch: u64,
+    group_id: &str,
+    sender_npub: &str,
+    plaintext: &[u8],
+    nonce: [u8; GROUP_NONCE_LEN],
+) -> Result<Vec<u8>, IdentityError> {
+    let aes_key = group_epoch_key(group_master_key, epoch);
+    let cipher = Aes256Gcm::new_from_slice(&aes_key)
+        .map_err(|e| IdentityError::Ecies(format!("group key init: {e}")))?;
+    // AAD: length-prefixed group_id || sender_npub || epoch (8B BE)
+    let mut aad = Vec::with_capacity(group_id.len() + sender_npub.len() + 9);
+    aad.extend_from_slice(&(group_id.len() as u32).to_be_bytes());
+    aad.extend_from_slice(group_id.as_bytes());
+    aad.extend_from_slice(sender_npub.as_bytes());
+    aad.extend_from_slice(&epoch.to_be_bytes());
+    let ct = cipher
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload { msg: plaintext, aad: &aad },
+        )
+        .map_err(|e| IdentityError::Ecies(format!("group encrypt: {e}")))?;
+    let mut out = Vec::with_capacity(GROUP_NONCE_LEN + ct.len());
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&ct);
+    let mut key_zero = aes_key;
+    key_zero.zeroize();
+    Ok(out)
+}
+
+/// Parse group sealed bytes: [nonce: 12][ct].
+pub fn group_sealed_parse(bytes: &[u8]) -> Result<([u8; GROUP_NONCE_LEN], &[u8]), IdentityError> {
+    if bytes.len() < GROUP_NONCE_LEN + 16 {
+        return Err(IdentityError::Ecies(format!(
+            "group sealed too short: {} bytes (need nonce 12 + tag 16)",
+            bytes.len()
+        )));
+    }
+    let mut nonce = [0u8; GROUP_NONCE_LEN];
+    nonce.copy_from_slice(&bytes[..GROUP_NONCE_LEN]);
+    Ok((nonce, &bytes[GROUP_NONCE_LEN..]))
+}
+
+/// Decrypt a group message with the per-epoch key. AAD must match encrypt.
+pub fn group_decrypt(
+    group_master_key: &[u8; 32],
+    epoch: u64,
+    group_id: &str,
+    sender_npub: &str,
+    sealed: &[u8],
+) -> Result<Vec<u8>, IdentityError> {
+    let (nonce, ct) = group_sealed_parse(sealed)?;
+    let aes_key = group_epoch_key(group_master_key, epoch);
+    let cipher = Aes256Gcm::new_from_slice(&aes_key)
+        .map_err(|e| IdentityError::Ecies(format!("group key init: {e}")))?;
+    let mut aad = Vec::with_capacity(group_id.len() + sender_npub.len() + 9);
+    aad.extend_from_slice(&(group_id.len() as u32).to_be_bytes());
+    aad.extend_from_slice(group_id.as_bytes());
+    aad.extend_from_slice(sender_npub.as_bytes());
+    aad.extend_from_slice(&epoch.to_be_bytes());
+    let pt = cipher
+        .decrypt(
+            Nonce::from_slice(&nonce),
+            Payload { msg: ct, aad: &aad },
+        )
+        .map_err(|e| IdentityError::Ecies(format!("group decrypt (bad tag / wrong key / wrong epoch): {e}")))?;
+    let mut key_zero = aes_key;
+    key_zero.zeroize();
+    Ok(pt)
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+    use rand::rngs::OsRng;
+
+    #[test]
+    fn group_roundtrip() {
+        let key = group_random_key(&mut OsRng);
+        let nonce = [0x42u8; GROUP_NONCE_LEN];
+        let sealed = group_encrypt(&key, 1, "grp1abc", "npub1sender", b"privet gruppa", nonce)
+            .expect("encrypt");
+        assert_eq!(sealed.len(), GROUP_NONCE_LEN + 13 + 16);
+        let pt = group_decrypt(&key, 1, "grp1abc", "npub1sender", &sealed).expect("decrypt");
+        assert_eq!(pt, b"privet gruppa");
+    }
+
+    #[test]
+    fn group_epoch_separation() {
+        // Старый ключ эпохи НЕ расшифровывает сообщение новой эпохи (ротация при выходе).
+        let key = group_random_key(&mut OsRng);
+        let nonce = [0x43u8; GROUP_NONCE_LEN];
+        let sealed = group_encrypt(&key, 2, "grp1abc", "npub1s", b"after rotation", nonce)
+            .expect("encrypt epoch 2");
+        let r = group_decrypt(&key, 1, "grp1abc", "npub1s", &sealed);
+        assert!(r.is_err(), "epoch-1 key must NOT decrypt epoch-2 message");
+    }
+
+    #[test]
+    fn group_aad_binds_sender_and_group() {
+        // Чужой group_id или чужой sender — tag не сходится (replay между группами).
+        let key = group_random_key(&mut OsRng);
+        let nonce = [0x44u8; GROUP_NONCE_LEN];
+        let sealed = group_encrypt(&key, 1, "grp1abc", "npub1alice", b"for alice only", nonce)
+            .expect("encrypt");
+        assert!(group_decrypt(&key, 1, "grp1OTHER", "npub1alice", &sealed).is_err());
+        assert!(group_decrypt(&key, 1, "grp1abc", "npub1bob", &sealed).is_err());
+        let pt = group_decrypt(&key, 1, "grp1abc", "npub1alice", &sealed).expect("right aad ok");
+        assert_eq!(pt, b"for alice only");
+    }
+
+    #[test]
+    fn group_epoch_key_deterministic() {
+        let key = group_random_key(&mut OsRng);
+        assert_eq!(group_epoch_key(&key, 5), group_epoch_key(&key, 5));
+        assert_ne!(group_epoch_key(&key, 5), group_epoch_key(&key, 6));
+    }
+}
