@@ -170,7 +170,7 @@ async function ensureWasm() {
     await loadWasmModule();
 }
 
-const RELAY = "https://murmur.senswifi.ru";
+const RELAY = "https://murmurchat.org";
 const LS_NPUB = "murmur.npub";
 const LS_KEY = "murmur.sk";
 const LS_NAME = "murmur.name";
@@ -472,6 +472,13 @@ async function saveToOutbox(msg, plaintext, attachmentsPlaintext) {
         // у _sanitizeAttachmentForStorage); постер остаётся — превью рисуется,
         // plaintext доставит remote-decrypt (blob живёт 24h на relay).
         attachments_meta: (attachmentsPlaintext || []).map(_sanitizeAttachmentForStorage),
+        // v160y50 (Олег 23:44: «когда отвечаешь на конкретное сообщение (цитата),
+        // у того кто отправляет после обновления в чате остается только
+        // отправленное сообщение без привязи к сообщению на которое он
+        // ответил»): reply_to в outbox — иначе loadHistory outbox-путь
+        // (isOutgoing local-branch) собирает msg без reply_to → цитата
+        // теряется при первом полле/reload, остаётся текст без привязки.
+        reply_to: msg.reply_to || null,
         ts: msg.ts,
         from: msg.from,
         to: msg.to,
@@ -547,6 +554,8 @@ function loadOutboxForPeer(peerNpub) {
             // обычно в IDB-версии. Берём поле _hash из любого где он есть.
             const merged = { ...outbox[k] };
             if (!merged._hash && v._hash) merged._hash = v._hash;
+            // v160y52: reply_to тоже переносим при склейке (цитата после перезахода)
+            if (!merged.reply_to && v.reply_to) merged.reply_to = v.reply_to;
             if (!merged.attachments_meta?.length && v.attachments_meta?.length) merged.attachments_meta = v.attachments_meta;
             if (!merged.attachments?.length && v.attachments?.length) merged.attachments = v.attachments;
             if (merged.body === undefined && v.body !== undefined) merged.body = v.body;
@@ -1138,7 +1147,7 @@ async function pollHistoryForGroup(gid) {
         // убран, своих копий на сервере больше нет).
         if (m === myNpub) continue;
         try {
-            const r = await fetch(RELAY + "/api/history?npub=" + encodeURIComponent(myNpub) + "&peer=" + encodeURIComponent(m) + "&limit=" + HISTORY_LIMIT + "&_t=" + Date.now(), { cache: "no-store", credentials: "omit" });
+            const r = await fetch(RELAY + "/api/history?npub=" + encodeURIComponent(myNpub) + "&peer=" + encodeURIComponent(m) + "&limit=" + HISTORY_LIMIT + "&visible=" + (document.visibilityState === "visible" ? 1 : 0) + "&_t=" + Date.now(), { cache: "no-store", credentials: "omit" });
             if (!r.ok) continue;
             const j = await r.json();
             for (const msg of (j.messages || [])) {
@@ -1335,13 +1344,36 @@ async function consumeReceiptRow(m, hash, fromPeer) {
         }
         let ct = null;
         if (m._server_msg && typeof m._server_msg.ct === "string") ct = m._server_msg.ct;
+        // v160y53: WS-путь — сервер кладёт полный envelope в ws_envelope_b64;
+        // handleIncomingEnvelope распаковывает его в env.ct/body до вызова.
+        if (!ct && typeof m.body === "string" && m.body.length > 0) {
+            // v160y54: WS-путь — m.body = JSON wire-конверта с ct (isReceiptRow
+            // уже распарсил m.body как JSON); повторный парс даёт inner.ct.
+            try {
+                const innerBody = JSON.parse(m.body);
+                if (innerBody && typeof innerBody.ct === "string") ct = innerBody.ct;
+            } catch (e) {
+                // m.body не JSON (base64-тело, старый формат) — попробуем как base64-JSON ниже.
+                try {
+                    const innerB64 = JSON.parse(atob(m.body));
+                    if (innerB64 && typeof innerB64.ct === "string") ct = innerB64.ct;
+                } catch (e2) {}
+            }
+        }
         if (!ct && typeof m.body_base64 === "string" && m.body_base64.length > 0) {
             try {
                 const inner = JSON.parse(atob(m.body_base64));
                 if (inner && typeof inner.ct === "string") ct = inner.ct;
             } catch (e) {}
         }
-        if (!ct) return;
+        if (!ct) {
+            // v160y53: больше НЕ молчим — логируем (иначе такие потерянные ✓✓
+            // ловятся только вслепую, урок по квитанции 25.09).
+            console.warn("[receipt] consume: no ct in receipt row, hash=", (hash || "").slice(0, 12),
+                "_kind=", m._kind, "has_body=", typeof m.body === "string" && m.body.length > 0,
+                "has_body64=", typeof m.body_base64 === "string" && m.body_base64.length > 0);
+            return;
+        }
         const plain = await decryptEnvelope(ct);
         applyReceipts(fromPeer, (plain && plain.msgs) || []);
     } catch (e) {
@@ -1427,6 +1459,15 @@ function b64ToBlob(b64, mime) {
 }
 window.b64ToBlob = b64ToBlob; // v160p: глобальный alias — blob-cache paste в sendMessage
 
+// Convert base64 string to ArrayBuffer (v160y37: OPFS plaintext-put при отправке).
+function b64ToAb(b64) {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out.buffer;
+}
+window.b64ToAb = b64ToAb;
+
 // Render an outgoing attachment from local plaintext (no decrypt round-trip).
 function renderOutgoingAttachment({ mime, name, url, size, poster, att }) {
     const figure = document.createElement("figure");
@@ -1437,7 +1478,12 @@ function renderOutgoingAttachment({ mime, name, url, size, poster, att }) {
         img.alt = name || "image";
         img.loading = "lazy";
         img.className = "attach-image";
-        img.onclick = () => openFullscreen(url, mime);
+        img.onclick = (ev) => {
+            // v160y27: same fix — тап по фото = только fullscreen, reply долгим нажатием.
+            ev.stopPropagation();
+            ev.preventDefault();
+            openFullscreen(url, mime);
+        };
         // v160p9 FIX (Олег 20:40 «на маке опять мелки превью»): same fix —
         // явная width из natural-размера после load (bubble не схлопывается).
         img.addEventListener("load", () => {
@@ -1468,6 +1514,15 @@ function renderOutgoingAttachment({ mime, name, url, size, poster, att }) {
         thumb.className = "video-thumb";
         thumb.src = url + "#t=0.1";
         if (poster) thumb.poster = poster; // v160d: кадр от отправителя (iOS)
+        // v160y34 (Олег 2026-09-24 «вместо превью черный кадр»): если за 3.5с
+        // ни постера, ни декодированного кадра — CSS-чип «🎥 Видео» на тёмном
+        // (вместо пустого чёрного квадрата). video-frame-ready от rVFC
+        // (murmurSetupVideoPreview) снимает чип, когда кадр реально показан.
+        setTimeout(() => {
+            if (!wrap.classList.contains("video-frame-ready") && !thumb.poster) {
+                wrap.classList.add("video-fallback-chip");
+            }
+        }, 3500);
         const playBtn = document.createElement("div");
         playBtn.className = "video-play-btn";
         playBtn.textContent = "▶";
@@ -1475,7 +1530,14 @@ function renderOutgoingAttachment({ mime, name, url, size, poster, att }) {
         wrap.appendChild(playBtn);
         // v160p: полный плеер теперь window.openVideoFullscreen (self-healing,
         // re-resolve из blob-кэша при dead URL) — дубль убран.
-        wrap.onclick = () => openVideoFullscreen(url, mime, att.name || att._plainName || name, att);
+        // v160y30 (Олег 22:44 «Вариант B и для исходящих»): у входящих (render-attachments)
+        // stopPropagation есть, здесь НЕ было — клик всплывал до messages-area
+        // → wireBubbleTrap открывал reply-бар ПОВЕРХ fullscreen. Тап = только fullscreen.
+        wrap.onclick = (ev) => {
+            ev.stopPropagation();
+            ev.preventDefault();
+            openVideoFullscreen(url, mime, att.name || att._plainName || name, att);
+        };
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(thumb, url);
         figure.appendChild(wrap);
         if (window.murmurSetupVideoPreview) window.murmurSetupVideoPreview(wrap, thumb, url);
@@ -1485,6 +1547,8 @@ function renderOutgoingAttachment({ mime, name, url, size, poster, att }) {
         a.controls = true;
         a.preload = "metadata";
         a.className = "attach-audio";
+        // v160y30: клик по контролам не всплывает в reply-бар (контролы работают).
+        a.onclick = (ev) => ev.stopPropagation();
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(a, url);
         figure.appendChild(a);
     } else {
@@ -1493,6 +1557,9 @@ function renderOutgoingAttachment({ mime, name, url, size, poster, att }) {
         link.download = name || "file";
         link.className = "attach-file";
         link.textContent = `📎 ${name || "file"} (${formatSize(size)})`;
+        // v160y30: клик по ссылке не всплывает в reply-бар; download работает
+        // (preventDefault НЕ ставим — ссылка должна качать).
+        link.addEventListener("click", (ev) => ev.stopPropagation());
         figure.appendChild(link);
     }
     return figure;
@@ -1672,6 +1739,101 @@ function wireBubbleTap() {
     });
 }
 
+// v160y27 (Олег 19:31 «сохранить обе функции, улучшить UX»): long-press → reply
+// (Telegram-стиль). Тап по фото/видео = fullscreen (stopPropagation в
+// render-attachments), долгое нажатие на ЛЮБОЕ сообщение (текст или вложение) =
+// reply-бар. Отмена при скролле (>10px сдвиг) — иначе случайный reply при
+// прокрутке ленты. contextmenu preventDefault — иначе системное меню iOS
+// («Сохранить фото») конфликтует с нашим reply-баром.
+// Хинт: первый long-press показывает toast «Долгое нажатие — ответить» (1 раз).
+const LONG_PRESS_MS = 450;
+const LONG_PRESS_MOVE_PX = 10;
+let __longPressFired = false; // хинт показан?
+
+function showLongPressHint() {
+    if (__longPressFired) return;
+    __longPressFired = true;
+    try { localStorage.setItem("murmur.longpress-hint", "1"); } catch (e) {}
+    const t = document.createElement("div");
+    t.textContent = "Долгое нажатие — ответить";
+    t.style.cssText = "position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:rgba(0,0,0,.8);color:#fff;padding:8px 14px;border-radius:8px;font-size:13px;z-index:1001;pointer-events:none;transition:opacity .4s;";
+    document.body.appendChild(t);
+    setTimeout(() => { t.style.opacity = "0"; setTimeout(() => t.remove(), 500); }, 1800);
+}
+
+function wireLongPressReply() {
+    const area = document.getElementById("messages-area");
+    if (!area) return;
+    if (area.__murmurLongPressWired) return;
+    area.__murmurLongPressWired = true;
+    try { __longPressFired = !!localStorage.getItem("murmur.longpress-hint"); } catch (e) {}
+
+    let pressTimer = null;
+    let startX = 0, startY = 0;
+
+    const clearTimer = () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } };
+
+    const findMsg = (target) => {
+        const b = target.closest && target.closest(".bubble");
+        if (!b || b.classList.contains("bubble-system")) return null;
+        const sig = b.getAttribute("data-sig");
+        if (!sig) return null;
+        const peer = activePeer;
+        if (!peer || !messages[peer]) return null;
+        return messages[peer].find((x) => (x._sig === sig) || ((x.from || x.from_npub || "") + x.ts === sig)) || null;
+    };
+
+    const fireReply = (ev, m) => {
+        clearTimer();
+        if (!m) return;
+        if (ev.cancelable) ev.preventDefault();
+        showReplyBar(m);
+        showLongPressHint();
+        // тактильный отклик (iOS/Android, где доступен)
+        try { navigator.vibrate && navigator.vibrate(15); } catch (e) {}
+    };
+
+    // Touch (iOS/Android primary path)
+    area.addEventListener("touchstart", (ev) => {
+        if (ev.touches.length !== 1) { clearTimer(); return; }
+        const t = ev.touches[0];
+        startX = t.clientX; startY = t.clientY;
+        const m = findMsg(t.target);
+        if (!m) return; // вне bubble — не заводим таймер (scroll свободно)
+        clearTimer();
+        pressTimer = setTimeout(() => fireReply(ev, m), LONG_PRESS_MS);
+    }, { passive: true });
+
+    area.addEventListener("touchmove", (ev) => {
+        if (!pressTimer) return;
+        const t = ev.touches[0];
+        if (!t) { clearTimer(); return; }
+        const dx = t.clientX - startX, dy = t.clientY - startY;
+        if (dx * dx + dy * dy > LONG_PRESS_MOVE_PX * LONG_PRESS_MOVE_PX) clearTimer(); // скролл — отмена
+    }, { passive: true });
+
+    area.addEventListener("touchend", clearTimer, { passive: true });
+    area.addEventListener("touchcancel", clearTimer, { passive: true });
+
+    // Desktop: правый клик / длинный mousedown (mouse long-press —
+    // convenience для мака). contextmenu = reply (Telegram-стиль desktop).
+    area.addEventListener("contextmenu", (ev) => {
+        const m = findMsg(ev.target);
+        if (!m) return; // вне bubble — системное меню свободно
+        ev.preventDefault();
+        fireReply(ev, m);
+    });
+
+    // Системное меню «Сохранить фото» на iOS: долгий тап по img триггерит
+    // contextmenu — гасим его только когда наш long-press уже сработал
+    // (иначе iOS покажет системное меню поверх reply-бара). img.long-press
+    // стреляет раньше — preventDefault здесь держит системное меню закрытым.
+    area.addEventListener("touchend", (ev) => {
+        // no-op: системное меню iOS показывается ТОЛЬКО если таймер не стрелял;
+        // fireReply уже предотвратил contextmenu через ev.cancelable path.
+    }, { passive: true });
+}
+
 function loadContactNames() {
     try { return JSON.parse(localStorage.getItem(LS_CONTACT_NAMES) || "{}"); }
     catch (e) { return {}; }
@@ -1834,10 +1996,12 @@ function enterMessenger() {
     // «TypeError: Load failed» → чип «Не удалось загрузить модуль шифрования»,
     // и WebKit запоминает неудачу до перезагрузки страницы. Греем оба модуля
     // сразу после входа — к моменту attach они уже в памяти.
-    import("./attachments.js")
+    // v160y28: ?v= в import — иначе браузер отдаёт старую копию из кэша при
+    // деплое новой версии (повтор повтор #420 — версии подресурсов не синхронны).
+    import("./attachments.js?v=160y56")
         .then(() => { window.MurmurAttachments = window.MurmurAttachments || null; console.log("[warmup] attachments.js ready"); })
         .catch((e) => console.warn("[warmup] attachments.js failed (will retry on attach):", e));
-    import("./render-attachments.js")
+    import("./render-attachments.js?v=160y56&i18n=1")
         .then(() => console.log("[warmup] render-attachments.js ready"))
         .catch((e) => console.warn("[warmup] render-attachments.js failed (will retry on render):", e));
     // Lesson #212: show app version + SW version banner for debugging
@@ -3288,13 +3452,55 @@ function openChat(peer, opts) {
     // Если первый раз открываем чат (нет кэша) — loadHistory работает как раньше.
     loadMessagesCacheForPeer(peer);
     clearUnread(peer);
-    // v160x19 (Олег 11:00: «Сработало после клавиатуры. А если после перезапуска
-    // проваливаешься в чат — пустая область появляется снова»): при перезапуске
-    // iOS standalone поднимает вьюпорт в stale-кадре (bug 254861 family) ещё ДО
-    // какого-либо клавиатурного цикла. Лечится тем же scrollCure, что и после
-    // клавиатуры — запускаем его при открытии чата (после layout чата).
+    // v160x19 (Олег 11:00): stale-вьюпорт лечится scrollCure. v160y34 (Олег
+    // 2026-09-24 «проваливаешься в чат — сначала все мигает»): 3 вызова
+    // scrollCure (100/400/900) на документе = 3 вспышки layout (body +80px →
+    // restore). Фикс: ОДИН вызов на 250ms, и только если gapDetector
+    // (elementFromPoint проба paint, Lesson #v160x14) подтверждает дыру —
+    // на маке/здоровом вьюпорте scrollCure не запускается вовсе = нет мигания.
     try { if (typeof window.scrollCure === "function") {
-        [100, 400, 900].forEach(t => setTimeout(window.scrollCure, t));
+        setTimeout(() => {
+            // gapDetector глобален (вешается в keyboard-init ниже) — если нет,
+            // фолбэк: запускаем scrollCure как раньше (безопаснее, чем дыра).
+            if (typeof window.__murmurGapDetector === "function") {
+                try { if (window.__murmurGapDetector()) window.scrollCure(); } catch (e) {}
+            } else {
+                try { window.scrollCure(); } catch (e) {}
+            }
+        }, 250);
+        // v160y58 (Олег 25.09 18:00: «при открытии чата дыра под композером;
+        // тап в поле ввода лечит»): дыра проявляется ПОСЛЕ 250ms — рендер батча
+        // (attachments/decrypt) дёргает layout позже чека. Один gapDetector-чек
+        // её пропускает. Лечим серией догонов (600-3200ms) тем же, чем лечит
+        // тап в поле: scrollCure + nudge слоя композера. Дёшево: elementFromPoint
+        // проба, cure ТОЛЬКО если дыра реальна (на маке/здоровом вьюпорте — no-op).
+        // v160y61 (diag-скрин Олега 21:08): ВСЕ метрики ЧЕСТНЫЕ (844 везде,
+        // iaBot=844, --vvh=844) при ВИДИМОЙ дыре на том же скрине → PAINT устар,
+        // layout НЕ врёт. gapDetector (elementFromPoint = LAYOUT) при композере
+        // В ПОТОКЕ (v160x17, fixed убран) находит композер ВСЕГДА даже при дыре
+        // → гейт НИКОГДА не открывался → все openChat-догоны y58/y59/y60 были
+        // МЁРТВЫЙ КОД. Тап в поле ЛЕЧИТ потому что focusout-цепочка зовёт
+        // лекарство БЕЗ гейта (unconditional). Теперь openChat зовёт ТОТ ЖЕ
+        // набор БЕЗ гейта: forceReflow (реальный reflow = репейнт сталой зоны),
+        // settle (scroll-защёлк layout), nudge слоя композера, setVvh.
+        [250, 700, 1400, 2400].forEach(t => setTimeout(() => {
+            try {
+                // v160y62 (diag-скрин Олега 21:14: msBot=845/iaBot=845 — layout
+                // ДОХОДИТ до низа, PAINT устар): в v160y61 openChat-догон звал
+                // forceReflow ПЕРВЫМ (else scrollCure — МЁРТВАЯ ветка, forceReflow
+                // всегда существует) → scrollCure НИКОГДА не выполнялся. А тап в
+                // поле ЛЕЧИТ именно scrollCure (v160x18: реальный скролл —
+                // ЕДИНСТВЕННОЕ, что репейнтит сталую зону; forceReflow недостаточен
+                // — v160x15, nudge был для FIXED-композера — теперь в потоке).
+                // Порядок как в focusout-цепочке: scrollCure ПЕРВЫЙ, потом
+                // forceReflow/nudge/settle/setVvh как страховка.
+                if (typeof window.scrollCure === "function") window.scrollCure();
+                if (typeof window.__murmurForceReflow === "function") window.__murmurForceReflow();
+                if (typeof window.__murmurSettle === "function") window.__murmurSettle();
+                if (typeof window.__murmurNudgeComposer === "function") window.__murmurNudgeComposer();
+                if (typeof window.__murmurSetVvh === "function") window.__murmurSetVvh();
+            } catch (e) {}
+        }, t));
     } } catch (e) {}
     loadHistory(peer).then(() => {
         if (contacts[peer]) contacts[peer].unreadCount = 0;
@@ -3321,6 +3527,10 @@ async function loadHistory(peer, beforeTs) {
     // appears empty even though the DB has messages.
     let url = RELAY + "/api/history?npub=" + encodeURIComponent(myNpub) +
               "&peer=" + encodeURIComponent(peer) + "&limit=" + HISTORY_LIMIT +
+              // v160y24 (Олег 2026-09-23): visible=1 только при видимом документе —
+              // фоновые poll'и (Power Nap, закрытая крышка) не сокращают TTL
+              // на сервере. Сообщения живут полные 24ч до реального открытия.
+              "&visible=" + (document.visibilityState === "visible" ? 1 : 0) +
               "&_t=" + Date.now();
     if (beforeTs) url += "&before_ts=" + beforeTs;
     const area = messagesArea;
@@ -3508,6 +3718,27 @@ async function loadHistory(peer, beforeTs) {
                     // можно доверять local.attachments_meta с plaintext_b64.
                     if (local) {
                         // Нашли локальный plaintext — используем его, не расшифровываем.
+                        // v160y52 (Олег 25.09: «цитата пропадает после перезахода»):
+                        // `local` из messages[peer] (старая кэш-копия, reply_to=null)
+                        // ЗАТИРАЕТ outbox-запись, у которой reply_to ЕСТЬ (v160y50).
+                        // Когда local.reply_to нет — фолбэк в outbox по _hash/_sig/±60s
+                        // и берём reply_to оттуда.
+                        let replyToResolved = local.reply_to || null;
+                        if (!replyToResolved) {
+                            try {
+                                const ob = loadOutboxForPeer(peer);
+                                let obEntry = ob.find(o => (hash && o._hash === hash) || o._sig === sigKey);
+                                if (!obEntry && ob.length > 0) {
+                                    let best = null, bestDelta = Infinity;
+                                    for (const o of ob) {
+                                        const delta = Math.abs((o.ts || 0) - (m.ts || 0));
+                                        if (delta < bestDelta && delta <= 60) { best = o; bestDelta = delta; }
+                                    }
+                                    if (best) obEntry = best;
+                                }
+                                if (obEntry && obEntry.reply_to) replyToResolved = obEntry.reply_to;
+                            } catch (e) { /* outbox недоступен — цитата null */ }
+                        }
                         const msg = {
                             from: fromNpub, to: toField, body: local.body, ts: m.ts,
                             direction: "out",
@@ -3515,6 +3746,11 @@ async function loadHistory(peer, beforeTs) {
                             isBinary: false,
                             status: "sent",
                             attachments: local.attachments || [],
+                            // v160y50: reply_to из outbox/local — цитата выживает
+                            // reload/poll (Олег 23:44: «остается только отправленное
+                            // сообщение без привязи»). Отсутствие поля = цитата теряется.
+                            // v160y52: фолбэк в outbox, когда кэш-копия без цитаты.
+                            reply_to: replyToResolved,
                             // Lesson #324 (Олег 2026-08-28 11:22 MSK): копируем
                             // attachments_meta из outbox — это ЕДИНСТВЕННЫЙ источник
                             // plaintext_b64 для рендера без decrypt. Без этого
@@ -3756,6 +3992,14 @@ function renderMessages() {
     // Пропускаем bubbles для уже отрисованных messages.
     if (!window.__murmurRenderedSigs) window.__murmurRenderedSigs = new Set();
     const renderedSigs = window.__murmurRenderedSigs;
+    // v160y55c (Олег 25.09 13:51: «когда открываешь чат, всё плавно появлялось,
+    // а то сейчас загружается рывками»): счётчик НОВЫХ баблов за этот render.
+    // После append: если >0 — batch-анимация fadeInUp на всех новых (один
+    // класс .msg-enter на render, каскад через animation-delay по индексу;
+    // CSS в index.html). Только при first-batch-after-peer-change — не анимируем
+    // каждый инкрементальный полл (иначе новое сообщение «выплывает» тоже —
+    // это норм и приятно, но рывки лечит именно батч).
+    let __newBubbles = 0;
     for (const m of msgs) {
         const sig = m._sig || (m.from_npub || m.from) + m.ts;
         // Lesson #320 (Олег 2026-08-28 09:00 MSK): если sig в Set, но bubble
@@ -3883,6 +4127,15 @@ function renderMessages() {
                 "<span class='bubble-time'>" + formatTime(m.ts) + statusHtml + "</span>";
             messagesArea.appendChild(div);
             renderedSigs.add(sig);
+            // v160y55c: плавное появление — каждый новый бабл получает класс
+            // .msg-enter (fadeInUp) + каскадную задержку по индексу (CSS
+            // animation-delay var(--enter-delay)). После цикла сбрасываем
+            // --enter-delay, чтобы инкрементальные поллы рендерились без задержки.
+            try {
+                div.classList.add("msg-enter");
+                div.style.setProperty("--enter-delay", Math.min(__newBubbles * 40, 400) + "ms");
+                __newBubbles++;
+            } catch (e) {}
             // v160k9a (Олег 2026-09-05 23:48): Link Unfurl. Если в body был URL,
             // ниже первой ссылки подтянем og:image/title/description через
             // microlink.io и вставим превью-карточку. Не передаём URL через
@@ -4086,6 +4339,9 @@ function renderMessages() {
     // Lesson #225: previousUrls больше не нужен — URLs revoke'ятся автоматически
     // когда img detach'ится. Никакого setTimeout, никаких ручных вызовов.
     void previousUrls;  // silence unused warning
+    // v160y55c: __newBubbles объявлен let внутри renderMessages — на следующем
+    // render счётчик с нуля, инкрементальные баблы получают delay=0ms
+    // (каскад — только для батча при открытии чата). Сброс не нужен.
 }
 
 // Day divider label: "Сегодня", "Вчера", or "12 авг".
@@ -4110,6 +4366,30 @@ function formatDayDivider(ts) {
 function scrollToBottom() {
     requestAnimationFrame(() => { messagesArea.scrollTop = messagesArea.scrollHeight; });
 }
+
+// v160y51 (Олег 06:41: «заходишь в чат сразу после другого — оказываешься на
+// последнем видео, а не внизу; при повторном заходе в тот же чат всё ок»):
+// гонка высот — scrollToBottom отрабатывает при дефолтных 16/9-высотах превью,
+// потом loadedmetadata/img.load ставит реальные пропорции (вертикальное видео
+// = +150-280px) и лента растёт УЖЕ ПОСЛЕ скролла → юзер висит на последнем
+// видео, сообщения после него уходят под низ. Повторный вход ок (рендер
+// мгновенный, высоты честные до скролла). Фикс: pin-bottom — скролл-листенер
+// непрерывно помнит «были ли на низе», а __murmurPinBottom (зовётся из
+// render-attachments при loadedmetadata/img.load) доводит низ, если до роста
+// были на нём. Ручной скролл вверх > 60px от низа снимает флаг — не хайджекаем.
+window.__murmurWasAtBottom = true;
+if (messagesArea) {
+    messagesArea.addEventListener("scroll", () => {
+        window.__murmurWasAtBottom =
+            (messagesArea.scrollHeight - messagesArea.scrollTop - messagesArea.clientHeight) < 60;
+    }, { passive: true });
+}
+window.__murmurPinBottom = () => {
+    try {
+        if (!messagesArea || !window.__murmurWasAtBottom) return;
+        messagesArea.scrollTop = messagesArea.scrollHeight;
+    } catch (e) { /* ignore */ }
+};
 
 // ── Infinite Scroll ──
 if (messagesArea) {
@@ -4659,6 +4939,15 @@ async function sendMessage() {
                     window.MurmurBlobCache.put(a.blob_id, b64ToBlob(a.plaintext_b64, a.mime), a.mime).catch(() => {});
                 } catch (e) { /* cache paste — fail OK */ }
             }
+            // v160y37 (Олег: «после перезахода в pwa ни превью, ни проигрывания»
+            // для .MOV с мака): IDB cache evicted при 50MB → рендер после reload
+            // идёт в fetch → серверная копия может быть TTL-удалена → навсегда
+            // chip. OPFS plaintext-копия при отправке — восстановление без сети.
+            if (a.plaintext_b64 && window.MurmurBlobOPFS && typeof window.MurmurBlobOPFS.isAvailable === "function" && window.MurmurBlobOPFS.isAvailable()) {
+                try {
+                    window.MurmurBlobOPFS.put("attp-" + a.blob_id, b64ToAb(a.plaintext_b64), a.mime).catch(() => {});
+                } catch (e) { /* OPFS fail OK */ }
+            }
         }
         // v160p: постер каждого вложения в постоянный кэш по blob_id
         // превью survives reload'ы и слияние кэша с серверной строкой.
@@ -4910,7 +5199,8 @@ if (btnAttach && fileInput) {
             for (let attempt = 0; attempt < 3 && !loaded; attempt++) {
                 if (attempt > 0) await new Promise((r) => setTimeout(r, 1500 * attempt));
                 try {
-                    await import("./attachments.js");
+                    // v160y28: ?v= в fallback-import — синхронно с warmup.
+                    await import("./attachments.js?v=160y56");
                     loaded = true;
                 } catch (err) {
                     lastErr = err;
@@ -4950,6 +5240,17 @@ if (btnAttach && fileInput) {
                     file,
                     peerNpub: peerKey.npub,
                     selfNpub: myNpub,
+                    // v160y45: stage-индикация на чипе — «конвертация…» /
+                    // «кадр превью…» / «шифрование…» / % загрузки (40MB видео
+                    // конвертируется real-time — минуты; без индикации выглядело
+                    // как зависание).
+                    onStage: (stage) => {
+                        const idx = pendingAttachments.findIndex((a) => a._tempId === tempId);
+                        if (idx >= 0) {
+                            pendingAttachments[idx]._stage = stage;
+                            renderAttachmentsPreview();
+                        }
+                    },
                     onProgress: (loaded, total) => {
                         const idx = pendingAttachments.findIndex((a) => a._tempId === tempId);
                         if (idx >= 0) {
@@ -4969,8 +5270,8 @@ if (btnAttach && fileInput) {
                         plaintext_b64: result.plaintext_b64, // local outbox cache
                         poster_data_url: result.poster_data_url || null, // v160d: кадр для превью
                         mime: result.mime,
-                        size: file.size,
-                        name: file.name,
+                        size: result.size,
+                        name: result.name,
                         // Privacy: server-visible meta keeps the NEUTRAL upload name
                         // (f-XXXXXXXX.bin); real filename lives only in the sealed ct.
                         publicName: result.publicName,
@@ -5011,6 +5312,8 @@ function renderAttachmentsPreview() {
         let label = `📎 ${escapeHtml(a.name)} (${formatSize(a.size)})`;
         if (a._uploading && typeof a._progress === "number") {
             label += ` ⏳ ${Math.floor(a._progress * 100)}%`;
+        } else if (a._uploading && a._stage) {
+            label += ` ⚙️ ${escapeHtml(a._stage)}…`; // v160y45: транскод/шифрование
         } else if (!a._uploading && a.blob_id) {
             label += ` ✓`;
         }
@@ -5237,10 +5540,40 @@ async function handleIncomingEnvelope(env) {
     // Lesson #128: более надёжный дедуп — по envelope_hash, если WS push его
     // прислал. Сервер может перезаписать ts, тогда дедуп по ts ломается.
     const hash = env.envelope_hash_hex || (env.envelope && env.envelope.envelope_hash_hex) || null;
+    // v160y53: сервер кладёт ПОЛНОЕ тело квитанции в ws_envelope_b64 (base64
+    // envelope bytes) — распаковываем ДО receipt-ветки, иначе isReceiptRow
+    // не опознает WS-пуш (без _kind/body_base64) и квитанция провалит в
+    // contentless-ветку → deferred poll находит строку уже TTL-удалённой →
+    // ack терялся навсегда (Олег 25.09: «✓ не превращается в ✓✓»).
+    if (!env._kind && typeof env.ws_envelope_b64 === "string" && env.ws_envelope_b64.length > 0) {
+        try {
+            const innerEnv = JSON.parse(atob(env.ws_envelope_b64));
+            if (innerEnv && typeof innerEnv === "object") {
+                // v160y54b: wire-конверт ЗАВЁРНУТ {"_kind":"json_envelope",
+                // "payload":{...}} (subscribers.rs → ws_server json!) — _kind
+                // квитанции внутри payload. Топ-левел _kind = "json_envelope",
+                // старая проверка env._kind === "receipt" ВСЕГДА false →
+                // ack терялся на WS-пути (Олег 25.09: «на 1 сработало,
+                // на следующих 3-х нет» — единственный ✓✓ был через /api/history).
+                const wsPayload = (innerEnv._kind === "json_envelope" && innerEnv.payload && typeof innerEnv.payload === "object") ? innerEnv.payload : innerEnv;
+                env._kind = wsPayload._kind || innerEnv._kind || null;
+                env.ct = wsPayload.ct || env.ct;
+                env.body = JSON.stringify(wsPayload); // consumeReceiptRow парсит JSON
+                env.body_base64 = env.ws_envelope_b64; // fallback-путь
+            }
+        } catch (e) { console.warn("[WS] ws_envelope_b64 parse failed:", e && e.message); }
+    }
     // v158: служебные конверты не рендерим (WS в prod мёртв, но защита на
     // будущее). Чужая квитанция — тоже ✓✓; своя — молча скип.
     if (env._kind === "receipt" || isReceiptRow(env)) {
         if (fromNpub !== myNpub) consumeReceiptRow(env, hash, peer);
+        return;
+    }
+    // v160y29: системные broadcast'ы (from_npub=system:relay) — НЕ сообщения.
+    // Receipt-broadcast с fallback-телом «New message — open the app…» и пустым
+    // hash проходил contentless-фильтр → ФАНТОМНЫЙ чат «Без имени» (Олег 22:00).
+    if (fromNpub === "system:relay") {
+        console.log("[WS] system broadcast ignored, ts=", env.ts);
         return;
     }
     // v160g3: групповые служебные (invite/rotation) — обновляют groups store,
@@ -5399,6 +5732,20 @@ async function pollInbox() {
 
 async function pollHistoryForPeer(peer) {
     if (!myNpub || !peer) return;
+    // v160y55c (Олег 25.09 13:51: «опять в переписке задублировалось сообщение»):
+    // гонка параллельных poll'ов — WS contentless defer (400ms) и forceTick
+    // (visibilitychange/focus) дёргают pollHistoryForPeer НАПРЯМУЮ, вне
+    // сериализованного poll-лупа (setTimeout-after-await). Два параллельных
+    // fetch /api/history: оба приходят до exists-дедупа (ни один ещё не успел
+    // push) → оба push → ДУБЛЬ. Фикс: per-peer in-flight guard — второй вызов
+    // ждёт первый (promise reuse), а не дублирует fetch.
+    window.__murmurPollHistInFlight = window.__murmurPollHistInFlight || new Map();
+    const inFlight = window.__murmurPollHistInFlight.get(peer);
+    if (inFlight) {
+        try { await inFlight; } catch (e) { /* ignore */ }
+        return;
+    }
+    const run = (async () => {
     // v160p: как в loadHistory (v160k9c) — ждём загрузку кэша, иначе добавление
     // серверных строк в пустой messages[peer] + saveMessagesCacheForPeer
     // затирало IDB-историю серверным окном (root cause «пропала история 15:30–20:25»).
@@ -5408,7 +5755,7 @@ async function pollHistoryForPeer(peer) {
     }
     console.log("[pollHist] peer=", peer.slice(0,12), "myNpub=", myNpub.slice(0,12));
     try {
-        const r = await fetch(RELAY + "/api/history?npub=" + encodeURIComponent(myNpub) + "&peer=" + encodeURIComponent(peer) + "&limit=" + HISTORY_LIMIT + "&_t=" + Date.now(), { cache: "no-store", credentials: "omit" });
+        const r = await fetch(RELAY + "/api/history?npub=" + encodeURIComponent(myNpub) + "&peer=" + encodeURIComponent(peer) + "&limit=" + HISTORY_LIMIT + "&visible=" + (document.visibilityState === "visible" ? 1 : 0) + "&_t=" + Date.now(), { cache: "no-store", credentials: "omit" });
         if (!r.ok) return;
         const j = await r.json();
         const msgs = j.messages || [];
@@ -5596,7 +5943,8 @@ async function pollHistoryForPeer(peer) {
             let resolvedBody = bodyText;
             let resolvedAttachments = msg.attachments || [];
             let resolvedAttachmentsMeta = msg.attachments || [];
-            if (fromNpub === myNpub) {
+                let resolvedReplyTo = null; // v160y52: reply_to из outbox (цитата)
+                if (fromNpub === myNpub) {
                 const outbox = loadOutboxForPeer(peer);
                 let localOut = outbox.find(o => {
                     if (hash && o._hash === hash) return true;
@@ -5611,8 +5959,20 @@ async function pollHistoryForPeer(peer) {
                     }
                     if (best) localOut = best;
                 }
-                if (localOut && localOut.body) {
+                // v160y29: было `localOut && localOut.body` — photo/video-only исходящие
+                // (body === "") проваливались в fallback → «[исходящее сообщение]»
+                // вместо chip. Тот же баг что Lesson #328 (loadHistory-путь), тут
+                // pollHist-путь не был синхронизирован. Fix: если outbox ЕСТЬ (по _hash/_sig),
+                // это наше исходящее — доверяем localOut.attachments_meta.
+                if (localOut) {
                     resolvedBody = localOut.body;
+                    // v160y52 (Олег 25.09: «цитата пропадает после перезахода»):
+                    // pollHist outbox-путь строил envelope с reply_to=null ВСЕГДА,
+                    // даже когда localOut.reply_to есть (v160y50 сохранил его в
+                    // outbox, но этот путь не читал). Phase-3 decrypt-петля ниже
+                    // фильтрует только direction="in" → исходящие с reply_to=null
+                    // никогда не ремонтировались → копия без цитаты падала в кэш.
+                    if (localOut.reply_to && !resolvedReplyTo) resolvedReplyTo = localOut.reply_to;
                     // Lesson #206 (Олег 2026-08-26 12:01): use outbox's attachments_meta
                     // ВСЕГДА, если оно заполнено — иначе UI дублирует chip
                     // (один с plaintext из outbox, второй без из server-fetched meta).
@@ -5665,9 +6025,10 @@ async function pollHistoryForPeer(peer) {
                 _server_msg: msg,
                 attachments: resolvedAttachments,
                 attachments_meta: resolvedAttachmentsMeta,
-                // v160r: reply_to внутри ct — неизвестен на этом этапе (sync extract
-                // его не достаёт). Заполняется Phase-3 decrypt-петлёй ниже.
-                reply_to: null,
+                // v160y52: reply_to из outbox/localOut (цитата после перезахода).
+                // decrypt-петля ниже фильтрует только "in" — для out это единственный
+                // источник цитаты.
+                reply_to: resolvedReplyTo || null,
             };
             messages[peer].push(envelope);
             added = true;
@@ -5885,6 +6246,8 @@ async function pollHistoryForPeer(peer) {
         console.warn("pollHistoryForPeer failed:", e && e.message, e && e.stack);
         if (typeof window.__pollErrors !== 'undefined') window.__pollErrors.push({t: Date.now(), fn: 'pollHistoryForPeer', msg: String(e && e.message), stack: String(e && e.stack)});
     }
+    })(); // v160y55c: конец run() — in-flight promise
+    try { await run; } finally { window.__murmurPollHistInFlight.delete(peer); }
 }
 
 // Lesson #243 (Олег 2026-08-26 22:27): re-sync sidebar preview для всех
@@ -6286,7 +6649,8 @@ if (document.readyState === "loading") {
         await requestNotificationPermission();
         warmOutboxCache();
         wireReplyBarControls(); // v160r: reply-bar controls wiring
-        wireBubbleTap();        // v160r: тап на bubble → reply
+        wireBubbleTap();        // v160r: тап на bubble → reply (текст)
+        wireLongPressReply();   // v160y27: долгое нажатие → reply (фото/видео/текст)
         try { const bg = document.getElementById("btn-new-group"); if (bg) bg.addEventListener("click", openCreateGroupModal); } catch (e) {}
         tryAutoRestore();
     });
@@ -6295,6 +6659,7 @@ if (document.readyState === "loading") {
     warmOutboxCache();
     wireReplyBarControls(); // v160r
     wireBubbleTap();        // v160r
+    wireLongPressReply();   // v160y27: long-press → reply
     try { const bg = document.getElementById("btn-new-group"); if (bg) bg.addEventListener("click", openCreateGroupModal); } catch (e) {}
     tryAutoRestore();
 }
@@ -6435,7 +6800,18 @@ window.addEventListener("hashchange", () => {
             } else {
                 const br = document.body && document.body.getBoundingClientRect();
                 const bodyH = br && br.height > 100 ? br.height : 0;
-                h = Math.max(vvFull, bodyH, window.innerHeight || 0);
+                // v160y59 (Олег 25.09 19:13, «дыра осталась — те же симптомы»):
+                // на iOS standalone в gap-состоянии vv.height+pageTop даёт
+                // ПРОМЕЖУТОЧНУЮ высоту (сталую клавиатурную, ~783 из 844),
+                // body rect может быть тоже срезан → --vvh залипает → .messenger
+                // НЕ доходит до физического низа → дыра ~1/10 экрана под
+                // композером. window.innerHeight на iOS standalone возвращает
+                // ЛАЙАУТ-высоту (844, включает safe-inset) — она ЧЕСТНЕЕ в
+                // gap-состоянии. Формула: MAX(innerHeight, vvFull, bodyH) —
+                // innerHeight страхует именно сценарий Олега. Тап в поле
+                // ввода чинил по той же причине: focusout-поллинг оседал vv
+                // → vvFull дорастал до 844 → MAX выдавал честную высоту.
+                h = Math.max(window.innerHeight || 0, vvFull, bodyH);
             }
             if (h && h > 100) document.documentElement.style.setProperty("--vvh", Math.round(h) + "px");
             // v160x11: keyboard inset для fixed-композера. .input-area якорится
@@ -6547,6 +6923,7 @@ window.addEventListener("hashchange", () => {
             return true;
         } catch (e) { return false; }
     };
+    window.__murmurGapDetector = gapDetector; // v160y34: экспорт для openChat
     let gapFixTimer = null;
     // watchdog: если дыра активна, дёргает И reflow, И слой композера.
     const gapWatchdog = () => {
@@ -6649,4 +7026,17 @@ window.addEventListener("hashchange", () => {
     // v160x19: экспорт scrollCure на window (module scope — lesson #363/#364),
     // чтобы openChat (top-level function) мог запускать лекарство при открытии чата.
     try { window.scrollCure = scrollCure; } catch (e) {}
+    // v160y58: экспорт nudgeComposerLayer для openChat-догонов (дыра под
+    // композером при открытии чата — лечит тап в поле, значит слой композера).
+    try { window.__murmurNudgeComposer = nudgeComposerLayer; } catch (e) {}
+    // v160y60: экспорт forceReflow/settle/gapWatchdog — openChat-догоны зовут
+    // ТОТ ЖЕ набор лекарства, что и focusout-цепочка после тапа в поле
+    // (разница forceReflow/settle/gapWatchdog была причиной «тап лечит,
+    // открытие чата — нет»).
+    try { window.__murmurForceReflow = forceReflow; } catch (e) {}
+    try { window.__murmurSettle = settle; } catch (e) {}
+    try { window.__murmurGapWatchdog = gapWatchdog; } catch (e) {}
+    // v160y61: экспорт setVvh — openChat-догоны зовут его БЕЗ гейта (диаг-скрин:
+    // метрики честные при видимой дыре — PAINT устар, layout не врёт).
+    try { window.__murmurSetVvh = setVvh; } catch (e) {}
 })();

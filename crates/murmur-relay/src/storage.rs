@@ -589,6 +589,14 @@ impl MessageStore {
         )?;
         if n > 0 {
             self.record_delivered_for_hash(hash);
+            // v160y32: system:relay-нотификации («Адресат не забрал») удаляются
+            // СРАЗУ при чтении получателем — не живут 24ч по TTL (хвосты 412 Б,
+            // ручные чистки). Личные сообщения — обычный путь (shorten выше).
+            match self.delete_envelope_by_hash_if_service(hash) {
+                Ok(true) => info!("undelivered notification deleted on delivery"),
+                Ok(false) => {}
+                Err(e) => warn!(err=%e, "service delete failed"),
+            }
             return Ok(());
         }
         // v160w4d (Олег 2026-09-20): условный UPDATE не сработал → строка уже
@@ -628,6 +636,12 @@ impl MessageStore {
             return Ok(()); // уже сокращено ранее — не считаем повторно
         }
         self.record_delivered_for_hash(hash);
+        // v160y32: system:relay-нотификации удаляются СРАЗУ при WS-доставке.
+        match self.delete_envelope_by_hash_if_service(hash) {
+            Ok(true) => info!("undelivered notification deleted on ws delivery"),
+            Ok(false) => {}
+            Err(e) => warn!(err=%e, "service delete failed (ws)"),
+        }
         Ok(())
     }
 
@@ -913,7 +927,9 @@ impl MessageStore {
     pub fn list_expired_envelopes(&self) -> rusqlite::Result<Vec<ExpiredEnvelope>> {
         let c = self.conn.lock();
         let mut s = c.prepare(
-            "SELECT envelope_hash, from_npub, to_npub, body, sig, ts, expires_at \
+            // v160y24: read_at включён в выборку — классификация TTL-крона
+            // по факту доставки, не по expires_at − ts.
+            "SELECT envelope_hash, from_npub, to_npub, body, sig, ts, expires_at, read_at \
              FROM envelopes \
              WHERE expires_at > 0 AND expires_at < CAST(strftime('%s','now') AS INTEGER)",
         )?;
@@ -927,6 +943,7 @@ impl MessageStore {
                     sig: r.get(4)?,
                     ts: r.get(5)?,
                     expires_at: r.get(6)?,
+                    read_at: r.get(7)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -977,6 +994,52 @@ impl MessageStore {
             ],
         )?;
         Ok(n > 0)
+    }
+
+    /// v160y32 (Олег 2026-09-24): system:relay-нотификации удаляются СРАЗУ
+    /// при доставке, TTL-окно им не нужно. «Адресат не забрал…» — сигнал для
+    /// получателя; после доставки (WS live или забор /api/history) строка —
+    /// мусор: 412 Б хвостов на дашборде, ручные чистки. Держим 24h TTL только
+    /// для случая «получатель так и не вернулся» — тогда TTL-крон снесёт.
+    pub fn delete_envelope_by_hash_if_service(&self, hash: &str) -> rusqlite::Result<bool> {
+        // 1. Проверяем service-статус ДО удаления (system:relay или _kind в body).
+        let is_service: bool = {
+            let c0 = self.conn.lock();
+            let row: Option<(String, Option<Vec<u8>>)> = c0
+                .query_row(
+                    "SELECT from_npub, body FROM envelopes WHERE envelope_hash = ?1",
+                    params![hash],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()
+                .unwrap_or(None);
+            drop(c0);
+            match row {
+                Some((from, body)) => {
+                    if from == "system:relay" {
+                        true
+                    } else {
+                        body
+                            .and_then(|b| {
+                                serde_json::from_slice::<serde_json::Value>(&b)
+                                    .ok()
+                                    .and_then(|v| {
+                                        v.get("_kind").and_then(|k| k.as_str()).map(|s| !s.is_empty())
+                                    })
+                            })
+                            .unwrap_or(false)
+                    }
+                }
+                None => false, // нет строки — нечего удалять
+            }
+        };
+        if !is_service {
+            return Ok(false); // личное сообщение — обычный путь (shorten)
+        }
+        // 2. Служебное — удаляем (refs сносятся; у system:relay их нет,
+        // но delete_envelope_by_hash безопасен в любом случае).
+        self.delete_envelope_by_hash(hash)?;
+        Ok(true)
     }
 
     /// Удаляет envelope по hash + сносит attachment_refs (v160o).
@@ -1180,8 +1243,11 @@ impl MessageStore {
                 now - (now % 86400) - 86400,
             ),
             // недоставленные — в TTL-окне И 24h-TTL (не сокращён после доставки).
+            // v160y31 (Олег 23:23): system:relay-нотификации («Адресат не забрал»,
+            // TTL 86400 > 600) попадали в счётчик как «недоставленные» — 2 хвоста
+            // на проде при пустом счётчике. Фейковые нотификации — НЕ сообщения.
             envelopes_undelivered: q1(
-                "SELECT COUNT(*) FROM envelopes WHERE expires_at > ?1 AND (expires_at - ts) > 600",
+                "SELECT COUNT(*) FROM envelopes WHERE expires_at > ?1 AND (expires_at - ts) > 600 AND from_npub != 'system:relay'",
                 now,
             ),
             // диск: занято = envelopes (body+sig) + blobs (size) по таблицам;
@@ -1216,6 +1282,10 @@ pub struct ExpiredEnvelope {
     pub sig: Vec<u8>,
     pub ts: i64,
     pub expires_at: i64,
+    // v160y24 (Олег 2026-09-23): признак реальной доставки для TTL-крона
+    // (read_at=1 ставится при shorten_expires_at / WS-доставке). 0 = никогда
+    // не доставлен → «undelivered» нотификация отправителю.
+    pub read_at: i64,
 }
 
 fn trunc(s: &str, max: usize) -> String {

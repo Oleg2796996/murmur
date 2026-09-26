@@ -476,8 +476,18 @@ const blobs = {
                 // Bump ts fire-and-forget (Lesson #312)
                 _bumpBlobTs(blobId).catch(() => {});
                 // Backward compat: rec.data = ArrayBuffer (v1+) или rec.blob = Blob (legacy)
-                if (rec.data) return resolve(new Blob([rec.data], { type: rec.mime || "application/octet-stream" }));
-                if (rec.blob) return resolve(new Blob([rec.blob], { type: rec.mime || "application/octet-stream" }));
+                // v160y39: WebKit в standalone PWA эвиктит backing нативных Blob-хендлов
+                // (rec.blob, >8MB вложения) после рестарта PWA → get() отдаёт ПУСТОЙ блоб
+                // (size=0) → video element получает битый source → VERR code=4.
+                // Мёртвый блоб трактуем как MISS → рендер-путь идёт в OPFS-фолбэк.
+                if (rec.data) {
+                    if (rec.data.byteLength === 0) return resolve(null);
+                    return resolve(new Blob([rec.data], { type: rec.mime || "application/octet-stream" }));
+                }
+                if (rec.blob) {
+                    if (rec.blob.size === 0) return resolve(null);
+                    return resolve(new Blob([rec.blob], { type: rec.mime || "application/octet-stream" }));
+                }
                 resolve(null);
             };
             req.onerror = () => reject(req.error);

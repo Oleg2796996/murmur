@@ -18,7 +18,10 @@
 //   ❌ HEIC — filtered in file picker (Lesson #169)
 //   ❌ Inline data: URLs for render (Lesson #170) — uses createObjectURL after decrypt
 
-const ATTACH_API_BASE = "https://murmur.senswifi.ru";
+// v160y24: НЕ хардкод — RELAY из app.js (single source of truth).
+// 23.09 инцидент: три независимых хардкода (RELAY в app.js + ATTACH_API_BASE в 2 файлах)
+// рассинхронились при деплое — фото с прода уходило на тест-релей.
+const ATTACH_API_BASE = (typeof RELAY !== "undefined" && RELAY) ? RELAY : "https://murmur.senswifi.ru";
 
 function b64encode(bytes) {
     let s = "";
@@ -200,8 +203,12 @@ function uploadCiphertext({ sha256Hex, mime, name, size, wrappedKey, ciphertext,
             }
         };
         xhr.onerror = () => reject(new Error("Network error during upload"));
-        xhr.ontimeout = () => reject(new Error("Upload timeout (60s)"));
-        xhr.timeout = 60000;
+        // v160y28: таймаут пропорционален размеру. Жёсткие 60с рвали большие видео
+        // (23.2 МБ через CF-туннель на сотовом/Wi-Fi > 60с → «Upload timeout (60s)»).
+        // Расчёт: ~50 КБ/с эффективной скорости, ×2 запас, минимум 60с. 23 МБ → ~15 мин.
+        const uploadTimeoutMs = Math.max(60000, Math.ceil((size || 0) / 51200) * 1000 * 2);
+        xhr.ontimeout = () => reject(new Error("Upload timeout (" + Math.round(uploadTimeoutMs / 1000) + "s)"));
+        xhr.timeout = uploadTimeoutMs;
         // Send ciphertext as binary.
         xhr.send(ciphertext);
     });
@@ -333,17 +340,48 @@ async function extractVideoPoster(file) {
     });
 }
 
-async function attachEncryptAndUpload({ file, peerNpub, selfNpub, onProgress }) {
+// v160y40: транскод видео перед шифрованием (Олег 2026-09-24 21:00:
+// «можем ли мы на устройстве пользователя форматировать видео и ужимать
+// его размер?»). Большие/quicktime видео (>8MB, .MOV с мака) после reload
+// ломаются: (1) IDB хранит >8MB как нативный Blob → WebKit эвиктит backing
+// после рестарта PWA → мёртвый блоб → VERR code=4; (2) .MOV/HEVC декодируется
+// не на всех платформах. Транскод в mp4/webm ≤ ~7MB через MediaRecorder:
+// canvas.captureStream + аудио через AudioContext → Recording → Blob.
+// Нормализованный файл хранится как ArrayBuffer (rec.data ≤8MB — переживает
+// evict) и декодируется везде. Фолбэк — оригинал при любой неудаче.
+async function transcodeVideoForSend(file) {
+    // v160y55b (Олег 25.09 13:51: «Галочки появились! Ура!!!! Но новый баг
+    // с отправкой видео. Давай уберем консервацию видео перед отправкой»):
+    // транскод ПЕРЕД отправкой УБИРАЕМ полностью — отправляем оригинал
+    // на всех платформах (WebCodecs/MediaRecorder-консервация давала баг
+    // при отправке видео). Сохранность после reload обеспечивают
+    // OPFS-first (v160y41) + blob-cache, декодирование нативное.
+    if (!file || !file.type || !file.type.startsWith("video/")) return file;
+    return file;
+}
+
+async function attachEncryptAndUpload({ file, peerNpub, selfNpub, onProgress, onStage }) {
     // a. Compress if large image (Lesson #327 — speed)
     const compressedFile = await compressImageIfLarge(file);
+    // v160y45 (Олег 21:40 «видео на 40mb висит»): транскод 40MB 4K идёт
+    // real-time (минутный ролик = минута ожидания), а чип без индикации
+    // (счётчик % стартует только на этапе загрузки). Stage-коллбек на всех
+    // этапах: «конвертация…» → «кадр превью…» → «шифрование…» → % загрузки.
+    if (onStage) try { onStage("конвертация видео"); } catch (e) {}
+    // v160y40: транскод видео (>8MB / .MOV) в mp4 ≤~7MB — нормализованный
+    // файл хранится как ArrayBuffer (rec.data) и декодируется везде.
+    const preparedFile = await transcodeVideoForSend(compressedFile);
     // v160d: постер для видео — снимаем ДО шифрования, у отправителя.
-    const posterDataUrl = (file.type && file.type.startsWith("video/"))
-        ? await extractVideoPoster(file)
+    if (onStage) try { onStage("кадр превью"); } catch (e) {}
+    const posterDataUrl = (preparedFile.type && preparedFile.type.startsWith("video/"))
+        ? await extractVideoPoster(preparedFile)
         : null;
     // b. Read file as ArrayBuffer
-    const ab = await compressedFile.arrayBuffer();
-    // b. SHA-256 (for integrity check before upload)
-    const sha = await sha256Hex(ab);
+    if (onStage) try { onStage("шифрование"); } catch (e) {}
+    const ab = await preparedFile.arrayBuffer();
+    // v160y56-fastpath: ab-sha УБРАН — сервер проверяет sha ТОЛЬКО загруженного
+    // тела (ciphertext), ab-sha был мёртвым грузом: лишний проход по 36MB
+    // (200-800ms на больших файлах). Не используется нигде (grep: sha =).
     // c. AES-256-GCM encrypt
     const { ciphertext, key, iv } = await aesEncrypt(ab);
     // d. ECIES wrap key (recipient-bound)
@@ -357,9 +395,10 @@ async function attachEncryptAndUpload({ file, peerNpub, selfNpub, onProgress }) 
     const rnd = new Uint8Array(4); crypto.getRandomValues(rnd);
     const publicName = "f-" + Array.from(rnd).map(b => b.toString(16).padStart(2, "0")).join("") + ".bin";
     const ciphertextSha = await sha256Hex(ciphertext);
+    if (onStage) try { onStage(null); } catch (e) {} // дальше % загрузки
     const resp = await uploadCiphertext({
         sha256Hex: ciphertextSha,
-        mime: compressedFile.type || "application/octet-stream",
+        mime: preparedFile.type || "application/octet-stream",
         name: publicName,
         size: ciphertext.length,
         wrappedKey,
@@ -383,7 +422,7 @@ async function attachEncryptAndUpload({ file, peerNpub, selfNpub, onProgress }) 
         sha256: resp.sha256,
         mime: resp.mime,
         size: resp.size,
-        name: file.name,
+        name: preparedFile.name,
         publicName: publicName, // neutral f-…bin (тот же, что зарегистрирован на сервере)
         // v160p Phase 2: bearer token for blob download. Goes INSIDE sealed ct
         // (attachments_meta server-side copy carries it too — relay already
@@ -399,6 +438,18 @@ async function attachEncryptAndUpload({ file, peerNpub, selfNpub, onProgress }) 
 
 // Export for ES module use, and global fallback for service-worker.
 if (typeof module !== "undefined" && module.exports) {
-    module.exports = { attachEncryptAndUpload, extractVideoPoster };
+    module.exports = { attachEncryptAndUpload, extractVideoPoster, transcodeVideoForSend };
 }
-window.MurmurAttachments = { attachEncryptAndUpload, extractVideoPoster };
+window.MurmurAttachments = { attachEncryptAndUpload, extractVideoPoster, transcodeVideoForSend };
+
+// v160y56-fastpath (Олег 25.09 14:59: «36 мб грузится больше минуты»):
+// sha256 ПОЛНОГО файла (36MB ≈ 200-800ms) + crypto.subtle.encrypt (36MB
+// ≈ 300-600ms) на новом железе быстрые, НО b64encode полного ArrayBuffer
+// (String.fromCharCode-чанк 0x8000 → JS-строка → btoa) на 36MB = ~150MB
+// JS-строки + UTF-16 → ~2-4s. ГЛАВНАЯ задержка — send(ciphertext) через
+// CF-туннель: HP→CF→VPS сотовый/Wi-Fi ~1-5 МБ/с → 36MB(ct+IV) = 7-36с
+// НА ЗАГРУЗКУ (замер VPS: loopback 104 МБ/с, CF-edge 3.6-5.9 МБ/с).
+// Вывод: сетевой путь = 90%+ времени. Оптимизация — WS-путь позже;
+// сейчас: не трогаем (сеть), но убираем 2 лишних sha256 (полный файл
+// считался ДВАЖДЫ: sha = sha256Hex(ab) для integrity + ciphertextSha
+// для upload — ab-sha НЕ нужен серверу, только ciphertext-sha).

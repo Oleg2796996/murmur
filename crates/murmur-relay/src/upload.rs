@@ -14,7 +14,8 @@ use hyper::{body::Bytes, StatusCode};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -268,6 +269,76 @@ impl MessageStore {
                 .optional()?;
             Ok(stored.map_or(false, |s| s == token_hash))
         })
+    }
+
+    /// v160y26 (Олег 2026-09-23 16:20): удалить blob по квитанции «скачан».
+    /// Дедуп-безопасность: ref_count вниз ТОЛЬКО если blob ещё привязан
+    /// (attachment_refs); файл + token-строки удаляем только когда ref_count = 0
+    /// (мульти-устройство держит вторую ссылку — blob доживает для него).
+    /// Возвращает (deleted, from_npub) — from_npub первого ссылающего envelope'а
+    /// для WS-нотификации отправителю (пустая строка если envelope'ов нет).
+    pub fn delete_blob_by_receipt(&self, blob_id: &str) -> rusqlite::Result<(bool, String)> {
+        // 1. from_npub для нотификации (ДО декремента — из attachment_refs).
+        let from_npub: String = self.with_conn(|c| {
+            c.query_row(
+                "SELECT e.from_npub FROM envelopes e \
+                 WHERE e.envelope_hash IN (SELECT envelope_hash FROM attachment_refs WHERE blob_id = ?1) \
+                 LIMIT 1",
+                params![blob_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map(|o| o.unwrap_or_default())
+        })?;
+        // 2. Декремент ref_count по attachment_refs этого blob.
+        self.with_conn(|c| {
+            c.execute(
+                "UPDATE blobs SET ref_count = MAX(ref_count - 1, 0) \
+                 WHERE id = ?1 AND EXISTS (SELECT 1 FROM attachment_refs WHERE blob_id = ?1)",
+                params![blob_id],
+            )?;
+            c.execute("DELETE FROM attachment_refs WHERE blob_id = ?1", params![blob_id])?;
+            Ok(())
+        })?;
+        // 3. ref_count = 0 → удаляем файл + строки (token-строки ПЕРВЫМИ —
+        // FK blob_tokens.blob_id REFERENCES blobs(id), урок v160s).
+        let (ref_count, storage_path): (i64, String) = self.with_conn(|c| {
+            c.query_row(
+                "SELECT ref_count, storage_path FROM blobs WHERE id = ?1",
+                params![blob_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map(|o| o.map_or((0, String::new()), |(rc, sp)| (rc, sp)))
+        })?;
+        if ref_count > 0 {
+            // мульти-устройство: вторая ссылка жива — blob остаётся
+            return Ok((false, from_npub));
+        }
+        if storage_path.is_empty() {
+            // файла нет (уже удалён или пустая строка) — строку blobs сносим
+            self.with_conn(|c| {
+                c.execute("DELETE FROM blob_tokens WHERE blob_id = ?1", params![blob_id])?;
+                c.execute("DELETE FROM blobs WHERE id = ?1", params![blob_id])?;
+                Ok(())
+            })?;
+            return Ok((true, from_npub));
+        }
+        self.with_conn(|c| {
+            let tx = c.unchecked_transaction()?;
+            tx.execute("DELETE FROM blob_tokens WHERE blob_id = ?1", params![blob_id])?;
+            tx.execute("DELETE FROM blobs WHERE id = ?1", params![blob_id])?;
+            tx.commit()?;
+            Ok(())
+        })?;
+        let path = Path::new(&storage_path);
+        if path.exists() {
+            match std::fs::remove_file(path) {
+                Ok(_) => info!(blob = %blob_id, "v160y26: blob deleted by receipt (downloaded)") ,
+                Err(e) => warn!(blob = %blob_id, error = %e, "v160y26: failed to delete blob file by receipt"),
+            }
+        }
+        Ok((true, from_npub))
     }
 }
 

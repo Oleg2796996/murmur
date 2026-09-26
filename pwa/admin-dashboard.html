@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>MurMur — Admin Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117; --card: #161b22; --border: #21262d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --good: #3fb950; --warn: #d29922;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 24px; max-width: 960px; margin: 0 auto;
+  }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 20px; }
+  h1 { font-size: 22px; font-weight: 600; }
+  h1 span { color: var(--accent); }
+  .meta { color: var(--muted); font-size: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px;
+  }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+  .card .value { font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .card .sub { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  .card .value.good { color: var(--good); }
+  .card .value.accent { color: var(--accent); }
+  .card .value.warn { color: var(--warn); }
+  .card .sub b { color: var(--text); font-weight: 600; }
+  .section { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+  .diskbar-wrap { margin-top: 10px; }
+  .diskbar { height: 10px; background: #21262d; border-radius: 5px; overflow: hidden; }
+  .diskbar .fill { height: 100%; background: var(--accent); border-radius: 5px; }
+  .diskbar .fill.hi { background: var(--warn); }
+  .live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--good); margin-right: 6px; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+  .err { color: #f85149; font-size: 13px; padding: 12px; }
+  .login-btn {
+    display: block; margin: 16px auto; padding: 10px 28px;
+    background: #238636; color: #fff; border: none; border-radius: 8px;
+    font-size: 14px; cursor: pointer;
+  }
+  .login-btn:hover { background: #2ea043; }
+  footer { margin-top: 16px; color: var(--muted); font-size: 11px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MurMur <span>admin</span></h1>
+  <div class="meta"><span class="live-dot"></span><span id="refreshed">—</span> · авто-обновление 60с</div>
+</header>
+
+<div class="grid" id="cards"></div>
+
+<footer>MurMur — E2E encrypted, self-hosted. Дашборд показывает только агрегаты, без идентификаторов пользователей.</footer>
+
+<script>
+const fmt = (n) => n.toLocaleString("ru-RU");
+const fmtBytes = (b) => {
+  if (b > 1e9) return (b/1e9).toFixed(1) + " ГБ";
+  if (b > 1e6) return (b/1e6).toFixed(1) + " МБ";
+  if (b > 1e3) return (b/1e3).toFixed(1) + " КБ";
+  return b + " Б";
+};
+
+function card(label, value, sub, cls) {
+  return `<div class="card"><div class="label">${label}</div><div class="value ${cls||""}">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+}
+
+// v160s2: релей отвечает 401 + WWW-Authenticate → Chromium показывает auth-диалог
+// и XHR висит. Поэтому креды вводим сами (localStorage) и шлём заголовок ЯВНО.
+const AUTH_KEY = "murmur_admin_auth";
+function getAuthHeader() {
+  const v = localStorage.getItem(AUTH_KEY);
+  if (!v) return null;
+  // возвращает «user:pass» — префикс "Basic " добавляет вызывающий
+  return v;
+}
+function askAuth() {
+  const v = prompt("Логин:пароль для MurMur admin (например murmur-admin:...)");
+  if (v && v.includes(":")) {
+    localStorage.setItem(AUTH_KEY, v.trim());
+    return v.trim();
+  }
+  return null;
+}
+
+function showLoginButton() {
+  const cards = document.getElementById("cards");
+  if (!cards || document.getElementById("login-btn")) return;
+  cards.innerHTML = `<button id="login-btn" class="login-btn" onclick="doLogin()">🔐 Войти</button>`;
+}
+async function doLogin() {
+  const v = askAuth();
+  if (v) load();
+}
+
+async function load() {
+  try {
+    let auth = getAuthHeader();
+    if (!auth) {
+      // v160s3: не prompt() на auto-load — он блокирует рендер/CDP.
+      // Показываем кнопку входа; рендер retry через 2с (пользователь мог ввести в другой вкладке).
+      showLoginButton();
+      throw new Error("нет авторизации — нажми «Войти»");
+    }
+    let r = await fetch("/api/stats", {
+      cache: "no-store",
+      headers: { "Authorization": "Basic " + btoa(auth) },
+    });
+    if (r.status === 401) {
+      // неверные креды — сброс + кнопка входа
+      localStorage.removeItem(AUTH_KEY);
+      showLoginButton();
+      throw new Error("HTTP 401 — неверный логин/пароль");
+    }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const s = await r.json();
+    document.getElementById("refreshed").textContent =
+      "обновлено " + new Date().toLocaleTimeString("ru-RU", {hour:"2-digit", minute:"2-digit", second:"2-digit"});
+    // v160s6 (Олег 2026-09-17): упрощённый формат — 3 блока.
+    // 1) Пользователи всего + активны за 24ч.
+    // 2) Сообщений отправлено сегодня + доставлено сегодня.
+    // 3) Недоставленные висят + диск: занято из свободных (__%).
+    const diskFree = s.disk_free_bytes || 0;
+    const diskUsed = s.disk_used_bytes || 0;
+    const diskTotal = s.disk_total_bytes || 0;
+    const pct = diskTotal > 0 ? Math.min(100, Math.max(0, Math.round(diskUsed / diskTotal * 1000) / 10)) : 0;
+    const pctOfFree = diskFree > 0 ? Math.round(diskUsed / (diskUsed + diskFree) * 1000) / 10 : 0;
+    document.getElementById("cards").innerHTML = [
+    // v160y31 (Олег 23:23): диск НЕ привязан к «недоставленным» — при 0
+    // подпись с размером пропадает/сбивает. Диск = всё хранилище (envelopes +
+    // blobs по таблицам), показываем ВСЕГДА отдельной карточкой.
+      card("Пользователей всего", fmt(s.total_users ?? s.unique_peers_total), `в том числе активны за последние 24 часа: <b>${fmt(s.active_users_24h ?? 0)}</b>`, "accent"),
+      card("Сообщений отправлено сегодня", fmt(s.msgs_today ?? 0), `в том числе доставлено сегодня: <b>${fmt(s.delivered_today ?? 0)}</b>`, "good"),
+      card("Недоставленных сообщений", fmt(s.envelopes_undelivered ?? 0), (s.envelopes_undelivered ?? 0) > 0 ? "ожидают получателя (TTL-окно)" : "", (s.envelopes_undelivered ?? 0) > 0 ? "warn" : ""),
+      card("Занято на сервере", fmtBytes(diskUsed), `из <b>${fmtBytes(diskTotal)}</b> всего (${pct}%) · envelopes + blobs`, ""),
+    ].join("");
+  } catch (e) {
+    const cards = document.getElementById("cards");
+    if (cards && !document.getElementById("login-btn")) {
+      cards.innerHTML = `<div class="err">Ошибка загрузки: ${e.message}</div>`;
+    }
+    document.getElementById("refreshed").textContent = "";
+  }
+}
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

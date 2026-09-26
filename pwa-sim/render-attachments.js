@@ -99,6 +99,11 @@ function withTimeout(promise, ms, label) {
 
 // 4. Main: decrypt + render
 async function renderAttachment(att, containerEl, abortSignal) {
+    // v160i1 (G5): group fast-path — файловый ключ едет в payload (att.key_b64),
+    // ECIES-wrapped_key НЕ нужен (получатель берёт ключ из group-plaintext).
+    if (att && att.blob_id && att.key_b64 && att.iv && !att.wrapped_key) {
+        return renderGroupAttachment(att, containerEl, abortSignal);
+    }
     if (!att || !att.blob_id || !att.wrapped_key || !att.iv) {
         const err = document.createElement("div");
         err.className = "attach-error";
@@ -106,7 +111,6 @@ async function renderAttachment(att, containerEl, abortSignal) {
         containerEl.appendChild(err);
         return err;
     }
-
     const placeholder = document.createElement("div");
     placeholder.className = "attach-decrypting";
     // v160ka: для больших файлов показываем размер — юзер понимает что это fetch,
@@ -469,11 +473,70 @@ function openVideoFullscreen(blobUrl, mime, name, att) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-    module.exports = { renderAttachment };
+    module.exports = { renderAttachment, renderGroupAttachment };
 }
-window.MurmurRenderAttachments = { renderAttachment };
+window.MurmurRenderAttachments = { renderAttachment, renderGroupAttachment };
 window.openFullscreen = openFullscreen;
 window.openVideoFullscreen = openVideoFullscreen;
+
+// v160i1 (G5): групповые вложения — AES-ключ приходит в payload (att.key_b64),
+// НЕ через ECIES (relay его не видит). Тот же fetch/cache/render-pipeline,
+// что у 1:1, отличается только источником ключа.
+async function renderGroupAttachment(att, containerEl, abortSignal) {
+    if (!att || !att.blob_id || !att.key_b64 || !att.iv) {
+        const err = document.createElement("div");
+        err.className = "attach-error";
+        err.textContent = "⚠️ attachment incomplete (group)";
+        containerEl.appendChild(err);
+        return err;
+    }
+    const placeholder = document.createElement("div");
+    placeholder.className = "attach-decrypting";
+    placeholder.textContent = "🔓 расшифровка…";
+    containerEl.appendChild(placeholder);
+    try {
+        if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
+        const cache = window.MurmurBlobCache;
+        if (cache && cache.isAvailable && cache.isAvailable()) {
+            const cached = await cache.get(att.blob_id);
+            if (cached) {
+                const el = renderByMime({ mime: att.mime || cached.type || "application/octet-stream", name: att.name, blobUrl: URL.createObjectURL(cached), size: cached.size, poster: att.poster_data_url || null, att });
+                placeholder.replaceWith(el);
+                return el;
+            }
+        }
+        const _sz = att.size || 0;
+        const fetchMs = _sz > 5 * 1024 * 1024 ? 90000 : 45000;
+        const ct = await withTimeout(fetchBlob(att.blob_id, abortSignal, att.blob_token), fetchMs, "fetchBlob");
+        if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
+        // Group key: прямо из payload (base64 32B) — БЕЗ eciesUnwrapKey.
+        const key = b64decode(att.key_b64);
+        if (!key || key.length !== 32) throw new Error("bad group key");
+        const iv = b64decode(att.iv);
+        const plain = await aesDecrypt({ ciphertext: ct, key, iv });
+        if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
+        const mime = att.mime || "application/octet-stream";
+        const blob = new Blob([plain], { type: mime });
+        if (cache && cache.isAvailable && cache.isAvailable()) {
+            cache.put(att.blob_id, blob, mime).catch(() => {});
+        }
+        const blobUrl = URL.createObjectURL(blob);
+        const el = renderByMime({ mime, name: att.name, blobUrl, size: plain.length, poster: att.poster_data_url || null, att });
+        placeholder.replaceWith(el);
+        return el;
+    } catch (err) {
+        if (abortSignal && abortSignal.aborted) { placeholder.remove(); return null; }
+        const errEl = document.createElement("div");
+        errEl.className = "attach-error";
+        errEl.innerHTML = `🔒 ${(err && err.message) || "не удалось расшифровать"}<br><button class="link-btn" style="margin-top:6px;font-size:0.85em">↻ повторить</button>`;
+        placeholder.replaceWith(errEl);
+        errEl.querySelector("button").addEventListener("click", async () => {
+            errEl.remove();
+            try { await renderGroupAttachment(att, containerEl, abortSignal); } catch (_e) {}
+        });
+        return errEl;
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // v160c: общий сетап видео-превью (входящие + исходящие).

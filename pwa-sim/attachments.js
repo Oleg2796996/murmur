@@ -333,7 +333,11 @@ async function extractVideoPoster(file) {
     });
 }
 
-async function attachEncryptAndUpload({ file, peerNpub, selfNpub, onProgress }) {
+async function attachEncryptAndUpload({ file, peerNpub, selfNpub, onProgress, groupMode }) {
+    // v160i1 (G5): groupMode=true → файловый ключ едет ВНУТРИ group-sealed payload
+    // (attachments[].key_b64), ECIES-wrap НЕ нужен (получатель берёт ключ из
+    // group-plaintext). rawKey возвращается отправителю для b64encode.
+    groupMode = groupMode === true;
     // a. Compress if large image (Lesson #327 — speed)
     const compressedFile = await compressImageIfLarge(file);
     // v160d: постер для видео — снимаем ДО шифрования, у отправителя.
@@ -347,7 +351,7 @@ async function attachEncryptAndUpload({ file, peerNpub, selfNpub, onProgress }) 
     // c. AES-256-GCM encrypt
     const { ciphertext, key, iv } = await aesEncrypt(ab);
     // d. ECIES wrap key (recipient-bound)
-    const wrappedKey = await eciesWrapKey(peerNpub, key, selfNpub);
+    const wrappedKey = groupMode ? null : await eciesWrapKey(peerNpub, key, selfNpub);
     // e. Upload ciphertext + wrapped_key + meta
     // Note: server checks SHA-256 against uploaded body, so pass ciphertext's SHA.
     // Privacy v154: сервер видит ТОЛЬКО нейтральное имя f-XXXXXXXX.bin — random
@@ -391,6 +395,7 @@ async function attachEncryptAndUpload({ file, peerNpub, selfNpub, onProgress }) 
         // /api/blob/{id}?t=...
         blob_token: resp.blob_token || null,
         wrapped_key: wrappedKey, // for recipient to unwrap with own privkey
+        rawKey: groupMode ? key : null, // v160i1 (G5): raw AES key ONLY for groupMode
         iv: b64encode(iv), // base64 — recipient decodes to 12-byte IV
         plaintext_b64: b64encode(new Uint8Array(ab)), // local cache for outgoing render
         poster_data_url: posterDataUrl, // v160d: JPEG-кадр для превью (в sealed ct)

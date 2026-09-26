@@ -154,6 +154,7 @@ impl SubscriberHub {
                     title: String::new(),
                     subtitle: String::new(),
                     body: json_text.clone(),
+                    ws_envelope_b64: None,
                     badge: 0,
                 }).is_ok()
             });

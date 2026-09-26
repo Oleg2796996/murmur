@@ -148,9 +148,14 @@ let _wasmReady = false;
 async function loadWasmModule() {
     if (_wasmInitPromise) return _wasmInitPromise;
     _wasmInitPromise = (async () => {
-        const mod = await import("./pkg/murmur_id_wasm.js");
+        // v160g6-fix: cache-bust на pkg JS И wasm — Safari держит старый бинарник
+        // без групповых экспортов (wasm.group_new_key is not a function).
+        // Явный URL с query: import.meta.url resolution сьедает ?v= на relative path.
+        const bust = "v=160h9-sim";
+        const mod = await import("./pkg/murmur_id_wasm.js?" + bust);
         if (!_wasmReady) {
-            await mod.default();   // <-- KEY: await __wbg_init
+            const wasmUrl = new URL("pkg/murmur_id_wasm_bg.wasm?" + bust, location.href);
+            await mod.default(wasmUrl.href);   // <-- явный путь с bust, не import.meta.url
             _wasmReady = true;
         }
         window.__murmurModuleLoaded = true;
@@ -165,7 +170,7 @@ async function ensureWasm() {
     await loadWasmModule();
 }
 
-const RELAY = "http://127.0.0.1:8444";
+const RELAY = "http://127.0.0.1:8444"; // v160y53 E2E: HP sim-relay (ws 8445, push 8444)
 const LS_NPUB = "murmur.npub";
 const LS_KEY = "murmur.sk";
 const LS_NAME = "murmur.name";
@@ -566,7 +571,7 @@ function loadOutboxForPeer(peerNpub) {
 }
 // v160t: WS endpoint — /ws (роутинг CF-туннеля + nginx → 8443). Корень ведёт
 // на push HTTP (8444), WS туда не подключается (200 fallback → handshake fail).
-const WS_URL = RELAY.replace("https://", "wss://").replace("http://", "ws://") + "/ws";
+const WS_URL = RELAY.replace("https://", "wss://").replace("http://", "ws://").replace(":8444", ":8445") + "/ws"; // v160y54 E2E: HP sim-relay WS на 8445 (ws_bind), push HTTP 8444
 const POLL_INTERVAL = 5000;
 const HISTORY_LIMIT = 100;
 const WS_RECONNECT_BASE = 1000;
@@ -596,6 +601,56 @@ let myAlias = "anon";
 let signKeyHex = null;
 let contacts = {};
 let messages = {};
+let currentGroup = null; // v160g3: открытая группа (group_id) — null = обычный 1:1 чат
+
+// v160g4: модалка создания группы (имя + выбор участников из контактов).
+// Только подписанный юзер. Инвайты уходят через 1:1 ECIES (sendGroupInvite).
+function openCreateGroupModal() {
+    if (!myNpub) { alert("Сначала войдите (подпишите identity)."); return; }
+    const peers = Object.values(contacts)
+        .filter(c => !isHiddenPeer(c.peer))
+        .sort((a, b) => (loadContactNames()[a.peer] || a.peer).localeCompare(loadContactNames()[b.peer] || b.peer));
+    if (!peers.length) { alert("Нет контактов для приглашения. Сначала создайте 1:1 чат."); return; }
+    const overlay = document.createElement("div");
+    overlay.id = "group-modal-overlay";
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px;";
+    const nameMap = loadContactNames();
+    overlay.innerHTML =
+        '<div style="background:var(--panel,#17212b);border-radius:14px;max-width:420px;width:100%;max-height:80vh;overflow:auto;padding:18px;color:#e9eaeb;">' +
+        '<h3 style="margin:0 0 14px;font-size:17px;">Новая группа</h3>' +
+        '<input id="group-name-input" type="text" placeholder="Название группы" maxlength="48" style="width:100%;box-sizing:border-box;padding:9px 12px;border-radius:8px;border:1px solid var(--border,#2f3b47);background:var(--bg,#0e1621);color:#e9eaeb;font-size:14px;margin-bottom:12px;">' +
+        '<div style="font-size:11px;opacity:.55;margin-bottom:6px;">Участники (до ' + GROUP_MEMBER_CAP + ', вкл. вас):</div>' +
+        '<div id="group-members-list" style="max-height:240px;overflow:auto;margin-bottom:14px;">' +
+        peers.map((c, i) =>
+            '<label style="display:flex;align-items:center;gap:10px;padding:8px 6px;border-radius:8px;cursor:pointer;"><input type="checkbox" class="group-member-cb" data-npub="' + c.peer + '" style="accent-color:#5eb0ff;"><span style="font-size:14px;">' + escapeHtml(nameMap[c.peer] || shortNpub(c.peer)) + '</span><span style="font-size:11px;opacity:.45;margin-left:auto;">' + shortNpub(c.peer) + '</span></label>'
+        ).join("") +
+        '</div>' +
+        '<div style="display:flex;gap:10px;">' +
+        '<button id="group-create-cancel" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--border,#2f3b47);background:transparent;color:#e9eaeb;cursor:pointer;">Отмена</button>' +
+        '<button id="group-create-ok" style="flex:1;padding:10px;border-radius:8px;border:none;background:#2b5278;color:#fff;font-weight:600;cursor:pointer;">Создать</button>' +
+        '</div>' +
+        '<div id="group-create-status" style="margin-top:10px;font-size:12px;opacity:.7;min-height:16px;"></div>' +
+        '</div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector("#group-create-cancel").addEventListener("click", () => overlay.remove());
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector("#group-create-ok").addEventListener("click", async () => {
+        const name = overlay.querySelector("#group-name-input").value.trim();
+        const members = [...overlay.querySelectorAll(".group-member-cb:checked")].map(cb => cb.dataset.npub);
+        if (!name) { overlay.querySelector("#group-create-status").textContent = "Введите название"; return; }
+        if (!members.length) { overlay.querySelector("#group-create-status").textContent = "Выберите хотя бы одного участника"; return; }
+        const st = overlay.querySelector("#group-create-status");
+        st.textContent = "Создаю группу и отправляю инвайты…";
+        try {
+            const g = await createGroup(name, members);
+            st.textContent = "Готово: " + g.name + " (" + g.members.length + " участн.)";
+            setTimeout(() => { overlay.remove(); openGroupChat(g.id); }, 600);
+        } catch (e) {
+            st.textContent = "Ошибка: " + (e && e.message || e);
+        }
+    });
+}
+window.openCreateGroupModal = openCreateGroupModal;
 let activePeer = null;
 let oldestTsForPeer = {};
 // Expose for E2E test diagnostics (Олег 2026-08-26)
@@ -884,6 +939,287 @@ async function decryptEnvelopeForRender(env) {
     }
 }
 
+// v160g3 (Олег 2026-09-21, вариант 3): групповые служебные envelope'ы.
+// group_invite: инвайт нового участника (group_id, name, members, epoch,
+// key_b64, inviter) — ECIES 1:1, key внутри. group_key: ротация ключа после
+// выхода участника (group_id, epoch, key_b64). Оба НЕ рендерятся в чат —
+// обновляют локальный groups store (как receipts, но для групп).
+async function consumeGroupEnvelope(m) {
+    try {
+        if (!m || typeof m !== "object") return false;
+        // (1) WS-путь или уже распарсено: payload напрямую.
+        let kind = m._kind || null;
+        let payload = null;
+        if (kind === "group_invite" || kind === "group_key") {
+            payload = m._plain ? (typeof m._plain === "string" ? JSON.parse(m._plain) : m._plain)
+                               : (m.payload || null);
+        }
+        // (2) Message row from /api/history: body_base64 -> inner JSON.
+        if (!payload && typeof m.body_base64 === "string") {
+            try {
+                const inner = JSON.parse(atob(m.body_base64));
+                if (inner && (inner._kind === "group_invite" || inner._kind === "group_key")) {
+                    kind = inner._kind;
+                    // inner.ct — ECIES 1:1 (расшифровывается моим приватным ключом).
+                    if (typeof inner.ct === "string") {
+                        const plain = await decryptEnvelope(inner.ct);
+                        // v160h7 (сим 21.09 22:35): decryptEnvelope может вернуть
+                        // СТРОКУ (base64 от payload-JSON — двойное кодирование на
+                        // отправке, сим: plain = "eyJncm91cF9pZCI6...", plain.body
+                        // undefined → JSON.parse(undefined) throw → payload=null →
+                        // инвайт отброшен молча). Нормализуем: строку → atob-декод →
+                        // JSON.parse; объект с body → как раньше.
+                        let plainBody = null;
+                        if (plain && typeof plain === "string") {
+                            try { plainBody = plain; } catch {}
+                        } else if (plain && typeof plain === "object" && plain.body) {
+                            plainBody = plain.body;
+                        }
+                        if (plainBody) {
+                            try { payload = JSON.parse(plainBody); } catch {
+                                try { payload = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(plainBody), c => c.charCodeAt(0)))); } catch { payload = null; }
+                            }
+                        }
+                    }
+                }
+            } catch {}
+        }
+        if (!payload) return false;
+        // Валидация payload.
+        if (!payload.group_id || typeof payload.group_id !== "string") return false;
+        if (kind === "group_invite") {
+            if (!payload.key_b64 || !Array.isArray(payload.members) || !payload.members.length) return false;
+            // Инвайт: создаём/обновляем группу локально (key внутри ECIES —
+            // релей его не видел).
+            upsertGroup({
+                id: payload.group_id,
+                name: (payload.name || "Группа").slice(0, 48),
+                members: payload.members.slice(0, GROUP_MEMBER_CAP),
+                admins: Array.isArray(payload.admins) ? payload.admins.slice(0, GROUP_MEMBER_CAP) : (payload.inviter ? [payload.inviter] : []),
+                key_b64: payload.key_b64,
+                epoch: payload.epoch || 1,
+                inviter: payload.inviter || null,
+                created_ts: payload.created_ts || Date.now(),
+            });
+            try { console.warn("[murmur] group invite applied:", payload.group_id, payload.name); } catch {}
+            return true;
+        }
+        if (kind === "group_key") {
+            // Ротация ключа: применяем ТОЛЬКО если epoch новее текущего.
+            const g = getGroup(payload.group_id);
+            if (!g) return false;
+            const newEpoch = payload.epoch || 0;
+            if (newEpoch <= (g.epoch || 1)) return true; // старая ротация — молча скип
+            g.key_b64 = payload.key_b64 || g.key_b64;
+            g.epoch = newEpoch;
+            if (Array.isArray(payload.members)) g.members = payload.members.slice(0, GROUP_MEMBER_CAP);
+            saveGroups(loadGroups());
+            try { console.warn("[murmur] group key rotated:", payload.group_id, "epoch", newEpoch); } catch {}
+            return true;
+        }
+        return false;
+    } catch (e) {
+        try { console.warn("[murmur] group envelope error:", e && e.message); } catch {}
+        return false;
+    }
+}
+window.consumeGroupEnvelope = consumeGroupEnvelope;
+
+// v160g4: входящее групповое сообщение — расшифровка групповым ключом (epoch
+// из группы), рендер в групповую ленту (messages[group_id]), автор из payload
+// (внутри E2E). Рelay видит только ct. Ошибки (нет группы/ключа/не та эпоха)
+// — молча скип (включая 🔒-замок в будущих версиях).
+async function handleIncomingGroupMsg(env, fromNpub, hash) {
+    try {
+        // (1) WS-путь / уже распарсено; (2) history-путь body_base64.
+        // v160i1: env может прийти уже распарсенным (catch-all роутер) — тогда
+        // body_base64-ветка пропускается.
+        let innerEnvelope = null;
+        if (typeof env.ct === "string") innerEnvelope = env;
+        else if (typeof env.body_base64 === "string") {
+            try { innerEnvelope = JSON.parse(atob(env.body_base64)); } catch { return false; }
+        }
+        if (!innerEnvelope || typeof innerEnvelope.ct !== "string") return false;
+        const ct = innerEnvelope.ct;
+        // group_id из payload: ct = групповой шифр (НЕ ECIES). Ищем группу по
+        // AAD-bind: перебираем локальные группы (cap 10) — decrypt падает по
+        // тегу для чужих (быстро на 10 группах).
+        const groups = loadGroups();
+        if (!groups.length) return false;
+        let matched = null, plainB64 = null;
+        for (const g of groups) {
+            const keyHex = b64ToHex(g.key_b64);
+            if (!keyHex) continue;
+            try {
+                const pt = await groupOpen(keyHex, g.epoch || 1, g.id, fromNpub, ct);
+                matched = g; plainB64 = pt; break;
+            } catch (e) { /* not this group/epoch — next */ }
+        }
+        if (!matched) { try { console.warn("[murmur] group msg: no key/epoch for", (hash || "").slice(0,12)); } catch {} return false; }
+        // v160g7b: atob возвращает UTF-8 байты как binary string — декодируем
+        // TextDecoder'ом (JSON.parse на binary string кидает на кириллице).
+        const payload = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(plainB64), c => c.charCodeAt(0))));
+        if (!payload || payload.group_id !== matched.id || !payload.body) return false;
+        const sender = payload.sender || fromNpub;
+        const gid = matched.id;
+        const sigKey = "grp" + gid + "|" + sender + "|" + (payload.ts || env.ts || 0);
+        if (!messages[gid]) messages[gid] = [];
+        // Дедуп: по hash (envelope) ИЛИ по групповому sigKey (та же группа,
+        // тот же sender, тот же ts — фанаут N копий имеют РАЗНЫЕ envelope-hash,
+        // но ОДИН payload.ts).
+        const exists = messages[gid].some(m =>
+            (hash && m._hash === hash) || m._sig === sigKey);
+        if (exists) return true; // group-owned (дубль) — 1:1 скип
+        messages[gid].push({
+            _sig: sigKey, _hash: hash,
+            ts: payload.ts || env.ts || Math.floor(Date.now() / 1000),
+            from: sender, to: gid,
+            body: payload.body, direction: sender === myNpub ? "out" : "in",
+            isGroup: true, groupId: gid,
+            status: sender === myNpub ? "sent" : null,
+            sig: "", isBinary: false,
+            // v160i1 (G5): вложения групповых сообщений — ключ в payload (key_b64),
+            // relay их не видит (attachments_meta на проводе — только blob_id/token).
+            attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
+            attachments_meta: [], reply_to: payload.reply_to || null,
+        });
+        updateMaxTs(gid, payload.ts || env.ts || 0);
+        // Receipts: ✓✓ в группу — как личные, per-envelope (мой фанаут-копии
+        // имеют разные hash; отчечаем полученную копию).
+        if (sender !== myNpub && hash) queueReceiptsForPeer(fromNpub, [hash]);
+        const gPrev = (sender === myNpub ? "Вы: " : "") + (payload.body ? payload.body.slice(0, 40) : ((payload.attachments && payload.attachments[0] && payload.attachments[0].name) ? "📎 " + payload.attachments[0].name : ""));
+        setChatPreview(gid, payload.ts || env.ts || 0, gPrev);
+        if (currentGroup === gid) { renderGroupMessages(); scrollToBottom(); }
+        else if (sender !== myNpub) { bumpUnread(gid); contacts[gid] = contacts[gid] || { peer: gid, unreadCount: 0 }; contacts[gid].unreadCount = getUnread(gid); }
+        renderChatList();
+        return true; // group-owned: поймано catch-all роутером, 1:1 не трогаем
+    } catch (e) {
+        try { console.warn("[murmur] group msg error:", e && e.message); } catch {}
+        return false;
+    }
+}
+
+// v160g4: полноценная лента группового чата (messages[group_id]). Автор над
+// пузырем (цвет по npub hash). Отправка через sendGroupMessage (фанаут).
+function renderGroupMessages() {
+    const gid = currentGroup;
+    if (!gid) return;
+    const g = getGroup(gid);
+    if (!g) return;
+    const panel = document.getElementById("chat-panel");
+    if (!panel) return;
+    const msgs = (messages[gid] || []).slice().sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    const nameColor = (npub) => {
+        let h = 0;
+        for (let i = 0; i < npub.length; i++) h = (h * 31 + npub.charCodeAt(i)) & 0xffff;
+        const hue = h % 360;
+        return `hsl(${hue}, 55%, 65%)`;
+    };
+    const shortName = (npub) => {
+        const nm = loadContactNames()[npub] || "";
+        if (nm) return nm;
+        return npub.slice(5, 11) + "…";
+    };
+    panel.innerHTML = msgs.map(m => {
+        const mine = m.direction === "out";
+        const authorLine = mine ? "" :
+            `<div style="font-size:11px;color:${nameColor(m.from)};margin:0 0 2px 12px;font-weight:600;">${escapeHtml(shortName(m.from))}</div>`;
+        // v160i1 (G5): аттачи — media-рендер (render-attachments.js), текст под ним.
+        let attHtml = "";
+        const atts = (Array.isArray(m.attachments) && m.attachments.length) ? m.attachments
+            : (Array.isArray(m.attachments_meta) ? m.attachments_meta.filter(a => a && a.blob_id) : []);
+        if (atts.length) {
+            attHtml = '<div class="g-atts" style="display:flex;flex-direction:column;gap:6px;margin:2px 0;">';
+            for (const a of atts) {
+                const safeId = escapeHtml(String(a.blob_id || ""));
+                const safeName = escapeHtml(String(a.name || "файл"));
+                const isImg = /^image\//.test(a.mime || "");
+                const isVid = /^video\//.test(a.mime || "");
+                if (isImg || isVid) {
+                    // Групповые ключи в payload (key_b64) — рендер через group-рендер
+                    // рендер-аттачей (fast-path), лениво, после вставки DOM.
+                    attHtml += `<div class="g-att" data-blob="${safeId}" data-att='${escapeHtml(JSON.stringify(a))}' style="max-width:260px;min-height:60px;border-radius:10px;background:#0d1620;overflow:hidden;cursor:pointer;"><div style="padding:14px;font-size:12px;opacity:.6;">⏳ ${isImg ? "фото" : "видео"}…</div></div>`;
+                } else {
+                    attHtml += `<div class="g-att" data-blob="${safeId}" data-att='${escapeHtml(JSON.stringify(a))}' style="max-width:260px;padding:10px 12px;border-radius:10px;background:#0d1620;font-size:13px;">📎 ${safeName}</div>`;
+                }
+            }
+            attHtml += "</div>";
+        }
+        const textHtml = m.body ? `<div style="white-space:pre-wrap;word-break:break-word;">${escapeHtml(m.body)}</div>` : "";
+        const bubble = `<div style="display:inline-block;max-width:78%;padding:7px 11px;border-radius:12px;${mine ?
+            "background:#2b5278;color:#fff;float:right;" : "background:#182533;color:#e9eaeb;"}">${attHtml}${textHtml}</div>` +
+            `<div style="font-size:10px;opacity:.45;text-align:${mine ? "right" : "left"};margin:2px 4px 8px;">${new Date(m.ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${mine ? " ✓" : ""}</div>`;
+        return `<div style="margin:0 8px;clear:both;">${authorLine}${bubble}</div>`;
+    }).join("") + '<div style="height:8px;"></div>';
+    // v160i1 (G5): ленивый decrypt+рендер групповых аттачей (после DOM-вставки).
+    hydrateGroupAttachments(panel);
+}
+
+// v160i1 (G5): decrypt blob (AES-ключ из payload, БЕЗ ECIES) + рендер через
+// render-attachments.js (тот же движок, что 1:1 — fast-path по key_b64).
+async function hydrateGroupAttachments(panel) {
+    const nodes = panel.querySelectorAll(".g-att[data-att]");
+    if (!nodes.length) return;
+    let renderMod = null;
+    try { renderMod = await import("./render-attachments.js"); } catch (e) {
+        console.warn("[v160i1] render-attachments load failed:", e); return;
+    }
+    for (const node of nodes) {
+        try {
+            const att = JSON.parse(node.dataset.att || "{}");
+            if (!att || !att.blob_id) continue;
+            const container = document.createElement("div");
+            // Group fast-path: key_b64 (+ iv + blob_token) вместо wrapped_key.
+            await renderMod.renderGroupAttachment(att, container, new AbortController().signal);
+            node.innerHTML = "";
+            node.appendChild(container);
+            node.removeAttribute("data-att"); // не рендерим повторно
+        } catch (e) {
+            try { node.innerHTML = '<div style="padding:10px;font-size:12px;opacity:.6;">⚠️ не удалось расшифровать</div>'; } catch (_e) {}
+        }
+    }
+}
+window.renderGroupMessages = renderGroupMessages;
+
+// v160g4: poll истории группы — GET /api/history по каждому member (групповые
+// копии приходят в 1:1 каналах member_npub), handleIncomingGroupMsg рендерит
+// в messages[group_id] с дедупом по payload.ts. Backlog: первый poll приносит
+// всю историю.
+async function pollHistoryForGroup(gid) {
+    if (!myNpub || !gid) return;
+    const g = getGroup(gid);
+    if (!g) return;
+    const seenHashes = new Set();
+    for (const m of (g.members || [])) {
+        // v160g8: свои копии не пуллим — optimistic уже в ленте (и self-фанаут
+        // убран, своих копий на сервере больше нет).
+        if (m === myNpub) continue;
+        try {
+            const r = await fetch(RELAY + "/api/history?npub=" + encodeURIComponent(myNpub) + "&peer=" + encodeURIComponent(m) + "&limit=" + HISTORY_LIMIT + "&_t=" + Date.now(), { cache: "no-store", credentials: "omit" });
+            if (!r.ok) continue;
+            const j = await r.json();
+            for (const msg of (j.messages || [])) {
+                const hash = msg.envelope_hash || msg.envelope_hash_hex || null;
+                if (hash && seenHashes.has(hash)) continue;
+                if (hash) seenHashes.add(hash);
+                // Фильтр по wire _kind: только group_msg (инвайты/ротации/личные
+                // в групповую ленту НЕ попадают).
+                let parsed = null;
+                try {
+                    if (typeof msg.body === "string" && msg.body.startsWith("{")) parsed = JSON.parse(msg.body);
+                    else if (typeof msg.body_base64 === "string") {
+                        const inner = JSON.parse(atob(msg.body_base64));
+                        if (inner && typeof inner._kind === "string") parsed = inner;
+                    }
+                } catch {}
+                if (!parsed || parsed._kind !== "group_msg") continue;
+                await handleIncomingGroupMsg(msg, msg.from_npub || msg.from, hash);
+            }
+        } catch (e) { console.warn("[murmur] group poll", m.slice(0,12), e && e.message); }
+    }
+}
+window.pollHistoryForGroup = pollHistoryForGroup;
+
 // Lesson #158 (Олег 2026-08-25 08:13 MSK): WASM decrypt может зависнуть
 // без exception на iPhone PWA. Per-decrypt таймаут через Promise.race.
 // Вынесен в module scope — loadHistory и pollHistoryForPeer используют.
@@ -1056,13 +1392,35 @@ async function consumeReceiptRow(m, hash, fromPeer) {
         }
         let ct = null;
         if (m._server_msg && typeof m._server_msg.ct === "string") ct = m._server_msg.ct;
+        // v160y53: WS-путь — handleIncomingEnvelope распаковывает ws_envelope_b64
+        // в env.ct/body до вызова; также берём ct из m.body напрямую.
+        if (!ct && typeof m.body === "string" && m.body.length > 0) {
+            // v160y54: WS-путь — m.body = JSON wire-конверта с ct; повторный
+            // парс даёт inner.ct. Не-JSON (base64-тело) — fallback atob-парс.
+            try {
+                const innerBody = JSON.parse(m.body);
+                if (innerBody && typeof innerBody.ct === "string") ct = innerBody.ct;
+            } catch (e) {
+                try {
+                    const innerB64 = JSON.parse(atob(m.body));
+                    if (innerB64 && typeof innerB64.ct === "string") ct = innerB64.ct;
+                } catch (e2) {}
+            }
+        }
         if (!ct && typeof m.body_base64 === "string" && m.body_base64.length > 0) {
             try {
                 const inner = JSON.parse(atob(m.body_base64));
                 if (inner && typeof inner.ct === "string") ct = inner.ct;
             } catch (e) {}
         }
-        if (!ct) return;
+        if (!ct) {
+            // v160y53: больше НЕ молчим — логируем (иначе такие потерянные ✓✓
+            // ловятся только вслепую, урок по квитанции 25.09).
+            console.warn("[receipt] consume: no ct in receipt row, hash=", (hash || "").slice(0, 12),
+                "_kind=", m._kind, "has_body=", typeof m.body === "string" && m.body.length > 0,
+                "has_body64=", typeof m.body_base64 === "string" && m.body_base64.length > 0);
+            return;
+        }
         const plain = await decryptEnvelope(ct);
         applyReceipts(fromPeer, (plain && plain.msgs) || []);
     } catch (e) {
@@ -1646,6 +2004,71 @@ function enterMessenger() {
     // invite-ссылку, cookie-мост добавит чат (handleInviteHash уже мог съесть
     // cookie через peer===ck — тогда bridge тихо выйдет).
     checkInviteCookieBridge(false);
+    // v160i1: разовая чистка старых групповых дублей из 1:1-сторов IDB
+    // (до-роутерные версии писали групповые фанауты в messages[member]:
+    // входящие как 🔒 «Шифрованное сообщение», исходящие как «исходящее
+    // сообщение»; после обновления фантом-чат «Без названия» исчезал, но
+    // дубли оставались в памяти 1:1). Fire-and-forget, раз в сутки (LS-guard).
+    try { purgeGroupDuplicatesFrom1to1(); } catch (e) { console.warn("[v160i1] purge dupes:", e); }
+}
+
+// v160i1: чистка групповых строк из 1:1 IDB-сторов. Row считается групповым,
+// если: (a) явные маркеры isGroup/groupId/_kind group_*, (b) _sig начинается
+// с "grp" (optimistic-копия sendGroupMessage), (c) body = 🔒-плейсхолдер И
+// конверт открывается групповым ключом (groupOpen успешен) — ловит без-
+// маркерные до-h5 дубли. Реально битые 🔒 (1:1 «Мак»/«Телефон», key-loss)
+// groupOpen НЕ проходит → выживают (их тему не трогаем).
+async function purgeGroupDuplicatesFrom1to1() {
+    if (!window.appStore || !window.appStore.chats || !window.appStore.chats.listPeers) return;
+    // Раз в сутки: localStorage-флаг (не бесим IDB при каждом старте).
+    const LS_PURGE = "murmur_purge_grp_dupe_v160i1";
+    const last = Number(localStorage.getItem(LS_PURGE) || 0);
+    if (Date.now() - last < 20 * 3600 * 1000) return;
+    const groups = loadGroups() || []; // v160i1: группы — МАССИВ (loadGroups), не объект
+    const gids = groups.map(g => g.id);
+    const peers = await window.appStore.chats.listPeers();
+    let removedTotal = 0;
+    for (const p of peers) {
+        if (!p || p === myNpub) continue;
+        if (groups.some(g => g.id === p)) continue; // сама группа — её стор не трогаем
+        let rec = null;
+        try { rec = await window.appStore.chats.getMessages(p); } catch (e) { continue; }
+        if (!Array.isArray(rec) || rec.length === 0) continue;
+        const kept = [];
+        let removed = 0;
+        for (const m of rec) {
+            let isGrp = m.isGroup === true || (typeof m.groupId === "string" && gids.includes(m.groupId))
+                || (typeof m._sig === "string" && m._sig.startsWith("grp"));
+            if (!isGrp && gids.length > 0 && typeof m.body === "string" && m.body.includes("🔒")) {
+                // пробуем открыть групповым ключом (реальный API — groupOpen wrap)
+                try {
+                    const envSrc = m._server_msg || (m.body_base64 ? (() => { try { return JSON.parse(decodeBody(m.body_base64).text); } catch { return null; } })() : null);
+                    const ct = envSrc && typeof envSrc.ct === "string" ? envSrc.ct : null;
+                    if (ct && m.from) {
+                        for (const g of groups) {
+                            const keyHex = b64ToHex(g.key_b64 || ""); // v160i1: ключ живёт в key_b64 (см. 1051/4490), g.key не существует
+                            if (!keyHex) continue;
+                            try {
+                                await groupOpen(keyHex, g.epoch || 1, g.id, m.from, ct);
+                                isGrp = true; break; // открылось групповым ключом → дубль
+                            } catch (_e) {}
+                        }
+                    }
+                } catch (_e) {}
+            }
+            if (isGrp) removed++; else kept.push(m);
+        }
+        if (removed > 0) {
+            try {
+                await window.appStore.chats.saveMessages(p, kept);
+                removedTotal += removed;
+                console.log("[v160i1] purged " + removed + " group dupes from 1:1 " + p.slice(0, 12));
+                if (messages[p]) { messages[p] = kept; if (activePeer === p) renderMessages(); }
+            } catch (e) { console.warn("[v160i1] purge save failed:", e); }
+        }
+    }
+    localStorage.setItem(LS_PURGE, String(Date.now()));
+    if (removedTotal > 0) { renderChatList(); console.log("[v160i1] purge total: " + removedTotal); }
 }
 
 // (старый мягкий logout-обработчик удалён 2026-08-31: кнопка btn-logout теперь
@@ -2485,6 +2908,13 @@ function renderChatList() {
         .filter(c => {
             // Lesson #129: hidden peers не отображаются в sidebar.
             if (isHiddenPeer(c.peer)) return false;
+            // v160h9 (Олег 22.09 «новый чат без имени, исходящее в старом и новом»):
+            // setChatPreview(gid)/contacts[gid] (optimistic-отправка в группу и
+            // входящие group_msg) создают contacts-записи с group- gid. Без
+            // фильтра gid рисовался в ЛИЧНОЙ секции как «Без имени» (nameMap
+            // не имеет gid), а messages[gid] общий массив → исходящее видно в
+            // «обоих» чатах. Группы рисует отдельная секция «Группы» ниже.
+            if (getGroup(c.peer)) return false;
             if (!filter) return true;
             const display = (nameMap[c.peer] || "").toLowerCase();
             return c.peer.toLowerCase().includes(filter) || display.includes(filter);
@@ -2515,7 +2945,7 @@ function renderChatList() {
 
     for (const c of sorted) {
         const div = document.createElement("div");
-        div.className = "chat-item" + (activePeer === c.peer ? " active" : "");
+        div.className = "chat-item" + (activePeer === c.peer && !currentGroup ? " active" : ""); // v160i1: при открытой группе 1:1 не подсвечиваем (полоска не «перескакивает» на 1:1)
         // v160u (Олег 14:24): не показывать «🔒 зашифрованное сообщение» в сайдбаре.
         // Сервер отдаёт placeholder (не имеет ключей), локальный decrypt приходит
         // через 1-2 cек — раньше был видимый перебор «🔒 → текст».
@@ -2556,7 +2986,7 @@ function renderChatList() {
                 "<span class='chat-item-time'>" + timeDisplay + "</span>" +
                 badge +
             "</div>";
-        div.addEventListener("click", () => openChat(c.peer));
+        div.addEventListener("click", () => openChat(c.peer, {fromUser: true}));
         chatList.appendChild(div);
     }
     // v160x: вернуть скролл. Если высота не изменилась — точная позиция;
@@ -2574,6 +3004,86 @@ function renderChatList() {
             }
         }
     } catch (e) { /* ignore */ }
+    // v160g3: секция «Группы» под личными чатами — локальные группы из
+    // groups store, отсортированы по created_ts. Групповые ленты (messages
+    // по member_npub с group_id в payload) пока не merge'им — в G4.
+    try {
+        const groups = loadGroups().slice().sort((a, b) => (b.created_ts || 0) - (a.created_ts || 0));
+        if (groups.length) {
+            const hdr = document.createElement("div");
+            hdr.className = "sidebar-section-hdr";
+            hdr.textContent = "Группы";
+            hdr.style.cssText = "padding:10px 12px 4px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.55;";
+            chatList.appendChild(hdr);
+            for (const g of groups) {
+                if (filter && !(g.name || "").toLowerCase().includes(filter)) continue;
+                const el = document.createElement("div");
+                el.className = "chat-item group-item";
+                el.dataset.groupId = g.id;
+                const membersN = Array.isArray(g.members) ? g.members.length : 0;
+                const epoch = g.epoch || 1;
+                el.innerHTML =
+                    '<div class="chat-item-avatar group-avatar" style="background:#2b5278;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;">👥</div>' +
+                    '<div class="chat-item-main" style="flex:1;min-width:0;">' +
+                    '<div class="chat-item-name" style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(g.name || "Группа") + '</div>' +
+                    '<div class="chat-item-last" style="font-size:12px;opacity:.6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + membersN + ' участн. · эпоха ' + epoch + '</div>' +
+                    '</div>';
+                el.addEventListener("click", () => {
+                    try { openGroupChat(g.id); } catch (e) { console.warn("[murmur] openGroupChat:", e); }
+                });
+                chatList.appendChild(el);
+            }
+        }
+    } catch (e) { console.warn("[murmur] groups render:", e); }
+}
+
+// v160g7 (Олег 13:32: «Я тапаю на группу, но ничего не происходит»):
+// ЗАГЛУШКА БЕЗ ПОЛЯ ВВОДА выглядела как «ничего не произошло» — рисовали
+// только состав группы в #chat-panel, inputArea оставалась hidden.
+// Теперь группа открывается КАК 1:1 чат: лента + поле ввода + scrollCure.
+// Пустая лента = приветственная строка в панели (не заглушка без ввода).
+function openGroupChat(groupId) {
+    const g = getGroup(groupId);
+    if (!g) { console.warn("[murmur] group not found:", groupId); return; }
+    currentGroup = groupId;
+    const membersN = Array.isArray(g.members) ? g.members.length : 0;
+    const isAdmin = isAdminOf(g, myNpub);
+    // Layout КАК в openChat: messenger.chat-open, подсветка активной группы,
+    // chat-view flex, inputArea visible, noChat скрыт.
+    const m = document.querySelector(".messenger");
+    if (m) m.classList.add("chat-open");
+    chatList.querySelectorAll(".chat-item").forEach(el => {
+        el.classList.toggle("active", el.dataset && el.dataset.groupId === groupId);
+    });
+    if (contacts[groupId]) contacts[groupId].unreadCount = 0;
+    clearUnread(groupId);
+    if (btnDeleteChat) btnDeleteChat.hidden = true; // удаление группы — G5, не 1:1-кнопка
+    chatView.style.display = "flex";
+    chatView.hidden = false;
+    noChat.style.display = "none";
+    noChat.hidden = true;
+    inputArea.hidden = false;
+    inputArea.classList.add("visible");
+    // Шапка: имя группы (без onclick-имени — название задаётся при создании, G5: редактирование)
+    chatPeerName.innerHTML = "<span class='peer-name-main'>" + escapeHtml(g.name || "Группа") + "</span>";
+    chatPeerName.title = "";
+    chatPeerName.onclick = null;
+    // Панель: если есть сообщения — лента; иначе приветственная строка.
+    const panel = document.getElementById("chat-panel");
+    if (panel) {
+        if ((messages[groupId] || []).length > 0) {
+            renderGroupMessages();
+        } else {
+            panel.innerHTML = '<div style="padding:20px 16px;font-size:13px;opacity:.65;">Группа «' + escapeHtml(g.name || "Группа") + '» · ' + membersN + ' участников' + (isAdmin ? ' · вы админ' : '') + '. Напишите первое сообщение — оно уйдёт каждому участнику в E2E-конверте.</div>';
+        }
+        panel.hidden = false;
+    }
+    // Backlog: подтянуть историю группы.
+    try { pollHistoryForGroup(groupId); } catch (e) { console.warn("[murmur] pollHistoryForGroup:", e); }
+    // scrollCure (v160x19 family): stale-вьюпорт лечится реальным скроллом.
+    try { if (typeof window.scrollCure === "function") {
+        [100, 400, 900].forEach(t => setTimeout(window.scrollCure, t));
+    } } catch (e) {}
 }
 
 // ── UI Helpers (Invite & Logout) ───
@@ -2865,9 +3375,18 @@ function showInviteManualCopy(inviteLink) {
 }
 
 // ── Open Chat ──
-function openChat(peer) {
+function openChat(peer, opts) {
     peer = normalizePeer(peer);
+    // v160h9 (Олег 22.09 «новый чат без имени, исходящее в старом и новом»):
+    // клик по фантомной contacts[gid]-записи открывал messages[gid] как 1:1 —
+    // исходящее группы было видно в «обоих» чатах. Маршрутизируем в групповой UI.
+    if (getGroup(peer)) { openGroupChat(peer); return; }
     activePeer = peer;
+    // v160h4: сброс currentGroup ТОЛЬКО при явном юзер-клике (opts.fromUser).
+    // v160h3 сбрасывал безусловно — программные openChat (входящие/полл/инвайт)
+    // выкидывали группу во время набора («полоска отскакивает на чат», Олег
+    // 21.09 21:15; сим: currentGroup=null сразу после openGroupChat).
+    if (opts && opts.fromUser && currentGroup) currentGroup = null;
     hideReplyBar(); // v160r: reply сброс при смене чата (не тащим чужой reply)
     const m = document.querySelector(".messenger");
     if (m) m.classList.add("chat-open");
@@ -2906,7 +3425,7 @@ function openChat(peer) {
         if (v === null) return;
         const trimmed = v.trim().slice(0, 24);
         saveContactName(peer, trimmed);
-        openChat(peer);
+        openChat(peer, {fromUser: true});
     };
     // Lesson #325 (Олег 2026-08-28 12:05 MSK): НЕ ОЧИЩАЕМ messages[peer] перед loadHistory.
     // Раньше: messages[peer] = [] убивал локальный кэш (включая attachments_meta
@@ -2924,6 +3443,14 @@ function openChat(peer) {
     // Если первый раз открываем чат (нет кэша) — loadHistory работает как раньше.
     loadMessagesCacheForPeer(peer);
     clearUnread(peer);
+    // v160x19 (Олег 11:00: «Сработало после клавиатуры. А если после перезапуска
+    // проваливаешься в чат — пустая область появляется снова»): при перезапуске
+    // iOS standalone поднимает вьюпорт в stale-кадре (bug 254861 family) ещё ДО
+    // какого-либо клавиатурного цикла. Лечится тем же scrollCure, что и после
+    // клавиатуры — запускаем его при открытии чата (после layout чата).
+    try { if (typeof window.scrollCure === "function") {
+        [100, 400, 900].forEach(t => setTimeout(window.scrollCure, t));
+    } } catch (e) {}
     loadHistory(peer).then(() => {
         if (contacts[peer]) contacts[peer].unreadCount = 0;
         renderChatList();
@@ -2971,7 +3498,7 @@ async function loadHistory(peer, beforeTs) {
         loadingEl.remove();
         const errEl = document.createElement("div");
         errEl.className = "error-msg";
-        errEl.innerHTML = "⏳ Не удалось загрузить историю. Плохой инет — <button class='link-btn' onclick='openChat(\"" + peer + "\")'>повторить</button>";
+        errEl.innerHTML = "⏳ Не удалось загрузить историю. Плохой инет — <button class='link-btn' onclick='openChat(\"" + peer + "\", {fromUser: true})'>повторить</button>";
         area.appendChild(errEl);
     }, 45000);
     // (Олег 2026-08-25 08:13 MSK) Lesson #158: WASM decrypt может зависнуть
@@ -3007,6 +3534,38 @@ async function loadHistory(peer, beforeTs) {
                 // v158: входящие hash'и → в очередь квитанций (backlog при первом
                 // открытии чата тоже квитуется; дубли фильтрует receipted-store).
                 if (fromNpub !== myNpub && hash) queueReceiptsForPeer(peer, [hash]);
+                // v160h5 (сим 21.09 22:00): group-роутер как в poll-пути — групповые
+                // конверты (свои эхо-фанауты с _kind:"group_msg"/"group_invite" И
+                // чужие) маршрутизируем ДО outbox-пути. Без этого loadHistory матчит
+                // эхо группового конверта через outbox-ts-fallback в фантомную
+                // out-копию 1:1 чата с участником («исходящие во всех чатах»).
+                {
+                    let gwire = null;
+                    try {
+                        if (typeof m.body === "string" && (m.body.startsWith("{") || m.body.startsWith("["))) gwire = JSON.parse(m.body);
+                        else if (typeof m.body_base64 === "string" && m.body_base64.length > 0) {
+                            const inner = decodeBody(m.body_base64);
+                            if (inner && inner.text && (inner.text.startsWith("{") || inner.text.startsWith("["))) gwire = JSON.parse(inner.text);
+                        }
+                    } catch (_e) { gwire = null; }
+                    const gkind = gwire && typeof gwire._kind === "string" ? gwire._kind : (m._kind || null);
+                    if (gkind === "group_msg" || gkind === "group_invite" || gkind === "group_key") {
+                        if (gkind === "group_msg") await handleIncomingGroupMsg(m, fromNpub, hash);
+                        else if (fromNpub !== myNpub) await consumeGroupEnvelope(m);
+                        continue;
+                    }
+                    // v160i1 catch-all (Олег 22.09 09:55): СТАРЫЕ групповые фанауты
+                    // (до-_kind эпохи) лежат на сервере to=member без _kind и без
+                    // JSON-body → gwire=null → парный decrypt падает → 🔒-строка
+                    // «Шифрованное сообщение» пишется в 1:1 (мак↔телефон). Пробуем
+                    // групповой decrypt: успех → групповой стор, 1:1 скип.
+                    if (!gkind && typeof m.ct === "string" && m.ct.length > 24) {
+                        try {
+                            const routed = await handleIncomingGroupMsg(m, fromNpub, hash);
+                            if (routed === true) continue;
+                        } catch (_e) {}
+                    }
+                }
                 // Lesson #333 (Олег 2026-08-28 14:36 MSK): если hash в existingHashSet
                 // но cached msg имеет body "🔒 шифрованное сообщение" — запускаем
                 // decrypt для обновления body. Без этого кэш сам себя портит при
@@ -3789,6 +4348,272 @@ async function encryptForRecipient(recipientNpub, plainObj) {
     return r.data;
 }
 
+// ============================================================================
+// GROUP client (v160g1, Олег 2026-09-21, вариант 3 — sender-keys + epoch)
+// ============================================================================
+// Клиент-сайд фанаут: сервер НЕ знает о группах. Групповое сообщение =
+// обычный 1:1 envelope на каждого участника (?to=<member_npub>), внутри
+// зашифрованного payload — group_id + sender. Ключ группы раздаётся через
+// 1:1 ECIES. Групповая лента собирается клиентом по group_id.
+
+const LS_GROUPS = "murmur.groups"; // localStorage: [{id, name, members, key_b64, epoch, admins}]
+const GROUP_MEMBER_CAP = 10;
+
+// groups: localStorage store (id, name, members, key_b64, epoch, admins). После
+// reload читаем заново. IDB-переезд позже (если группы вырастут).
+function loadGroups() {
+    try {
+        const raw = localStorage.getItem(LS_GROUPS);
+        return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+}
+function saveGroups(groups) {
+    try { localStorage.setItem(LS_GROUPS, JSON.stringify(groups)); } catch (e) {
+        console.warn("[murmur] groups save failed:", e);
+    }
+}
+function getGroup(groupId) {
+    return loadGroups().find(g => g.id === groupId) || null;
+}
+function upsertGroup(g) {
+    const groups = loadGroups();
+    const i = groups.findIndex(x => x.id === g.id);
+    if (i >= 0) groups[i] = Object.assign({}, groups[i], g);
+    else groups.push(g);
+    saveGroups(groups);
+}
+function removeGroup(groupId) {
+    const groups = loadGroups().filter(g => g.id !== groupId);
+    saveGroups(groups);
+}
+function isAdminOf(group, npub) {
+    return Array.isArray(group.admins) && group.admins.includes(npub);
+}
+
+// group_new_key: WASM-примитив (32B master key, hex). Creator вызывает один раз.
+async function groupCreateKey() {
+    const mod = await loadWasmModule();
+    const r = unwrap(mod.group_new_key());
+    if (!r.ok) throw new Error("group_new_key: " + r.error);
+    return r.data; // 64 hex chars
+}
+
+// group_encrypt wrap: base64 in/out (group key hex + epoch + group_id + sender).
+// AAD привязан к group_id + sender + epoch — replay между группами/эпохами падает.
+async function groupSeal(groupKeyHex, epoch, groupId, senderNpub, plaintextB64) {
+    const mod = await loadWasmModule();
+    // v160g5-fix: wasm-bindgen 0.2.127 u64 → BigInt — Number кидает «Cannot convert 1 to a BigInt».
+    const r = unwrap(mod.group_encrypt(groupKeyHex, BigInt(epoch), groupId, senderNpub, plaintextB64));
+    if (!r.ok) throw new Error("group_encrypt: " + r.error);
+    return r.data; // base64 [nonce12][ct+tag]
+}
+
+// group_decrypt wrap: base64 sealed -> base64 plaintext.
+async function groupOpen(groupKeyHex, epoch, groupId, senderNpub, sealedB64) {
+    const mod = await loadWasmModule();
+    const r = unwrap(mod.group_decrypt(groupKeyHex, BigInt(epoch), groupId, senderNpub, sealedB64));
+    if (!r.ok) throw new Error("group_decrypt: " + r.error);
+    return r.data; // base64 plaintext
+}
+
+window.groupSeal = groupSeal;
+window.groupOpen = groupOpen;
+window.loadGroups = loadGroups;
+window.upsertGroup = upsertGroup;
+
+// ============================================================================
+// GROUP v160g4 (Олег 2026-09-21): отправка + инвайты + лента
+// ============================================================================
+
+// Group create: сгенерировать key + upsert локально + инвайты участникам.
+// Инвайт — ECIES 1:1 envelope с _kind:"group_invite", payload внутри содержит
+// group_id, name, members, admins, epoch, key_b64 (ключ раздаётся ТОЛЬКО через
+// 1:1 E2E — релей его не видит). Только создатель (или админ с правами).
+async function createGroup(name, memberNpubs) {
+    await ensureWasm();
+    if (!myNpub) throw new Error("not signed in");
+    const members = [myNpub, ...memberNpubs.filter(m => m && m !== myNpub)].slice(0, GROUP_MEMBER_CAP);
+    if (members.length < 2) throw new Error("нужно минимум 2 участника");
+    const keyHex = await groupCreateKey();
+    // group_id: bech32-подобный от SHA3(npub+ts) — детерминированный, уникальный.
+    const mod = await loadWasmModule();
+    const idBytes = new TextEncoder().encode("grp|" + myNpub + "|" + Date.now());
+    const gid = unwrap(mod.sign_envelope("grp", idBytes));
+    if (!gid.ok) throw new Error("group id: " + gid.error);
+    const groupId = "grp1" + gid.data.slice(0, 40).toLowerCase().replace(/[^a-z0-9]/g, "");
+    const g = {
+        id: groupId,
+        name: (name || "Группа").slice(0, 48),
+        members,
+        admins: [myNpub],
+        key_b64: btoa(keyHex.match(/../g).map(h => String.fromCharCode(parseInt(h, 16))).join("")),
+        epoch: 1,
+        created_ts: Math.floor(Date.now() / 1000),
+        inviter: null,
+    };
+    upsertGroup(g);
+    // Инвайты всем кроме себя (each через 1:1 ECIES).
+    for (const m of members) {
+        if (m === myNpub) continue;
+        try { await sendGroupInvite(g, m); } catch (e) {
+            console.warn("[murmur] group invite failed for", m.slice(0, 12), e && e.message);
+        }
+    }
+    renderChatList();
+    return g;
+}
+
+// Отправка group_invite участнику m: ECIES(m.npub) { _kind:"group_invite", ... }.
+async function sendGroupInvite(g, memberNpub) {
+    const mod = await loadWasmModule();
+    const peerKey = await resolvePeerKey(memberNpub);
+    if (!peerKey) throw new Error("cannot resolve key for " + memberNpub.slice(0, 12));
+    const payload = {
+        group_id: g.id,
+        name: g.name,
+        members: g.members,
+        admins: g.admins,
+        epoch: g.epoch || 1,
+        key_b64: g.key_b64,
+        inviter: myNpub,
+        created_ts: g.created_ts || Math.floor(Date.now() / 1000),
+    };
+    const plainB64 = btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(payload))));
+    const sealedB64 = await encryptForRecipient(memberNpub, plainB64);
+    const ts = Math.floor(Date.now() / 1000);
+    const msg = { from: myNpub, to: memberNpub, ct: sealedB64, attachments_meta: [], ts, _kind: "group_invite" };
+    const signedPayload = msg.from + "|" + msg.to + "|" + msg.ts + "|" + msg.ct;
+    const sigPayloadBytes = new TextEncoder().encode(signedPayload);
+    const sig = unwrap(mod.sign_envelope(msg.from, sigPayloadBytes));
+    if (!sig.ok) throw new Error("sign: " + sig.error);
+    msg.sig = sig.data;
+    let binStr = "";
+    const CHUNK = 0x8000;
+    for (let i = 0; i < sigPayloadBytes.length; i += CHUNK) {
+        binStr += String.fromCharCode.apply(null, sigPayloadBytes.subarray(i, i + CHUNK));
+    }
+    msg.signed_payload = btoa(binStr);
+    const r = await fetch(RELAY + "/envelope?to=" + encodeURIComponent(memberNpub), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(msg),
+    });
+    if (!r.ok) throw new Error("relay POST " + r.status);
+    return true;
+}
+
+// Ротация ключа (после выхода участника): epoch+1, новый key, group_key
+// envelope каждому оставшемуся. Только админ.
+async function rotateGroupKey(groupId) {
+    const g = getGroup(groupId);
+    if (!g || !isAdminOf(g, myNpub)) throw new Error("not admin");
+    await ensureWasm();
+    const newKeyHex = await groupCreateKey();
+    g.epoch = (g.epoch || 1) + 1;
+    g.key_b64 = btoa(newKeyHex.match(/../g).map(h => String.fromCharCode(parseInt(h, 16))).join(""));
+    saveGroups(loadGroups());
+    for (const m of g.members) {
+        if (m === myNpub) continue;
+        try { await sendGroupKeyRotation(g, m); } catch (e) {
+            console.warn("[murmur] group key rotation failed for", m.slice(0, 12), e && e.message);
+        }
+    }
+    return g;
+}
+
+async function sendGroupKeyRotation(g, memberNpub) {
+    const mod = await loadWasmModule();
+    const peerKey = await resolvePeerKey(memberNpub);
+    if (!peerKey) throw new Error("cannot resolve key for " + memberNpub.slice(0, 12));
+    const payload = { group_id: g.id, epoch: g.epoch, key_b64: g.key_b64, members: g.members };
+    const plainB64 = btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(payload))));
+    const sealedB64 = await encryptForRecipient(memberNpub, plainB64);
+    const ts = Math.floor(Date.now() / 1000);
+    const msg = { from: myNpub, to: memberNpub, ct: sealedB64, attachments_meta: [], ts, _kind: "group_key" };
+    const signedPayload = msg.from + "|" + msg.to + "|" + msg.ts + "|" + msg.ct;
+    const sigPayloadBytes = new TextEncoder().encode(signedPayload);
+    const sig = unwrap(mod.sign_envelope(msg.from, sigPayloadBytes));
+    if (!sig.ok) throw new Error("sign: " + sig.error);
+    msg.sig = sig.data;
+    let binStr = "";
+    const CHUNK = 0x8000;
+    for (let i = 0; i < sigPayloadBytes.length; i += CHUNK) {
+        binStr += String.fromCharCode.apply(null, sigPayloadBytes.subarray(i, i + CHUNK));
+    }
+    msg.signed_payload = btoa(binStr);
+    const r = await fetch(RELAY + "/envelope?to=" + encodeURIComponent(memberNpub), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(msg),
+    });
+    if (!r.ok) throw new Error("relay POST " + r.status);
+    return true;
+}
+
+// Отправка группового сообщения (фанаут по members): групповой ключ шифрует
+// payload c group_id+sender, envelope 1:1 каждому участнику. Сервер видит
+// только точка-точку (как личные).
+async function sendGroupMessage(groupId, text, attachments) {
+    const g = getGroup(groupId);
+    if (!g) throw new Error("group not found: " + groupId);
+    if (!text && !(Array.isArray(attachments) && attachments.length)) return null; // v160i1: фото без подписи разрешено
+    await ensureWasm();
+    const keyHex = (g.key_b64 || "").length === 64 ? g.key_b64 : b64ToHex(g.key_b64);
+    if (!keyHex) throw new Error("group key missing");
+    // payload: group_id + sender внутри группового шифра (лейбл автора внутри E2E —
+    // релей видит только ct). sender_npub в AAD — replay между группами падает.
+    // v160g7b: UTF-8 байты → binary string → btoa (btoa кидает «The string contains
+    // invalid characters» на кириллице — JSON.stringify НЕ эскейпит non-Latin1;
+    // тот же паттерн что в encryptForRecipient).
+    const payloadObj = { group_id: g.id, sender: myNpub, body: text, ts: Math.floor(Date.now() / 1000) };
+    // v160i1 (G5): файловые ключи ВНУТРИ группового шифра (relay не видит).
+    if (Array.isArray(attachments) && attachments.length) payloadObj.attachments = attachments;
+    const plainB64 = btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(payloadObj))));
+    const sealedB64 = await groupSeal(keyHex, g.epoch || 1, g.id, myNpub, plainB64);
+    const ts = Math.floor(Date.now() / 1000);
+    const results = [];
+    for (const m of g.members) {
+        // v160g8 (Олег 13:54 «не надо чтобы уведомления приходили отправителю»):
+        // себe копия не нужна — optimistic render уже в ленте. Без self-эха нет
+        // ни уведомлений, ни отдельного чата с самим собой.
+        if (m === myNpub) continue;
+        const mod = await loadWasmModule();
+        const signedPayload = myNpub + "|" + m + "|" + ts + "|" + sealedB64;
+        const sigPayloadBytes = new TextEncoder().encode(signedPayload);
+        const sig = unwrap(mod.sign_envelope(myNpub, sigPayloadBytes));
+        if (!sig.ok) { results.push({ member: m, ok: false, error: sig.error }); continue; }
+        // v160g7b: signed_payload — ASCII-only (npub|npub|ts|b64), но chunked на всякий
+        // случай: apply(null, bigArray) переполняет стек на длинных сообщениях.
+        let sigBin = "";
+        for (let i = 0; i < sigPayloadBytes.length; i += 0x8000) sigBin += String.fromCharCode.apply(null, sigPayloadBytes.subarray(i, i + 0x8000));
+        const msg = { from: myNpub, to: m, ct: sealedB64, attachments_meta: [], ts, sig: sig.data, signed_payload: btoa(sigBin), _kind: "group_msg" };
+        try {
+            const r = await fetch(RELAY + "/envelope?to=" + encodeURIComponent(m), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(msg),
+            });
+            results.push({ member: m, ok: r.ok, status: r.status });
+        } catch (e) {
+            results.push({ member: m, ok: false, error: e && e.message });
+        }
+    }
+    return { group: g, ts, results, sealedB64, text };
+}
+
+function b64ToHex(b64) {
+    try {
+        const bin = atob(b64);
+        if (bin.length !== 32) return null;
+        let hex = "";
+        for (let i = 0; i < bin.length; i++) hex += bin.charCodeAt(i).toString(16).padStart(2, "0");
+        return hex;
+    } catch { return null; }
+}
+
+window.createGroup = createGroup;
+window.rotateGroupKey = rotateGroupKey;
+
 /// ECIES decrypt a base64 sealed envelope to original plain object.
 async function decryptEnvelope(sealedB64) {
     // v160y (Олег 2026-09-03 «после перезапуска PWA видео перестало играть):
@@ -3821,7 +4646,69 @@ async function sendMessage() {
     // Lesson #152: try/finally ВОКРУГ всего тела — если WASM encrypt падает на
     // большом файле или FileReader не декодировал HEIC, btnSend оставалось
     // disabled навсегда. finally гарантирует разблокировку.
-    if (!activePeer) return;
+    // v160g7: ветвление на группу — currentGroup приоритетнее activePeer
+    // (открытая группа ≠ 1:1 чат; sendGroupMessage сам раскладывает по участникам).
+    if (!activePeer && !currentGroup) return;
+    if (currentGroup) {
+        const gText = messageInput.value.trim();
+        if (!gText && pendingAttachments.length === 0) return;
+        if (pendingAttachments.some((a) => a._uploading)) return;
+        messageInput.value = "";
+        messageInput.style.height = "auto";
+        btnSend.disabled = true;
+        try {
+            // v160i1 (G5, Олег 22.09 «фото и видео не пересылаются»): вложения в
+            // группах. Файл шифруется ОДНИМ AES-ключом, блоб аплоадится 1 раз,
+            // ключ файла едет ВНУТРИ group-sealed payload (attachments[].key_b64).
+            // Relay НЕ видит ключ: wrapped_key в meta — placeholder.
+            const gAtts = [];
+            for (const pa of pendingAttachments) {
+                if (pa.rejected) continue;
+                // v160i1 (G5): groupMode=true → без ECIES-wrap; attachEncryptAndUpload
+                // возвращает rawKey (Uint8Array 32B) для вложения в group-plaintext.
+                const up = pa._uploaded || await attachEncryptAndUpload({
+                    file: pa.file, peerNpub: currentGroup, selfNpub: myNpub,
+                    onProgress: null, groupMode: true,
+                });
+                gAtts.push({
+                    blob_id: up.blob_id, blob_token: up.blob_token || null,
+                    mime: up.mime, size: up.size, name: up.name,
+                    iv: up.iv, key_b64: b64encode(up.rawKey),
+                    poster_data_url: up.poster_data_url || null,
+                });
+            }
+            const res = await sendGroupMessage(currentGroup, gText, gAtts);
+            if (res) {
+                // Optimistic: своё сообщение в ленту группы (direction out).
+                // v160g8: _sig как у handleIncomingGroupMsg — poll-echo (payload.ts = res.ts)
+                // дедупится против optimistic, иначе дубль в ленте группы.
+                // v160i1 (G5): чипы вложений рендерятся сразу из plaintext_b64
+                // (remote-декрипт не нужен — ключ и так наш).
+                const optAtts = (gAtts || []).map(a => ({
+                    name: a.name, mime: a.mime, size: a.size,
+                    blob_id: a.blob_id, blob_token: a.blob_token,
+                    iv: a.iv, key_b64: a.key_b64,
+                    plaintext_b64: (pendingAttachments.find(pa => pa.file && pa.file.name === a.name) || {}).plaintext_b64 || null,
+                    poster_data_url: a.poster_data_url || null,
+                }));
+                (messages[currentGroup] = messages[currentGroup] || []).push({
+                    direction: "out", from: myNpub, body: gText, ts: res.ts, isGroup: true,
+                    attachments: optAtts, attachments_meta: [],
+                    _sig: "grp" + currentGroup + "|" + myNpub + "|" + res.ts,
+                });
+                pendingAttachments = [];
+                renderAttachmentsPreview();
+                if (typeof renderGroupMessages === "function") renderGroupMessages();
+                scrollToBottom();
+                setChatPreview(currentGroup, res.ts, (gText ? "Вы: " + gText : "📎 " + (optAtts[0] && optAtts[0].name || "вложение")));
+            }
+        } catch (e) {
+            alert("Ошибка отправки в группу: " + (e && e.message));
+        } finally {
+            btnSend.disabled = false;
+        }
+        return;
+    }
     const text = messageInput.value.trim();
     // Phase 2 (Variant Б): can send empty text if there are attachments.
     if (!text && pendingAttachments.length === 0) return;
@@ -4191,7 +5078,10 @@ if (btnAttach && fileInput) {
         // Phase 2 (Variant Б): encrypt each file client-side, upload via /api/upload,
         // collect {blob_id, wrapped_key, name, mime, size} into pendingAttachmentsMeta.
         // NO inline base64 (Lesson #165) — blob_id only goes into envelope.
-        if (!activePeer) {
+        if (!activePeer && !currentGroup) {
+            // v160i1 (Олег 22.09 «на телефоне возникает ошибка о необходимости выбрать чат»):
+            // групповые чаты живут в currentGroup (activePeer остаётся на последнем 1:1),
+            // а guard требовал только activePeer → в группе attach отклонялся.
             pushRejectedChip({ name: "—", size: 0 }, "Выберите чат перед прикреплением файла.");
             fileInput.value = "";
             return;
@@ -4517,7 +5407,7 @@ function connectWS() {
             if (handleTypingEvent(msg) || handleTypingEvent(msg.payload || {})) return;
             const envelope = msg.payload || msg;
             if (msg.type === "subscribed" || msg.type === "pong" || msg.type === "error") return;
-            if (envelope && envelope.ts) handleIncomingEnvelope(envelope);
+            if (envelope && envelope.ts) handleIncomingEnvelope(envelope).catch((e) => { console.warn("[murmur] envelope error:", e && e.message); });
         } catch (e) {
             console.warn("WS parse error:", e);
         }
@@ -4535,11 +5425,11 @@ function connectWS() {
     };
 }
 
-function handleIncomingEnvelope(env) {
+async function handleIncomingEnvelope(env) {
     if (!env || !env.ts) return;
     // Handle both formats: {from_npub, to} and {from, to}
     const fromNpub = env.from_npub || env.from;
-    const toField = env.to || "";
+    const toField = env.to || env.alias || "";
     if (fromNpub !== myNpub && toField !== myNpub) return;
 
     const peer = normalizePeer(fromNpub === myNpub ? toField : fromNpub);
@@ -4551,10 +5441,77 @@ function handleIncomingEnvelope(env) {
     // Lesson #128: более надёжный дедуп — по envelope_hash, если WS push его
     // прислал. Сервер может перезаписать ts, тогда дедуп по ts ломается.
     const hash = env.envelope_hash_hex || (env.envelope && env.envelope.envelope_hash_hex) || null;
+    // v160y53: сервер кладёт ПОЛНОЕ тело квитанции в ws_envelope_b64 (base64
+    // envelope bytes) — распаковываем ДО receipt-ветки, иначе isReceiptRow
+    // не опознает WS-пуш (без _kind/body_base64) и квитанция провалит в
+    // contentless-ветку → deferred poll находит строку уже TTL-удалённой →
+    // ack терялся навсегда (Олег 25.09: «✓ не превращается в ✓✓»).
+    if (!env._kind && typeof env.ws_envelope_b64 === "string" && env.ws_envelope_b64.length > 0) {
+        try {
+            const innerEnv = JSON.parse(atob(env.ws_envelope_b64));
+            if (innerEnv && typeof innerEnv === "object") {
+                // v160y54b: wire-конверт ЗАВЁРНУТ {"_kind":"json_envelope",
+                // "payload":{...}} — _kind квитанции внутри payload.
+                const wsPayload = (innerEnv._kind === "json_envelope" && innerEnv.payload && typeof innerEnv.payload === "object") ? innerEnv.payload : innerEnv;
+                env._kind = wsPayload._kind || innerEnv._kind || null;
+                env.ct = wsPayload.ct || env.ct;
+                env.body = JSON.stringify(wsPayload); // consumeReceiptRow парсит JSON
+                env.body_base64 = env.ws_envelope_b64; // fallback-путь
+            }
+        } catch (e) { console.warn("[WS] ws_envelope_b64 parse failed:", e && e.message); }
+    }
     // v158: служебные конверты не рендерим (WS в prod мёртв, но защита на
     // будущее). Чужая квитанция — тоже ✓✓; своя — молча скип.
     if (env._kind === "receipt" || isReceiptRow(env)) {
         if (fromNpub !== myNpub) consumeReceiptRow(env, hash, peer);
+        return;
+    }
+    // v160g3: групповые служебные (invite/rotation) — обновляют groups store,
+    // НЕ рендерятся как сообщения. Групповое ОБЫЧНОЕ сообщение (с group_id
+    // внутри payload) рендерится ниже по обычному пути (peer = member_npub,
+    // клиент собирает ленту по group_id из payload).
+    if (env._kind === "group_invite" || env._kind === "group_key") {
+        if (fromNpub !== myNpub) { await consumeGroupEnvelope(env); }
+        return;
+    }
+    // v160g4: групповое ОБЫЧНОЕ сообщение — payload содержит group_id +
+    // sender + body (внутри группового шифра). Рендерим в ГРУППОВУЮ ленту
+    // (peer = group_id), не в 1:1 чат отправителя.
+    // v160g8 (Олег 13:54 «сообщения отображаются в отдельных чатах»): WS-доставка
+    // заворачивает wire-msg в {"_kind":"json_envelope","payload":<wire>} —
+    // env._kind === "json_envelope", а group_msg внутри payload. Старая проверка
+    // env._kind === "group_msg" ВСЕГДА false на WS → провал в 1:1 путь →
+    // messages[member_npub] = отдельные чаты.
+    const gm = (env._kind === "json_envelope" && env.payload && typeof env.payload === "object") ? env.payload : env;
+    if (gm._kind === "group_msg" && typeof gm.ct === "string") {
+        await handleIncomingGroupMsg(gm, fromNpub, hash);
+        return;
+    }
+    // v160i1 catch-all (Олег 22.09 09:55): старые фанауты без _kind, ct только
+    // групповым ключом → успешный group-decrypt = маршрут в группу, 1:1 скип
+    // (иначе 🔒 «Шифрованное сообщение» в 1:1 + перетягивание полоски).
+    if (!gm._kind && typeof gm.ct === "string" && gm.ct.length > 24 && fromNpub && fromNpub !== myNpub) {
+        try {
+            const routed = await handleIncomingGroupMsg(gm, fromNpub, hash);
+            if (routed === true) return;
+        } catch (_e) {}
+    }
+    // v160h2: WS-пуш не несёт контента (body = серверный текст «New message —
+    // open the app to read it», ct/body_base64 нет). Если рендерить — в чат
+    // попадает серверный текст, а реального сообщения нет (Олег 21:05 «адресату
+    // приходит только пуш, а сообщение не отображается»). Не рендерим — дёргаем
+    // poll: реальный конверт придёт из /api/history (body_base64 → _kind →
+    // group_msg/1:1 путь) и расшифруется там. Групповые копии хранятся per-member
+    // (to=myNpub), так что pollHistoryForPeer(fromNpub) их находит.
+    const isContentlessPush = hash && !env.ct && !env.body_base64 &&
+        (!env.body || env.body.indexOf("open the app") !== -1);
+    if (isContentlessPush) {
+        console.log("[WS] contentless push deferred to poll, hash=", (hash || "").slice(0, 12), "peer=", peer.slice(0, 12));
+        setTimeout(() => {
+            pollHistoryForPeer(peer).catch(() => {});
+            const gids = Object.keys(loadGroups() || {});
+            for (const gid of gids) { try { pollHistoryForGroup(gid); } catch (e) {} }
+        }, 400);
         return;
     }
     if (fromNpub !== myNpub && hash) queueReceiptsForPeer(peer, [hash]);
@@ -4582,8 +5539,13 @@ function handleIncomingEnvelope(env) {
     // second-device scenario): дедуп не сработает (optimistic._hash ещё null,
     // sig-ключи разные — сервер переписал ts) → вторая копия навсегда. Держим
     // echo до прихода hash из POST-ответа — тот же контракт, что в pollHist.
-    if (fromNpub === myNpub && messages[peer].some(m => m._pendingServerAssign)) {
-        console.log("[WS] outgoing echo deferred (POST in flight), hash=", (hash || "").slice(0, 12));
+    // v160g9: держим echo пока у любой исходящей копии не присвоен _hash
+    // (та же защита что в pollHist v160g9) — гонка exists-проверка × POST-ответ.
+    if (fromNpub === myNpub &&
+        (messages[peer].some(m => m._pendingServerAssign) ||
+         messages[peer].some(m => m.direction === "out" && !m._hash && !m.isUndelivered &&
+             Math.abs((m.ts || 0) - (env.ts || 0)) <= 120))) {
+        console.log("[WS] outgoing echo deferred (hash unresolved), hash=", (hash || "").slice(0, 12));
         return;
     }
 
@@ -4691,6 +5653,49 @@ async function pollHistoryForPeer(peer) {
             // Lesson #128: дедуп по envelope_hash если есть, иначе по ts.
             const hash = msg.envelope_hash || msg.envelope_hash_hex || null;
             const sigKey = fromNpub + msg.ts;
+            // v160h5 (сим 21.09 21:50): групповые конверты (свои эхо-фанауты с
+            // _kind:"group_msg"/"group_invite" в body_base64 И чужие) маршрутизируем
+            // ДО exists/echo/orphan — иначе v160w orphan-merge матчит эхо группового
+            // конверта в фантомную out-копию в 1:1 чат с участником («исходящие
+            // сообщения отображаются помимо группы во всех чатах», Олег 21.09 20:18).
+            {
+                let gwire = null;
+                try {
+                    if (typeof msg.body === "string" && (msg.body.startsWith("{") || msg.body.startsWith("["))) gwire = JSON.parse(msg.body);
+                    else if (typeof msg.body_base64 === "string" && msg.body_base64.length > 0) {
+                        const inner = decodeBody(msg.body_base64);
+                        if (inner && inner.text && (inner.text.startsWith("{") || inner.text.startsWith("["))) gwire = JSON.parse(inner.text);
+                    }
+                } catch (_e) { gwire = null; }
+                const gkind = gwire && typeof gwire._kind === "string" ? gwire._kind : (msg._kind || null);
+                if (gkind === "group_msg" || gkind === "group_invite" || gkind === "group_key") {
+                    if (gkind === "group_msg") await handleIncomingGroupMsg(msg, fromNpub, hash);
+                    else if (fromNpub !== myNpub) await consumeGroupEnvelope(gwire || msg);
+                    continue;
+                }
+                // v160i1 (Олег 22.09 09:55 «групповые сообщения отображаются в 1:1
+                // как 🔒 шифрованное / исходящее, полоска перескакивает»): catch-all —
+                // БЕЗ _kind, но открывается групповым ключом. Групповые фанауты
+                // (v160g7b) шифруют payload групповым ключом с AAD (epoch|gid|sender),
+                // парный ECIES decrypt на них всегда падает → до v160i1 строка
+                // «🔒 шифрованное сообщение» писалась в messages[member] (1:1-стор),
+                // включая превью сайдбара и выбор чата. Пробуем групповой decrypt:
+                // успех (routed=true) → ТОЛЬКО групповый стор, 1:1 не трогаем.
+                {
+                    let genv = null;
+                    try {
+                        if (typeof msg.body === "string" && msg.body.startsWith("{")) genv = JSON.parse(msg.body);
+                        else if (typeof msg.body_base64 === "string" && msg.body_base64.length > 0) {
+                            const inner = decodeBody(msg.body_base64);
+                            if (inner && inner.text && inner.text.startsWith("{")) genv = JSON.parse(inner.text);
+                        }
+                    } catch (_e) { genv = null; }
+                    if (genv && typeof genv.ct === "string" && genv.ct.length > 24) {
+                        const routed = await handleIncomingGroupMsg(genv, fromNpub, hash);
+                        if (routed === true) continue; // group-owned → 1:1 скип
+                    }
+                }
+            }
             // v158: квитанции НЕ попадают в чат. Чужую — разобрать (✓✓), свою —
             // молча скипнуть ДО hash-дедупа (иначе своя квитанция после reload
             // прошла бы по outbox-resolution как «исходящее») и ДО Lesson #350
@@ -4736,8 +5741,18 @@ async function pollHistoryForPeer(peer) {
             // исходящего (hash = H(payload) — тот же, что вернёт POST) не матчится
             // по хэш-дедупу → вторая копия навсегда. Пока POST в полёте — скипаем
             // echo; hash/финальный sig поставит POST-обработчик.
-            if (fromNpub === myNpub && messages[peer].some(m => m._pendingServerAssign)) {
-                console.log("[pollHist] outgoing echo deferred (POST in flight), hash=", (hash || "").slice(0, 12));
+            // v160g9 (Олег 21.09 16:26 «после перезахода дубль пропал» → дубль жил
+            // только в памяти): держим echo пока у ЛЮБОЙ исходящей копии в этом чате
+            // не присвоен _hash (POST в полёте ИЛИ ответ ещё не дошёл) и ts эха
+            // совпадает с ней ±120s. Закрывает гонку «exists-проверка прошла до
+            // POST-ответа» → echo не сматчился ни по hash, ни по orphan → дубль.
+            // После присвоения hash exists-дедуп срабатывает; если POST не вернул
+            // hash — 15s-таймер отпускает, дальше ловит v160w orphan-merge.
+            if (fromNpub === myNpub &&
+                (messages[peer].some(m => m._pendingServerAssign) ||
+                 messages[peer].some(m => m.direction === "out" && !m._hash && !m.isUndelivered &&
+                     Math.abs((m.ts || 0) - (msg.ts || 0)) <= 120))) {
+                console.log("[pollHist] outgoing echo deferred (hash unresolved), hash=", (hash || "").slice(0, 12));
                 continue;
             }
 
@@ -4787,6 +5802,14 @@ async function pollHistoryForPeer(peer) {
                     }
                 }
             } catch (_e) { parsedBody = null; }
+
+            // v160g4: групповое сообщение в poll-пути — _kind:"group_msg" в wire
+            // JSON (исходящие тоже: сервер хранит _kind в body). Рендер в групповую
+            // ленту (peer=group_id), не в 1:1 чат отправителя.
+            if (parsedBody && parsedBody._kind === "group_msg") {
+                await handleIncomingGroupMsg(msg, fromNpub, hash);
+                continue;
+            }
 
             // Системное «undelivered» — отдаём отправителю, не считаем incoming,
             // рендерим особым bubble.
@@ -5518,6 +6541,7 @@ if (document.readyState === "loading") {
         warmOutboxCache();
         wireReplyBarControls(); // v160r: reply-bar controls wiring
         wireBubbleTap();        // v160r: тап на bubble → reply
+        try { const bg = document.getElementById("btn-new-group"); if (bg) bg.addEventListener("click", openCreateGroupModal); } catch (e) {}
         tryAutoRestore();
     });
 } else {
@@ -5525,6 +6549,7 @@ if (document.readyState === "loading") {
     warmOutboxCache();
     wireReplyBarControls(); // v160r
     wireBubbleTap();        // v160r
+    try { const bg = document.getElementById("btn-new-group"); if (bg) bg.addEventListener("click", openCreateGroupModal); } catch (e) {}
     tryAutoRestore();
 }
 
@@ -5554,7 +6579,9 @@ async function requestNotificationPermission() {
                 const rms = r(".messenger"), ria = r("#input-area"), rcv = r("#chat-view"), rb = document.body.getBoundingClientRect(), rd = document.documentElement.getBoundingClientRect();
                 const cs = getComputedStyle(document.documentElement);
                 box.textContent =
-                    "APP=v160x6-diag\n" +
+                    "APP=v160g4-diag\n" +
+                    "kbClass=" + document.body.classList.contains("keyboard-visible") + "\n" +
+                    "kb=" + (document.documentElement.style.getPropertyValue("--kb-inset") || "-").trim() + " composerH=" + (document.documentElement.style.getPropertyValue("--composer-h") || "-").trim() + "\n" +
                     "innerH=" + f(innerHeight) + " cliH=" + f(document.documentElement.clientHeight) + "\n" +
                     "vvH=" + (vv ? f(vv.height) : "none") + " vvTop=" + (vv ? f(vv.offsetTop) : "-") + " sc=" + (vv ? vv.scale.toFixed(2) : "-") + "\n" +
                     "bodyH=" + f(rb.height) + " bodyTop=" + f(rb.top) + " docH=" + f(rd.height) + " docTop=" + f(rd.top) + "\n" +
@@ -5649,16 +6676,30 @@ window.addEventListener("hashchange", () => {
     const setVvh = () => {
         try {
             if (vv.scale && Math.abs(vv.scale - 1) > 0.01) return; // pinch-zoom — не трогаем
+            // v160x17 (research: Telegram windowSize.ts): на iOS vv.height НЕ включает
+            // pageTop — высота на mobile должна быть vv.height + vv.pageTop.
+            const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+                (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+            const vvFull = isIOS
+                ? (vv.height || 0) + (vv.pageTop || 0)
+                : (vv.height || 0) + (vv.offsetTop || 0);
             let h;
             if (typing) {
                 h = vv.height;
             } else {
                 const br = document.body && document.body.getBoundingClientRect();
                 const bodyH = br && br.height > 100 ? br.height : 0;
-                const vvFull = (vv.height || 0) + (vv.offsetTop || 0);
                 h = Math.max(vvFull, bodyH, window.innerHeight || 0);
             }
             if (h && h > 100) document.documentElement.style.setProperty("--vvh", Math.round(h) + "px");
+            // v160x11: keyboard inset для fixed-композера. .input-area якорится
+            // к физическому низу: bottom: var(--kb-inset). Клавиатура ↑ →
+            // inset = innerHeight - vv.height → инпут над клавиатурой.
+            // Клавиатура ↓ → inset = 0 → инпут в самом краю (НЕ зависит
+            // от залипшего --vvh / layout viewport desync — iOS надёжно
+            // позиционирует fixed bottom:0 композитором).
+            const kb = typing ? Math.max(0, (window.innerHeight || 0) - (vv.height || 0)) : 0;
+            document.documentElement.style.setProperty("--kb-inset", Math.round(kb) + "px");
         } catch (e) { /* ignore */ }
     };
     // v160x8 (Олег 21:00, diag-скрин): vvH=497/msBot=497 — сжатие верное, но
@@ -5667,21 +6708,199 @@ window.addEventListener("hashchange", () => {
     // не нужным → сбрасываем scroll ВСЕГДА, вкл. печать: по scroll-событию
     // (моментальный контр-пан) + серия догонов после focusin (анимация
     // клавиатуры ~300мс). + pin списка сообщений к низу при сжатии.
+    // v160x11: с fixed-композером messenger обязан резервировать место под
+    // ним, иначе список уезжает под инпут. Высота композера динамическая
+    // (attachments-preview, reply-bar) — меряем РЕАЛЬНЫЙ rect и ставим
+    // CSS-переменную --composer-h.
+    const syncComposerSpace = () => {
+        const ia = document.getElementById("input-area");
+        if (!ia || ia.hidden) return;
+        const hgt = ia.getBoundingClientRect().height + (parseFloat(getComputedStyle(ia).bottom) || 0);
+        if (hgt > 40) document.documentElement.style.setProperty("--composer-h", Math.round(hgt) + "px");
+    };
+    const ro = new MutationObserver(syncComposerSpace);
+    try { ro.observe(document.getElementById("input-area"), { attributes: true, childList: true, subtree: true }); } catch (e) {}
+    window.addEventListener("resize", syncComposerSpace);
+    if (vv) vv.addEventListener("resize", syncComposerSpace);
+    setInterval(syncComposerSpace, 1000); // дешёвый догон — композер маленький
     const pinBottom = () => {
         const ma = document.querySelector(".messages-area");
         if (!ma) return;
         if (ma.scrollHeight - ma.scrollTop - ma.clientHeight < 80) ma.scrollTop = ma.scrollHeight;
     };
     const onVv = () => { setVvh(); reset(); requestAnimationFrame(pinBottom); };
+    // v160x11: scroll-to-settle (research-подтверждённый Fix B). При закрытии
+    // клавиатуры iOS может залипнуть layout viewport — renders 781 при
+    // честных 844. Крошечный scroll (0,1)→(0,0) заставляет композитор
+    // синхронно перерисовать и защёлкнуть layout на место.
+    const settle = () => {
+        if (window.scrollY || window.scrollX) return; // уже скроллим — не мешаем
+        try { window.scrollTo(0, 1); setTimeout(() => { try { window.scrollTo(0, 0); } catch (e) {} }, 10); } catch (e) {}
+    };
+    // v160x18 (WebKit bug 254861, «scroll somewhere slightly fixes it»):
+    // scroll ЛЕЧИТ stale-вьюпорт, но ТОЛЬКО если документ реально скроллится.
+    // settle() скроллил 1px на нескроллируемом документе = no-op. Теперь:
+    // удлиняем body на 80px → документ скроллится → РЕАЛЬНЫЙ scroll вниз/наверх
+    // (WebKit обновляет visualViewport на scroll) → возвращаемся → restore.
+    const scrollCure = () => {
+        try {
+            if (window.scrollY || window.scrollX) return;
+            const b = document.body;
+            if (!b) return;
+            const prev = b.style.height;
+            b.style.height = (b.offsetHeight + 80) + "px";
+            void b.offsetHeight;
+            window.scrollTo(0, 80);
+            requestAnimationFrame(() => {
+                window.scrollTo(0, 0);
+                requestAnimationFrame(() => { b.style.height = prev; });
+            });
+        } catch (e) {}
+    };
+    // v160x18 (ik, репортер бага 254861): vv resize listener НЕ стреляет больше
+    // одного раза — перерегистрируем на каждый focus инпута.
+    const refreshVvListener = () => {
+        try {
+            if (!vv || !vv.removeEventListener || !vv.addEventListener) return;
+            vv.removeEventListener("resize", onVv);
+            vv.addEventListener("resize", onVv);
+        } catch (e) {}
+    };
+    // v160x13 (Олег 10:04, скрин с diag: kb=0px, iaBot=844, но композер
+    // ПИКсЕЛЬНО на 783): поллинг не помог — inset честный 0, а композитор
+    // iOS КЛЕМПИТ fixed-элементы к visual-низу 783 и НЕ перерисовывает
+    // зону 783..844 (сталая клавиатурная зона). Работающий обход (по опыту
+    // iOS-тредов): принудительный reflow всего документа — кратко меняем
+    // высоту body (844 → +1px → 844), это инвалидирует композиторный слой
+    // и заставляет iOS перерисовать ВСЁ, вкл. сталую зону.
+    const forceReflow = () => {
+        try {
+            const b = document.body;
+            if (!b) return;
+            const prev = b.style.height;
+            b.style.height = "calc(100% + 1px)";
+            void b.offsetHeight; // force style+layout
+            requestAnimationFrame(() => { b.style.height = prev; });
+        } catch (e) {}
+    };
+    // v160x14 (Олег 10:10, «на iPhone — дыра, на маке — отлично»): ректы ВСЕ
+    // врут (gBCR=844), но композитор красит страницу в 783px-поверхность.
+    // ДЕТЕКТОР через elementFromPoint: проба в физическом низу экрана.
+    // Если там bg/html вместо композера → баг активен → forceReflow.
+    // Это единственный сигнал, которому JS может верить: PAINT, не layout.
+    const gapDetector = () => {
+        try {
+            const ia = document.getElementById("input-area");
+            if (!ia || ia.hidden) return false;
+            const y = Math.round((window.innerHeight || 844) - 5);
+            const el = document.elementFromPoint(Math.round((window.innerWidth || 390) / 2), y);
+            if (!el) return false;
+            // композер или его ребёнок в самом низу = ОК
+            if (el === ia || ia.contains(el)) return false;
+            // bg/html/другое = дыра активна
+            return true;
+        } catch (e) { return false; }
+    };
+    let gapFixTimer = null;
+    // watchdog: если дыра активна, дёргает И reflow, И слой композера.
+    const gapWatchdog = () => {
+        if (!gapDetector()) return;
+        scrollCure();
+        // повтор через 300мс — если iOS снова срезал, дёргаем ещё раз (макс 5 попыток)
+        const n = (parseInt(gapFixTimer || "0", 10) || 0) + 1;
+        gapFixTimer = null;
+        if (n < 5) { setTimeout(gapWatchdog, 300); gapFixTimer = String(n); }
+    };
+    // v160x16 (Олег 10:20, скрин v160x15: пиксели ТЕ ЖЕ — композер красится на
+    // промежуточной фазе закрытия клавиатуры, vv.height≈783, и НЕ перерисовывается.
+    // forceReflow body не помог — слой композера не трогался). Фикс: дёргаем
+    // КОМПОЗИЦИОННЫЙ СЛОЙ самого композера: transform translateZ(0) toggle —
+    // promote/demote заставляет iOS пересчитать позицию fixed-элемента.
+    const nudgeComposerLayer = () => {
+        try {
+            const ia = document.getElementById("input-area");
+            if (!ia || ia.hidden) return;
+            ia.style.transform = "translateZ(0)";
+            void ia.offsetHeight;
+            requestAnimationFrame(() => { ia.style.transform = ""; });
+        } catch (e) {}
+    };
+    document.addEventListener("focusout", (e) => {
+        if (e.target && (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT")) {
+            // Поллинг (v160x12) оставлен: дотягивает --kb-inset/--vvh при оседании.
+            [100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000].forEach(t => setTimeout(() => { setVvh(); syncComposerSpace(); }, t));
+            // forceReflow: сразу + догон после анимации клавиатуры (~350мс) + поздний.
+            [120, 400, 900].forEach(t => setTimeout(forceReflow, t));
+            // nudgeComposerLayer: дёргает слой самого композера (promote/demote).
+            [150, 450, 1000].forEach(t => setTimeout(nudgeComposerLayer, t));
+            [80, 250, 350, 600, 1200].forEach(t => setTimeout(settle, t));
+            // watchdog: проверяет РЕАЛЬНЫЙ PAINT низа после оседания и дёргает reflow.
+            [600, 1200, 2000].forEach(t => setTimeout(gapWatchdog, t));
+        }
+    }, true);
     document.addEventListener("focusin", (e) => {
         if (!isInput(e.target)) return;
         typing = true;
+        // v160x20 (Олег 11:11: «когда тапаешь в печать — выше появляется не последнее
+        // сообщение, а предыдущие»): при открытии клавиатуры клавиатура сжимает
+        // messages-area и iOS держит scrollTop — юзер видит предпоследние. Скроллим
+        // к низу сразу + с поллингом (клавиатура едет ~350мс, высота меняется).
+        const isChatInput = e.target.id === "message-input";
+        const scrollBottomKb = () => {
+            try {
+                if (!isChatInput) return;
+                const ma = document.querySelector(".messages-area");
+                if (!ma) return;
+                ma.scrollTop = ma.scrollHeight;
+            } catch (err) {}
+        };
+        scrollBottomKb();
+        [50, 150, 300, 500, 800].forEach(t => setTimeout(scrollBottomKb, t));
+        // v160x18: перерегистрация vv-листенера (bug 254861 ik-workaround).
+        refreshVvListener();
+        // v160x17 (research: Telegram Web A): при открытой клавиатуре — клacc
+        // keyboard-visible на body: шапка чата скрыта, композер (flex-child)
+        // прижимается к низу колонки без дыры. Ставим сразу + с поллингом:
+        // изометрия = vv.height < documentElement.clientHeight.
+        const markKb = () => {
+            try {
+                const active = (vv.height || 0) < (document.documentElement.clientHeight || 0) - 2;
+                document.body.classList.toggle("keyboard-visible", active);
+            } catch (err) {}
+        };
+        markKb();
+        [50, 150, 300, 500, 800].forEach(t => setTimeout(markKb, t));
         [50, 150, 300, 500, 800].forEach(t => setTimeout(reset, t));
     }, true);
-    window.addEventListener("focusout", () => { typing = false; [150, 400, 800].forEach(t => setTimeout(() => { setVvh(); reset(); }, t)); }, true);
+    window.addEventListener("focusout", () => {
+        typing = false;
+        // v160x17: клавиатура закрылась — снимаем keyboard-visible с поллингом
+        // (iOS оседает позже анимации).
+        const unmarkKb = () => {
+            try {
+                const active = (vv.height || 0) < (document.documentElement.clientHeight || 0) - 2;
+                document.body.classList.toggle("keyboard-visible", active);
+            } catch (err) {}
+        };
+        [100, 250, 500, 750, 1000, 1500, 2000].forEach(t => setTimeout(unmarkKb, t));
+        // v160x18: scroll-лекарство после закрытия клавиатуры — расширяем body,
+        // реальный scroll вниз/наверх, restore. Лечит stale-вьюпорт (bug 254861).
+        [80, 300, 600].forEach(t => setTimeout(scrollCure, t));
+        [150, 400, 800].forEach(t => setTimeout(() => { setVvh(); reset(); }, t));
+    }, true);
     window.addEventListener("scroll", reset, { passive: true });
     vv.addEventListener("resize", onVv);
-    vv.addEventListener("scroll", reset);
+    // v160x10b (Олег 2026-09-21, скрин «дыра 63px»): vv scroll = изменение
+    // offsetTop БЕЗ изменения height. В gap-состоянии после цикла клавиатуры
+    // iOS оседает: vv.height+vvTop = полная высота, но последнийvv resize
+    // прилетел ПРОМЕЖУТОЧНЫМ (vvFull≈790) → --vvh залип на 790, снизу дыра
+    // 54px. reset() тут НЕ пересчитывает высоту. Добавляем setVvh: каждый
+    // vv scroll дотягивает --vvh до честного MAX(...). Дешёво (setVvh
+    // идемпотентен, guard от pinch-zoom внутри).
+    vv.addEventListener("scroll", () => { setVvh(); reset(); });
     setVvh();
     reset();
+    // v160x19: экспорт scrollCure на window (module scope — lesson #363/#364),
+    // чтобы openChat (top-level function) мог запускать лекарство при открытии чата.
+    try { window.scrollCure = scrollCure; } catch (e) {}
 })();

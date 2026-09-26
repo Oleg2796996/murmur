@@ -18,7 +18,8 @@
 //   ❌ Decrypt outgoing for render (Lesson #155) — outgoing uses local object URL
 //   ❌ WASM hang without timeout (Lesson #157) — Promise.race with timeout
 
-const ATTACH_API_BASE = "https://murmur.senswifi.ru";
+// v160y24: НЕ хардкод — RELAY из app.js (single source of truth), см. attachments.js.
+const ATTACH_API_BASE = (typeof RELAY !== "undefined" && RELAY) ? RELAY : "https://murmur.senswifi.ru";
 
 function b64decode(b64) {
     const bin = atob(b64);
@@ -97,6 +98,28 @@ function withTimeout(promise, ms, label) {
     ]);
 }
 
+// v160y26: ArrayBuffer из Uint8Array без copy (structured-clone безопасно).
+function plainBytesToAb(u8) {
+    return u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
+}
+
+// v160y26 (этап 3): POST /api/blob/receipt/{blob_id}?t=<token> — квитанция
+// «blob скачан». Сервер удаляет серверную копию сразу после квитанции
+// (потолок 24ч остаётся для «никогда не забрали»). Ответ: {ok, deleted}.
+async function sendBlobReceipt(blobId, blobToken) {
+    const tqs = blobToken ? `?t=${encodeURIComponent(blobToken)}` : "";
+    const r = await fetch(`${ATTACH_API_BASE}/api/blob/receipt/${blobId}${tqs}`, {
+        method: "POST",
+        credentials: "omit",
+    });
+    if (!r.ok) {
+        throw new Error(`blob receipt HTTP ${r.status}`);
+    }
+    const j = await r.json();
+    console.log("[attach-opfs] receipt ok, deleted:", j.deleted);
+    return j;
+}
+
 // 4. Main: decrypt + render
 async function renderAttachment(att, containerEl, abortSignal) {
     if (!att || !att.blob_id || !att.wrapped_key || !att.iv) {
@@ -158,12 +181,42 @@ async function renderAttachment(att, containerEl, abortSignal) {
         // Lesson #210 (Олег 2026-08-26 13:38): AbortSignal support — abortable fetch
         if (abortSignal && abortSignal.aborted) { clearTimeout(safetyNetId); placeholder.remove(); return null; }
 
+        // v160y40 (Олег 21:06 «идею с консервацией оставляем — так гораздо
+        // шустрее работает»): OPFS-plaintext ПЕРВЫЙ слой (не фолбэк). Гарантия:
+        // OPFS — файл на диске, переживает evict WebKit; IDB-блоб — backing
+        // эвиктится в standalone PWA (WebKit), метадата может остаться честной
+        // (size > 0) → валидация по size пропускает битый блоб → VERR code=4.
+        // Плюс шустрее: render сразу из OPFS без IDB-roundtrip и decrypt.
+        try {
+            if (window.MurmurBlobOPFS && typeof window.MurmurBlobOPFS.isAvailable === "function" && window.MurmurBlobOPFS.isAvailable()) {
+                const opfsPlainFirst = await window.MurmurBlobOPFS.get("attp-" + att.blob_id);
+                if (opfsPlainFirst && opfsPlainFirst.ok && opfsPlainFirst.buf) {
+                    const mime = att._plainMime || att.mime || "application/octet-stream";
+                    const blob = new Blob([opfsPlainFirst.buf], { type: mime });
+                    blobUrl = URL.createObjectURL(blob);
+                    const displayName = att._plainName || att.name;
+                    const el = renderByMime({ mime, name: displayName, blobUrl, size: blob.size, poster: att._plainPoster || att.poster_data_url || posterFromCache(att.blob_id) || null, att });
+                    placeholder.replaceWith(el);
+                    clearTimeout(safetyNetId);
+                    console.log("[attach-opfs] PLAINTEXT FIRST", att.blob_id.slice(0, 8), "size=", blob.size);
+                    return el;
+                }
+            }
+        } catch (e) { console.warn("[attach-opfs] first-layer failed:", e); }
+
         // Lesson #211 (Олег 2026-08-26 14:14): CACHE-FIRST lookup.
         // Если blob уже расшифрован и сохранён в IndexedDB — просто показываем.
         // Иначе fetch + decrypt + save в cache.
         const cache = window.MurmurBlobCache;
         if (cache && cache.isAvailable && cache.isAvailable()) {
-            const cachedBlob = await cache.get(att.blob_id);
+            const _attSize = Number(att.size || 0);
+            let cachedBlob = await cache.get(att.blob_id);
+            const _attSizeExp = Number(att.size || 0);
+            if (cachedBlob && (cachedBlob.size === 0 || (_attSizeExp > 1024 && Math.abs(cachedBlob.size - _attSizeExp) > _attSizeExp * 0.05))) {
+                console.warn("[attach-cache] DEAD blob (size=", cachedBlob.size, "expected=", _attSizeExp, ") → treat as MISS", att.blob_id.slice(0, 8));
+                try { if (cache && cache.del) await cache.del(att.blob_id); } catch (e) {}
+                cachedBlob = null;
+            }
             if (cachedBlob) {
                 if (abortSignal && abortSignal.aborted) { clearTimeout(safetyNetId); placeholder.remove(); return null; }
                 blobUrl = URL.createObjectURL(cachedBlob);
@@ -180,6 +233,44 @@ async function renderAttachment(att, containerEl, abortSignal) {
             console.log("[attach-cache] MISS", att.blob_id.slice(0, 8));
         }
 
+        // v160y37 (Олег 2026-09-24 «после перезахода в pwa ни превью, ни
+        // проигрывания»): IDB cache может быть пуст (evict при 50MB / put
+        // не дошёл), а серверная копия УЖЕ удалена квитанцией (sendBlobReceipt
+        // после OPFS-сохранения) → fetch 404 → навсегда chip. OPFS хранит
+        // plaintext ("attp-") и ciphertext ("att-") — рендерим из OPFS без сети.
+        try {
+            if (window.MurmurBlobOPFS && typeof window.MurmurBlobOPFS.isAvailable === "function" && window.MurmurBlobOPFS.isAvailable()) {
+                const opfsPlain = await window.MurmurBlobOPFS.get("attp-" + att.blob_id);
+                if (opfsPlain && opfsPlain.ok && opfsPlain.buf) {
+                    const mime = att._plainMime || att.mime || "application/octet-stream";
+                    const blob = new Blob([opfsPlain.buf], { type: mime });
+                    blobUrl = URL.createObjectURL(blob);
+                    const displayName = att._plainName || att.name;
+                    const el = renderByMime({ mime, name: displayName, blobUrl, size: blob.size, poster: att._plainPoster || att.poster_data_url || posterFromCache(att.blob_id) || null, att });
+                    placeholder.replaceWith(el);
+                    clearTimeout(safetyNetId);
+                    console.log("[attach-opfs] PLAINTEXT HIT", att.blob_id.slice(0, 8));
+                    return el;
+                }
+                const opfsCt = await window.MurmurBlobOPFS.get("att-" + att.blob_id);
+                if (opfsCt && opfsCt.ok && opfsCt.buf) {
+                    const key = await withTimeout(eciesUnwrapKey(att.wrapped_key, { self: !!(att && att._selfKey) }), 15000, "eciesUnwrap");
+                    const iv = b64decode(att.iv);
+                    const plain = await aesDecrypt({ ciphertext: new Uint8Array(opfsCt.buf), key, iv });
+                    const mime = att._plainMime || att.mime || "application/octet-stream";
+                    const blob = new Blob([plain], { type: mime });
+                    if (cache && cache.isAvailable && cache.isAvailable()) cache.put(att.blob_id, blob, mime).catch(() => {});
+                    blobUrl = URL.createObjectURL(blob);
+                    const displayName = att._plainName || att.name;
+                    const el = renderByMime({ mime, name: displayName, blobUrl, size: plain.length, poster: att._plainPoster || att.poster_data_url || posterFromCache(att.blob_id) || null, att });
+                    placeholder.replaceWith(el);
+                    clearTimeout(safetyNetId);
+                    console.log("[attach-opfs] CT HIT + decrypt", att.blob_id.slice(0, 8));
+                    return el;
+                }
+            }
+        } catch (e) { console.warn("[attach-opfs] fallback failed:", e); }
+
         // Lesson #237 (Олег 2026-08-26 21:42 MSK): 45s для blob fetch (было 30s).
         // CF tunnel cold-start на медленном инете может быть 30-40s.
         // Плюс — уже cache HIT выше (строка 95-105), если blob в IndexedDB,
@@ -189,6 +280,24 @@ async function renderAttachment(att, containerEl, abortSignal) {
         const fetchMs = _sz > 5*1024*1024 ? 90000 : 45000;
         const ct = await withTimeout(fetchBlob(att.blob_id, abortSignal, att.blob_token), fetchMs, "fetchBlob");
         if (abortSignal && abortSignal.aborted) { clearTimeout(safetyNetId); placeholder.remove(); return null; }
+        // a2. v160y26 (Олег 2026-09-23 16:20): OPFS-сохранение СРАЗУ после fetch
+        // (этап 2 плана «вложения = текст»). SHA-256 checksum в worker — битая
+        // запись детектится. После успешной put шлём квитанцию «blob скачан» →
+        // сервер удаляет серверную копию (этап 3). Fire-and-forget: не блокирует
+        // рендер. OPFS.put принимает ArrayBuffer; конверт внутри sealed ct.
+        try {
+            if (window.MurmurBlobOPFS && ct.length) {
+                window.MurmurBlobOPFS.put("att-" + att.blob_id, plainBytesToAb(ct), "application/octet-stream")
+                    .then((r) => {
+                        if (r && r.ok && r.sha256) {
+                            console.log("[attach-opfs] saved + verified", att.blob_id.slice(0, 8));
+                            // Квитанция скачивания — только после подтверждённой записи.
+                            return sendBlobReceipt(att.blob_id, att.blob_token);
+                        }
+                    })
+                    .catch((e) => console.warn("[attach-opfs] save/receipt failed (blob живёт до 24ч, не критично):", e));
+            }
+        } catch (e) { console.warn("[attach-opfs] setup failed:", e); }
         // b. Unwrap AES key (ECIES)
         const key = await withTimeout(eciesUnwrapKey(att.wrapped_key, { self: !!(att && att._selfKey) }), 15000, "eciesUnwrap");
         if (abortSignal && abortSignal.aborted) { clearTimeout(safetyNetId); placeholder.remove(); return null; }
@@ -206,6 +315,14 @@ async function renderAttachment(att, containerEl, abortSignal) {
         if (cache && cache.isAvailable && cache.isAvailable()) {
             cache.put(att.blob_id, blob, mime).catch(e => console.warn("[attach-cache] put failed", e));
         }
+        // v160y37: plaintext OPFS-копия — рендер после перезахода без
+        // fetch/decrypt, даже если IDB cache evicted и серверная копия
+        // удалена квитанцией. put fire-and-forget.
+        try {
+            if (window.MurmurBlobOPFS && plain.length) {
+                window.MurmurBlobOPFS.put("attp-" + att.blob_id, plainBytesToAb(plain), mime).catch(() => {});
+            }
+        } catch (e) {}
         blobUrl = URL.createObjectURL(blob);
         // e. Render based on mime
         const el = renderByMime({ mime, name: att._plainName || att.name, blobUrl, size: plain.length, poster: att._plainPoster || att.poster_data_url || posterFromCache(att.blob_id) || null, att });
@@ -269,7 +386,15 @@ function renderByMime({ mime, name, blobUrl, size, poster, att }) {
         img.alt = displayName || "image";
         img.loading = "lazy";
         img.className = "attach-image";
-        img.onclick = () => openFullscreen(blobUrl, mime);
+        img.onclick = (ev) => {
+            // v160y27 (Олег 19:31 «тап по фото → потом reply-бар»): тап по фото =
+            // ТОЛЬКО fullscreen. stopPropagation — событие не доходит до
+            // messages-area слушателя, reply-бар не появляется. Reply на фото —
+            // долгим нажатием (wireLongPressReply).
+            ev.stopPropagation();
+            ev.preventDefault();
+            openFullscreen(blobUrl, mime);
+        };
         // v160p7 diag + v160p9 FIX (Олег 20:40 «на маке опять мелки превью»):
         // bubble (fit-content) схлопывается по ширине подписи до load img,
         // max-width:100% зажимает img в эту ширину навсегда. Фикс: явная
@@ -285,6 +410,9 @@ function renderByMime({ mime, name, blobUrl, size, poster, att }) {
                 if (nh > 280) w = Math.round(nw * 280 / nh);
                 img.style.width = w + "px";
             }
+            // v160y51: высота картинки изменилась после первого скролла — доводим
+            // низ, если до роста были на нём (pin-bottom, app.js).
+            try { if (window.__murmurPinBottom) window.__murmurPinBottom(); } catch (e) {}
         });
         // Lesson #225 (Олег 2026-08-26 16:05): register img element → blob URL
         // для MutationObserver auto-revoke на detach.
@@ -313,13 +441,39 @@ function renderByMime({ mime, name, blobUrl, size, poster, att }) {
         playBtn.textContent = "▶";
         wrap.appendChild(thumb);
         wrap.appendChild(playBtn);
-        wrap.onclick = () => openVideoFullscreen(blobUrl, mime, displayName, att);
+        // v160y34: fallback-чип «🎥 видео» если за 3.5с ни постера, ни кадра
+        // (вместо пустого чёрного квадрата). rVFC (murmurSetupVideoPreview)
+        // снимает чип video-frame-ready когда кадр показан.
+        setTimeout(() => {
+            if (!wrap.classList.contains("video-frame-ready") && !thumb.poster) {
+                wrap.classList.add("video-fallback-chip");
+            }
+        }, 3500);
+        wrap.onclick = (ev) => {
+            // v160y27: тап по видео = только fullscreen (reply долгим нажатием).
+            ev.stopPropagation();
+            ev.preventDefault();
+            openVideoFullscreen(blobUrl, mime, displayName, att);
+        };
         if (window.__murmurBlobOwners) window.__murmurBlobOwners.set(thumb, blobUrl);
         figure.appendChild(wrap);
         // v160c: общий сетап превью — реализация в window.murmurSetupVideoPreview
         // (ниже в этом файле). Чинит регресс v160b: video+canvas оба absolute
         // → wrap схлопывался в 0 высоты (на маке «показался и пропал»).
         if (window.murmurSetupVideoPreview) window.murmurSetupVideoPreview(wrap, thumb, blobUrl);
+        // v160y38-diag: честная диагностика видео на телефоне (?diag=1 / #diag).
+        try {
+            if (location.search.indexOf("diag=1") >= 0 || location.hash.indexOf("diag") >= 0) {
+                const dg = document.createElement("div");
+                dg.style.cssText = "position:absolute;left:2px;top:2px;z-index:5;background:rgba(0,0,0,.75);color:#4f4;font:9px/1.3 monospace;padding:3px 5px;border-radius:4px;pointer-events:none;white-space:pre;";
+                const src2 = blobUrl.startsWith("blob:") ? "blob-url" : blobUrl.slice(0, 24);
+                dg.textContent = "att=" + (att && att.blob_id ? att.blob_id.slice(0, 8) : "?") + "\nsrc=" + src2 + "\nmime=" + mime + "\nsize=" + (blob.size || _sizeBytes) + "\nselfKey=" + !!(att && att._selfKey);
+                wrap.appendChild(dg);
+                thumb.addEventListener("playing", () => { dg.textContent += "\nPLAYING"; }, { once: true });
+                thumb.addEventListener("error", () => { dg.textContent += "\nVERROR"; }, { once: true });
+                thumb.addEventListener("stalled", () => { dg.textContent += "\nSTALLED"; }, { once: true });
+            }
+        } catch (e) {}
     } else if (mime.startsWith("audio/")) {
         const a = document.createElement("audio");
         a.src = blobUrl;
@@ -424,18 +578,41 @@ function openVideoFullscreen(blobUrl, mime, name, att) {
     v.playsInline = true;
     v.className = "fullscreen-video";
     v.src = blobUrl;
-    // v160p (Олег 2026-09-02 «превью есть, но проиграть невозможно»: captured
-    // blobUrl может быть ревокирован/исчезнуть при перерисовке чата). Плеер
-    // self-healing: при ошибке src — fresh URL из blob-кэша (IDB), иначе
-    // fetch+decrypt по метам аттача. Тап по превью теперь всегда играет.
+    // v160p self-healing: при ошибке src — fresh URL. v160y35 (Олег 2026-09-24
+    // «бегунок внизу бежит, а на экране черный квадрат»): у岗位职责
+    // «играет-но-кадра-нет» onerror НЕ стреляет (meta/звук декодируются,
+    // video-трек нет) — нужен rVFC-watchdog: если играет, но кадр не доставлен
+    // за ~4.5с → re-resolve ИЗ СЕРВЕРА (bypass кэша — suspect-блоб удаляется)
+    // + повтор; вторая неудача подряд → error-чип «не декодируется» + retry.
     if (att && att.blob_id) {
-        v.onerror = async () => {
-            console.warn("[v160p] fullscreen src dead, re-resolving", att.blob_id.slice(0, 8));
+        let reResolving = false;
+        const reResolve = async (bypassCache) => {
+            if (reResolve) return;
+            reResolve = true;
+            console.warn("[v160y35] fullscreen re-resolving, bypassCache=", bypassCache, att.blob_id.slice(0, 8));
             try {
                 const cache = window.MurmurBlobCache;
+                // v160y40: OPFS plaintext ПЕРВЫЙ (Олег: «консервацию оставляем —
+                // шустрее работает») — надежнее IDB в WebKit standalone PWA.
                 let blob = null;
-                if (cache && cache.isAvailable && cache.isAvailable()) {
+                try {
+                    if (window.MurmurBlobOPFS && typeof window.MurmurBlobOPFS.isAvailable === "function" && window.MurmurBlobOPFS.isAvailable()) {
+                        const opfsPlain = await window.MurmurBlobOPFS.get("attp-" + att.blob_id);
+                        if (opfsPlain && opfsPlain.ok && opfsPlain.buf) {
+                            blob = new Blob([opfsPlain.buf], { type: att._plainMime || att.mime || "application/octet-stream" });
+                        }
+                    }
+                } catch (e) {}
+                if (!blob && !bypassCache && cache && cache.isAvailable && cache.isAvailable()) {
                     blob = await cache.get(att.blob_id);
+                    // v160y39: WebKit-порча Blob-хендлов после рестарта PWA —
+                    // мёртвый/битый блоб из кэша → re-resolve из OPFS/сети.
+                    const _as = Number(att.size || 0);
+                    if (blob && (blob.size === 0 || (_as > 1024 && Math.abs(blob.size - _as) > _as * 0.05))) {
+                        console.warn("[v160y39] fullscreen cache blob DEAD (size=", blob.size, "expected=", _as, ") → bypass");
+                        await cache.del(att.blob_id).catch(() => {});
+                        blob = null;
+                    }
                 }
                 if (!blob) {
                     const ct = await withTimeout(fetchBlob(att.blob_id, null, att.blob_token), 45000, "fetchBlob");
@@ -452,16 +629,92 @@ function openVideoFullscreen(blobUrl, mime, name, att) {
                 v.load();
                 const p = v.play();
                 if (p && p.catch) p.catch(() => {});
-                console.log("[v160p] fullscreen re-resolved OK");
+                console.log("[v160y35] fullscreen re-resolved OK");
             } catch (e) {
-                console.warn("[v160p] fullscreen re-resolve failed:", e);
+                console.warn("[v160y35] fullscreen re-resolve failed:", e);
+                // v160y37: OPFS ciphertext-фолбэк (сервер 404 после квитанции).
+                try {
+                    if (window.MurmurBlobOPFS && typeof window.MurmurBlobOPFS.isAvailable === "function" && window.MurmurBlobOPFS.isAvailable()) {
+                        const opfsCt = await window.MurmurBlobOPFS.get("att-" + att.blob_id);
+                        if (opfsCt && opfsCt.ok && opfsCt.buf) {
+                            const key = await withTimeout(eciesUnwrapKey(att.wrapped_key, { self: !!att._selfKey }), 15000, "eciesUnwrap");
+                            const iv = b64decode(att.iv);
+                            const plain = await aesDecrypt({ ciphertext: new Uint8Array(opfsCt.buf), key, iv });
+                            const mime2 = att._plainMime || att.mime || "application/octet-stream";
+                            v.src = URL.createObjectURL(new Blob([plain], { type: mime2 }));
+                            v.load();
+                            const p = v.play();
+                            if (p && p.catch) p.catch(() => {});
+                            return;
+                        }
+                    }
+                } catch (e2) {}
+                showFsError();
+            } finally {
+                setTimeout(() => { reResolve = false; }, 800);
             }
         };
+        const showFsError = () => {
+            try {
+                if (overlay.querySelector(".fs-error-chip")) return;
+                const chip = document.createElement("div");
+                chip.className = "fs-error-chip";
+                chip.innerHTML = `⚠️ видео не декодируется<br><button class="fs-error-retry">↻ повторить</button>`;
+                overlay.appendChild(chip);
+                chip.querySelector(".fs-error-retry").addEventListener("click", (ev) => {
+                    ev.stopPropagation();
+                    chip.remove();
+                    reResolve(true);
+                });
+            } catch (e) {}
+        };
+        v.onerror = () => reResolve(false);
+        // v160y38-diag: статус fullscreen видео (?diag=1 / #diag)
+        try {
+            if (location.search.indexOf("diag=1") >= 0 || location.hash.indexOf("diag") >= 0) {
+                const fd = document.createElement("div");
+                fd.style.cssText = "position:fixed;left:4px;top:60px;z-index:99999;background:rgba(0,0,0,.8);color:#4f4;font:10px/1.4 monospace;padding:6px 8px;border-radius:6px;pointer-events:none;white-space:pre;";
+                fd.textContent = "FS src=" + String(v.src || "-").slice(0, 40);
+                document.body.appendChild(fd);
+                overlay.__fsDiag = fd;
+                v.addEventListener("playing", () => { fd.textContent += "\nPLAYING t=" + v.currentTime.toFixed(1); }, { once: true });
+                v.addEventListener("loadeddata", () => { fd.textContent += "\nLOADED"; }, { once: true });
+                v.addEventListener("error", () => { fd.textContent += "\nVERR code=" + (v.error && v.error.code); }, { once: true });
+                if (typeof v.requestVideoFrameCallback === "function") {
+                    v.requestVideoFrameCallback(() => { fd.textContent += "\nRVFC-OK"; });
+                }
+            }
+        } catch (e) {}
+        // rVFC-watchdog: играет, но кадр не доставлен → suspect-блоб → bypass.
+        let gotFrame = false;
+        try {
+            if (typeof v.requestVideoFrameCallback === "function") {
+                v.requestVideoFrameCallback(() => { gotFrame = true; });
+            }
+        } catch (e) {}
+        let wdFails = 0;
+        const wd = setInterval(() => {
+            try {
+                if (!v.isConnected) { clearInterval(wd); return; }
+                if (gotFrame) { clearInterval(wd); return; } // кадр доставлен — ок
+                if (v.paused && v.currentTime === 0) return; // ещё не стартовал
+                if (!v.paused && v.currentTime > 0) {
+                    // играет, кадра нет — ретри-счёт; 2 прохода (~4.5с) → bypass
+                    if (++wdFails >= 2) {
+                        clearInterval(wd);
+                        reResolve(true);
+                    }
+                }
+            } catch (e) {}
+        }, 2200);
+        overlay.__fsWatchdog = wd; // для очистки при закрытии
     }
     overlay.appendChild(v);
     overlay.onclick = (e) => {
         if (e.target === overlay) { // клик по фону, не по контролам
             v.pause();
+            try { if (overlay.__fsWatchdog) clearInterval(overlay.__fsWatchdog); } catch (err) {}
+            if (overlay.__fsDiag) { try { overlay.__fsDiag.remove(); } catch (e2) {} }
             overlay.remove();
         }
     };
@@ -499,26 +752,51 @@ window.murmurSetupVideoPreview = function (wrap, thumb, blobUrl) {
         const w = thumb.videoWidth || 16;
         const h = thumb.videoHeight || 9;
         if (w && h) wrap.style.aspectRatio = `${w} / ${h}`;
+        // v160y51: реальные пропорции изменили высоту wrap после первого скролла —
+        // доводим низ, если до роста были на нём (pin-bottom, app.js).
+        try { if (window.__murmurPinBottom) window.__murmurPinBottom(); } catch (e) {}
     });
     // До загрузки — дефолт 16/9, чтобы было куда рисовать кадр.
     if (!wrap.style.aspectRatio) wrap.style.aspectRatio = "16 / 9";
 
-    // 2. Автоплей-луп — ТОЛЬКО как iOS-фолбэк, когда постера НЕТ (v160j:
-    // бесконечное декодирование видео на десктопе + копии blob'ов в памяти
-    // вешали вкладку при приёме видео). Если постер есть — видео НЕ играем:
-    // кадр уже нарисован на poster, экономим CPU/память.
-    if (!thumb.poster) {
-        thumb.loop = true;
-        const tryPlay = () => {
-            const p = thumb.play();
-            if (p && p.catch) p.catch(() => {});
-        };
-        thumb.addEventListener("canplay", tryPlay, { once: true });
-        setTimeout(tryPlay, 800); // страховка: canplay может не прийти на iOS
-    } else {
-        // Постер от отправителя: превью статично, декодирование не нужно.
-        // iOS покажет poster (это <img>-механика), десктоп — тоже.
-    }
+    // 2. Динамическое превью (Олег 2026-09-24 «несколько первых секунд видео»):
+    //    muted/loop автоплей ВСЕГДА — юзер видит живой кадр вместо статичного
+    //    постера (и вместо чёрного квадрата, когда постер не доехал). iOS
+    //    разрешает muted-автопроигрывание без жеста (Lesson v160c). CPU-цена
+    //    ограничена: ПАУЗА через IntersectionObserver — видео играет только
+    //    когда превью видно на экране (не в скролле за пределами вьюпорта).
+    thumb.loop = true;
+    let playBlocked = false; // v160y36: play() отклонён (iOS Low Power Mode)
+    const tryPlay = () => {
+        const p = thumb.play();
+        if (p && p.catch) p.catch(() => { playBlocked = true; });
+    };
+    thumb.addEventListener("canplay", tryPlay, { once: true });
+    setTimeout(tryPlay, 800); // страховка: canplay может не прийти на iOS
+    // Пауза/плей по видимости (CPU/батарея: не декодируем за экраном).
+    // v160y44: координатор — одно видимое превью играет, остальные на паузе
+    // (несколько живых превью дерутся за декодер iOS → другие глючат/чернеют).
+    window.__vpRegistry = window.__vpRegistry || [];
+    window.__vpRegistry.push({ thumb, wrap });
+    let vis = null;
+    try {
+        if (typeof IntersectionObserver === "function") {
+            vis = new IntersectionObserver((entries) => {
+                for (const en of entries) {
+                    if (en.isIntersecting) {
+                        for (const other of window.__vpRegistry) {
+                            if (other.wrap !== wrap && other.wrap.isConnected && other.thumb && !other.thumb.paused) {
+                                try { other.thumb.pause(); } catch (e) {}
+                            }
+                        }
+                        tryPlay();
+                    }
+                    else { try { thumb.pause(); } catch (e) {} }
+                }
+            }, { threshold: 0.3 });
+            vis.observe(wrap);
+        }
+    } catch (e) {}
 
     // 3. requestVideoFrameCallback — если доступен, ничего больше не нужно:
     //    кадр отрисуется браузером (и на iOS при активном воспроизведении).
@@ -527,4 +805,74 @@ window.murmurSetupVideoPreview = function (wrap, thumb, blobUrl) {
             wrap.classList.add("video-frame-ready");
         });
     }
+
+    // 4. v160y36 (Олег 2026-09-24 «только один кадр в первую, а не движение»):
+    //    iOS Low Power Mode / standalone PWA блокирует muted-autoplay —
+    //    play() молча отклоняется, превью замирает на первом кадре/постере.
+    //    Фолбэк: seek-приводимый canvas — seeking разрешён на iOS БЕЗ жеста:
+    //    шагаем кадры вручную (0.25s шаг, первые ~3s) и рисуем в canvas
+    //    поверх видео. Canvas absolute ВНУТРИ wrap безопасен: wrap имеет
+    //    aspect-ratio (п.1) — регресс v160b (0 высоты) не воспроизводится.
+    let seekPreviewOn = false;
+    const startSeekPreview = () => {
+        if (seekPreviewOn) return;
+        const w = thumb.videoWidth, h = thumb.videoHeight;
+        if (!w || !h) { setTimeout(startSeekPreview, 500); return; }
+        seekPreviewOn = true;
+        // v160y44 (Олег 21:31 «мигает, вертикальный меняется с квадратом»):
+        // двойной рендер — нижнее видео продолжало играть (cover-кроп, зум)
+        // и просвечивало через letterbox-полосы canvas (contain) → чередование
+        // «вертикальный↔квадрат» на каждом redraw. Пауза нижнего видео.
+        try { thumb.pause(); } catch (e) {}
+        const cv = document.createElement("canvas");
+        cv.width = w; cv.height = h;
+        cv.className = "video-seek-preview";
+        wrap.appendChild(cv);
+        wrap.classList.add("video-frame-ready");
+        // Свой observer: управляет паузой цикла (не декодируем за экраном).
+        let visible = true;
+        try { if (vis) vis.disconnect(); } catch (e) {}
+        try {
+            const vis2 = new IntersectionObserver((entries) => {
+                for (const en of entries) visible = en.isIntersecting;
+            }, { threshold: 0.3 });
+            vis2.observe(wrap);
+        } catch (e) {}
+        const dur = isFinite(thumb.duration) && thumb.duration > 0 ? Math.min(thumb.duration, 3) : 3;
+        let t = 0.1;
+        const step = () => {
+            if (!cv.isConnected) return; // wrap перерисован — цикл умер
+            if (!visible) { setTimeout(step, 500); return; }
+            const onSeeked = () => {
+                thumb.removeEventListener("seeked", onSeeked);
+                try { cv.getContext("2d").drawImage(thumb, 0, 0, w, h); } catch (e) {}
+                t += 0.1;
+                if (t >= dur) t = 0.1; // loop первых ~3с
+                setTimeout(step, 80);
+            };
+            thumb.addEventListener("seeked", onSeeked);
+            try { thumb.currentTime = t; }
+            catch (e) { thumb.removeEventListener("seeked", onSeeked); }
+        };
+        step();
+    };
+    // Если видео всё же стартовало (autoplay прошёл / retry) — canvas не нужен.
+    thumb.addEventListener("playing", () => {
+        if (seekPreviewOn) {
+            const cv = wrap.querySelector(".video-seek-preview");
+            if (cv) cv.remove();
+            seekPreviewOn = false;
+        }
+    });
+    setTimeout(() => {
+        if (playBlocked) startSeekPreview();
+        // v160y48 (Олег 22:43 «превью дёрганые, пропускаются кадры, нет
+        // плавности»): было «playBlocked || thumb.paused» — координатор (v160y44)
+        // ставит превью на паузу при скролле за экран, и на такой НЕИГРАЮЩЕЙ
+        // thumbnail стартовал 8-fps seek-цикл вместо плавного видео при
+        // возврате в видимость. Seek-цикл теперь ТОЛЬКО при реально
+        // заблокированном play (Low Power Mode). Плюс плавнее: шаг 0.1с/80мс
+        // (~12fps вместо ~8fps).
+        if (thumb.paused && !playBlocked) tryPlay(); // возврат в видимость — плавный play
+    }, 1500);
 };

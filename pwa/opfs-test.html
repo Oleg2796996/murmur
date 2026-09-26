@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MurMur OPFS test</title>
+<style>
+    body { font-family: ui-monospace, monospace; background: #111; color: #d5d5d5; padding: 12px; max-width: 720px; margin: 0 auto; }
+    h1 { font-size: 16px; color: #7fd; }
+    button { background: #2a5; color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; margin: 4px 4px 4px 0; font-size: 13px; }
+    button.gray { background: #456; }
+    pre { background: #1b1b1b; border: 1px solid #333; padding: 8px; font-size: 11px; white-space: pre-wrap; word-break: break-all; max-height: 300px; overflow-y: auto; }
+    .pass { color: #6f6; font-weight: bold; }
+    .fail { color: #f66; font-weight: bold; }
+    input { background: #222; color: #ddd; border: 1px solid #444; padding: 6px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>MurMur OPFS test — этап 1 (вложения = текст)</h1>
+<p>OPFS sync handles из dedicated worker + SHA-256 checksum. Тестируй на iPhone/Mac: положи файл, перезагрузи страницу, забери — checksum должен сойтись.</p>
+<div>
+    <button onclick="testPut()">1. Положить 2 МБ</button>
+    <button onclick="testPutSmall()">2. Положить 10 КБ</button>
+    <button class="gray" onclick="testGet()">3. Забрать (checksum)</button>
+    <button class="gray" onclick="testReload()">4. Перезагрузить</button>
+    <button class="gray" onclick="testList()">5. Список/stats</button>
+    <button class="gray" onclick="testDel()">6. Удалить</button>
+</div>
+<div>
+    <input type="file" id="filepick" onchange="testRealFile(this.files[0])" style="max-width:220px">
+    <span style="font-size:11px">← реальный файл (крупное фото)</span>
+</div>
+<pre id="log">log:</pre>
+<script src="blob-opfs.js"></script>
+<script>
+function log(s, cls) {
+    const el = document.getElementById("log");
+    const line = document.createElement("div");
+    if (cls) line.className = cls;
+    line.textContent = s;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+}
+
+const ID_MAIN = "test-blob-main";
+const ID_SMALL = "test-blob-small";
+const ID_REAL = "test-blob-real";
+
+async function testPut() {
+    try {
+        const buf = new Uint8Array(2 * 1024 * 1024);
+        for (let i = 0; i < buf.length; i += 65536) crypto.getRandomValues(buf.subarray(i, Math.min(i + 65536, buf.length)));
+        const t0 = performance.now();
+        const r = await window.MurmurBlobOPFS.put(ID_MAIN, buf.buffer, "application/octet-stream");
+        const ms = Math.round(performance.now() - t0);
+        log(`put 2MB: ok sha=${r.sha256.slice(0,12)} size=${r.size} за ${ms}ms`, "pass");
+    } catch (e) { log(`put 2MB FAIL: ${e.message}`, "fail"); }
+}
+
+async function testPutSmall() {
+    try {
+        const buf = new Uint8Array(10 * 1024);
+        for (let i = 0; i < buf.length; i += 65536) crypto.getRandomValues(buf.subarray(i, Math.min(i + 65536, buf.length)));
+        const r = await window.MurmurBlobOPFS.put(ID_SMALL, buf.buffer, "text/plain");
+        log(`put 10KB: ok sha=${r.sha256.slice(0,12)} size=${r.size}`, "pass");
+    } catch (e) { log(`put 10KB FAIL: ${e.message}`, "fail"); }
+}
+
+async function testGet() {
+    try {
+        const r = await window.MurmurBlobOPFS.get(ID_MAIN);
+        if (!r.ok) { log(`get 2MB FAIL: ${r.err}`, "fail"); return; }
+        const digest = await crypto.subtle.digest("SHA-256", r.buf);
+        const sha = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
+        if (sha === r.sha256) {
+            log(`get 2MB: checksum MATCH (${sha.slice(0,12)}), size=${r.size}`, "pass");
+        } else {
+            log(`get 2MB: checksum MISMATCH! ${sha.slice(0,12)} != ${r.sha256.slice(0,12)}`, "fail");
+        }
+    } catch (e) { log(`get 2MB FAIL: ${e.message}`, "fail"); }
+}
+
+async function testList() {
+    try {
+        const r = await window.MurmurBlobOPFS.list();
+        log(`list: ${r.entries.length} blobs: ` + r.entries.map(e => `${e.id.slice(0,18)}(${e.size}B)`).join(", "));
+        const s = await window.MurmurBlobOPFS.stats();
+        log(`stats: count=${s.count} bytes=${s.bytes}`);
+    } catch (e) { log(`list FAIL: ${e.message}`, "fail"); }
+}
+
+async function testDel() {
+    try {
+        await window.MurmurBlobOPFS.del(ID_MAIN);
+        await window.MurmurBlobOPFS.del(ID_SMALL);
+        await window.MurmurBlobOPFS.del(ID_REAL);
+        const h = await window.MurmurBlobOPFS.has(ID_MAIN);
+        log(`del: все удалены, has(ID_MAIN)=${h.has}`, "pass");
+    } catch (e) { log(`del FAIL: ${e.message}`, "fail"); }
+}
+
+async function testRealFile(file) {
+    if (!file) return;
+    try {
+        log(`real file: ${file.name} ${file.size}B ${file.type}`);
+        const t0 = performance.now();
+        await window.MurmurBlobOPFS.put(ID_REAL, file, file.type);
+        const ms = Math.round(performance.now() - t0);
+        log(`put real: ok за ${ms}ms`, "pass");
+        const r = await window.MurmurBlobOPFS.get(ID_REAL);
+        if (!r.ok) { log(`get real FAIL: ${r.err}`, "fail"); return; }
+        // сверить SHA-256 с исходным файлом
+        const origBuf = await file.arrayBuffer();
+        const d1 = await crypto.subtle.digest("SHA-256", origBuf);
+        const d2 = await crypto.subtle.digest("SHA-256", r.buf);
+        const s1 = Array.from(new Uint8Array(d1)).map(b => b.toString(16).padStart(2, "0")).join("");
+        const s2 = Array.from(new Uint8Array(d2)).map(b => b.toString(16).padStart(2, "0")).join("");
+        log(s1 === s2 ? `get real: checksum MATCH — файл цел` : `get real: checksum MISMATCH!`, s1 === s2 ? "pass" : "fail");
+    } catch (e) { log(`real file FAIL: ${e.message}`, "fail"); }
+}
+</script>
+</body>
+</html>

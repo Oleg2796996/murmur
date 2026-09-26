@@ -94,15 +94,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     info!(count = expired.len(), "TTL cleanup: processing expired envelopes");
                     for e in &expired {
                         // v160s6d (Олег 2026-09-17): различаем «истёк НЕ забранным
-                        // (прожил полные 24ч: expires_at - ts > 600)» от «истёк
-                        // ПОСЛЕ доставки (TTL сокращён до 5 мин при живой доставке,
-                        // v160m honest relay)». Нотификация «undelivered» — ТОЛЬКО
-                        // для никогда не доставленных. Доставленные — тихо удаляем
-                        // (приватность #131: отправитель уже получил ✓✓, фейковое
-                        // «адресат не забрал» — мусор). Тест 17.09: iPhone в
-                        // авиарежиме не при чём — доставленные сообщения давали
-                        // «недоставлено 3→7» от system:relay нотификаций.
-                        let lived_full_ttl = e.expires_at - e.ts > 600;
+                        // (прожил полные 24ч)» от «истёк ПОСЛЕ доставки (TTL
+                        // сокращён до 5 мин при живой доставке, v160m honest relay)».
+                        // Нотификация «undelivered» — ТОЛЬКО для никогда не
+                        // доставленных. Доставленные — тихо удаляем (приватность
+                        // #131: отправитель уже получил ✓✓, фейковое «адресат не
+                        // забрал» — мусор).
+                        // v160y24 (Олег 2026-09-23): классификация по read_at,
+                        // НЕ по expires_at − ts > 600. read_at=1 ставится в момент
+                        // РЕАЛЬНОЙ доставки (shorten_expires_at в /api/history при
+                        // visible=1 / WS-пути). Старая эвристика ложно срабатывала:
+                        // фоновый poll (Power Nap Mac) сокращал expires_at до
+                        // now+300 (за 24ч это ~600–30600 → мог быть и >600 при
+                        // позднем poll'е), крон удалял + шёл фейковое «Адресат не
+                        // забрал» (потеряшки iPhone→Mac 23.09: a8db7761/7f803ca2).
+                        // С visible-фиксом фоновые poll'и больше не сокращают TTL,
+                        // но read_at-классификация — надёжная защита и для старых
+                        // данных/переходного периода.
+                        let lived_full_ttl = e.read_at == 0;
                         if lived_full_ttl {
                         // Получатель так и не зашел в сеть за 24h.
                         // v149: уведомление уходит отправителю напрямую по его
@@ -165,15 +174,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(_) => {}
                 Err(err) => warn!(err=%err, "pending retention failed"),
             }
-            // v160p: blob'ы без ссылок удаляем через 1h от загрузки (было 24h).
-            // 5 min слишком агрессивно: offline-получатель, забравший envelope на
-            // границе TTL-окна, не успел бы скачать blob. 1h = запас на offline +
-            // медленную сеть; уже скачанные blob'ы живут в IDB устройства независимо.
+            // v160y62b (Олег 2026-09-25, data-loss инцидент «40 МВ не может закачаться»):
+            // было 3,600 (1h) — orphan-блоб (envelope доставлен → TTL 5 мин → каскад
+            // attachment_refs → ref_count=0) удалялся через 1h от загрузки, ПОКА
+            // получатель ещё качал (обрывы mid-transfer; 40.1MB видео умерло через
+            // ~80 мин после аплоада, retry → 403 навсегда). Возвращаем 86,400 (24h)
+            // — по дизайну v160o в storage.rs («свежие orphan'ы обязаны дожить до
+            // 24h») и push.rs («Потолок 24ч от created_at остаётся»). Уже скачанные
+            // блобы (receipt v160y26) удаляются сразу после квитанции — 24h на них
+            // не влияет.
             let now_secs: i64 = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            match store_for_ttl.delete_orphan_blobs(now_secs, 3_600) {
+            match store_for_ttl.delete_orphan_blobs(now_secs, 86_400) {
                 Ok(files) if !files.is_empty() => {
                     info!(count = files.len(), "orphan blobs deleted");
                 }

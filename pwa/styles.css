@@ -559,6 +559,9 @@ button.small { padding: 8px 12px; font-size: 13px; }
     display: flex;
     flex-direction: column;
     gap: 4px;
+    /* v160y34: fade-in при первом открытии чата (смягчает вспышку
+       от messagesArea.innerHTML="" при перезапуске PWA). */
+    animation: msgAreaIn 180ms ease-out;
     /* Allow messages to scroll past the last bubble; otherwise iOS Safari
        truncates the last message because content is taller than container. */
     min-height: 0;
@@ -874,8 +877,32 @@ button.small { padding: 8px 12px; font-size: 13px; }
     display: block;
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    /* v160y46 (Олег 21:48: «когда в вертикальном видео пытаются заполнить
+       черные полоски по бокам и получается не очень. Можно просто оставлять
+       как есть и вписывать в рамку превью, сохраняя пропорции?»): cover-кроп
+       зумил кадр и портил вертикальные видео. contain — честный кадр целиком
+       в рамке, полоски остаются чёрными (это норма). */
+    object-fit: contain;
     max-height: 280px;
+}
+/* v160y34: fallback-чип «🎥 Видео» когда ни постера, ни декодированного
+   кадра нет (пустой чёрный квадрат → подпись). Снимается video-frame-ready
+   (rVFC в murmurSetupVideoPreview), когда кадр реально показан. */
+.video-preview.video-fallback-chip::after {
+    content: "🎥 Видео";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255,255,255,0.85);
+    font-size: 14px;
+    font-weight: 500;
+    background: rgba(0,0,0,0.35);
+    pointer-events: none;
+}
+.video-preview.video-frame-ready.video-fallback-chip::after {
+    content: none; /* кадр готов — чип не нужен */
 }
 .video-preview .video-play-btn {
     position: absolute;
@@ -1173,4 +1200,68 @@ button.small { padding: 8px 12px; font-size: 13px; }
     font-size: 12px;
     display: block;
     margin-bottom: 1px;
+}
+
+/* v160y34: fade-in ленты сообщений */
+@keyframes msgAreaIn {
+    from { opacity: 0.4; }
+    to { opacity: 1; }
+}
+
+/* v160y35: error-чип в fullscreen-плеере — видео декодируется, но кадры
+   не доставлены (бегунок бежит, экран чёрный). Retry → re-resolve из сервера. */
+.fullscreen-overlay .fs-error-chip {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0,0,0,0.75);
+    color: #fff;
+    padding: 14px 18px;
+    border-radius: 12px;
+    font-size: 14px;
+    text-align: center;
+    z-index: 10;
+    pointer-events: auto;
+}
+.fullscreen-overlay .fs-error-retry {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 6px 14px;
+    background: rgba(255,255,255,0.15);
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+/* v160y36: seek-приводимое canvas-превью (iOS Low Power Mode — autoplay
+   заблокирован). Кадры шагаются вручную и рисуются в canvas поверх видео. */
+.video-preview .video-seek-preview {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    pointer-events: none;
+    z-index: 1;
+}
+.video-preview .video-play-btn { z-index: 2; } /* play поверх canvas */
+
+/* v160y55c (Олег 25.09 13:51: «когда открываешь чат, всё плавно появлялось,
+   а то сейчас загружается рывками»): плавное появление новых баблов.
+   .msg-enter вешается в renderMessages на каждый НОВЫЙ бабл; каскад — через
+   animation-delay var(--enter-delay) (40ms * индекс, cap 400ms).
+   Инкрементальные поллы получают delay=0 → одно сообщение «выплывает» мягко. */
+@keyframes murmurFadeInUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.msg-enter {
+    animation: murmurFadeInUp 0.28s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+    animation-delay: var(--enter-delay, 0ms);
+}
+@media (prefers-reduced-motion: reduce) {
+    .msg-enter { animation: none; }
 }

@@ -340,6 +340,15 @@ pub struct PushPayload {
     /// вызывает navigator.setAppBadge(payload.badge) синхронно (как в sw19,
     /// что сработал). Ноль IDB в SW, ноль гонок. 0 = не бэджить (клиент
     /// сам перезапишет точным total при живой странице).
+    /// v160y53 (Олег 2026-09-25): поле для квитанций. WS-пуш по квитанции
+    /// несёт ПОЛНОЕ тело envelope (ct внутри) — клиент опознаёт по _kind в body
+    /// и сразу ставит ✓✓. Раньше payload содержал только метаданные → клиент
+    /// не опознавал квитанцию → провал в contentless-ветку → единственный
+    /// fallback (deferred poll) находил строку уже TTL-удалённой (5 мин после
+    /// доставки) → ack терялся навсегда (✓ не превращался в ✓✓). None для
+    /// обычных сообщений — тело по-прежнему НЕ едет (E2E превью не нужно).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ws_envelope_b64: Option<String>,
     #[serde(default)]
     pub badge: u32,
 }
@@ -377,6 +386,16 @@ impl PushPayload {
                     })
                     .unwrap_or(0)
             });
+        let mut ws_envelope_b64: Option<String> = None;
+        // v160y53: квитанция — кладём полное тело (base64 envelope bytes) в WS-пуш.
+        // Клиент опознаёт по _kind:"receipt" в body (decodeBody → JSON.parse).
+        // Обычные сообщения — тело не едет (превью серверное).
+        {
+            let body_str = String::from_utf8_lossy(&entry.envelope_bytes);
+            if body_str.contains("\"_kind\":\"receipt\"") {
+                ws_envelope_b64 = Some(BASE64.encode(&entry.envelope_bytes));
+            }
+        }
         Self {
             alias: entry.to_npub.clone(),
             from_npub: entry.from_npub.clone(),
@@ -399,7 +418,8 @@ impl PushPayload {
             // iOS вставляет субтитл «from murmur» (скрин: murmur / from murmur / …).
             // Длинная action-фраза без имени приложения — Lesson #396 (2026-08-23).
             subtitle: "".to_string(),
-            body: "New message — open the app to read it".to_string(),
+            body: "New message — open the app to read it".to_string(), // v160y29: НЕ менялся — клиентский contentless-фильтр завязан на "open the app"; фантом от receipt-broadcast ловится клиентским system:relay-фильтром
+            ws_envelope_b64,
             badge,
         }
     }
@@ -671,6 +691,10 @@ impl PushServer {
                             }
                             (Method::GET, path) if path.starts_with("/api/blob/") => {
                                 handle_api_blob_download(req, db.clone()).await
+                            }
+                            (Method::POST, path) if path.starts_with("/api/blob/receipt/") => {
+                                let push: &PushServer = &push_self;
+                                handle_api_blob_receipt(req, db.clone(), push).await
                             }
                             (Method::GET | Method::HEAD, _) => {
                                 if let Some(resp) = serve_static(&path, &static_dir, method == Method::HEAD) {
@@ -1234,6 +1258,24 @@ async fn handle_api_history(
         .query()
         .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("before_ts=").and_then(|v| v.parse().ok())));
 
+    // v160y24 (Олег 2026-09-23): фоновые poll'и НЕ сокращают TTL.
+    // Mac с закрытой крышкой (Power Nap) просыпался, фоновая вкладка PWA
+    // пуллила /api/history как Mac → shorten до 5 мин → TTL-крон удалял
+    // сообщения + шёл фейковое «Адресат не забрал». Открыл Mac — сообщений
+    // нет (потеряшки iPhone→Mac 23.09: a8db7761 удалён 03:53:32, poll
+    // 06:43–06:48 MSK; 7f803ca2 удалён 05:53:32, poll 08:43–08:48 MSK).
+    // Клиент шлёт visible=1 только при document.visibilityState==='visible'.
+    // Сервер сокращает TTL ТОЛЬКО при visible=1; фоновые poll'и получают
+    // aggregates (badge/unread), но сообщения живут полные 24ч до
+    // реального открытия. Обратная совместимость: старые клиенты без
+    // visible=1 не сокращают TTL (безопасный дефолт).
+    let visible = req
+        .uri()
+        .query()
+        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("visible=")))
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false);
+
     let resp = match db.get_history(&npub, &peer, limit, before_ts) {
         Ok(h) => {
             // Convert raw body bytes to base64 and build response rows.
@@ -1289,12 +1331,18 @@ async fn handle_api_history(
             // показали «доставлено=2» вместо недоставлено=2. WS live-путь
             // (envelope.rs) не трогаем — broadcast шлёт в WS получателя, n>0 =
             // реальная доставка получателю.
-            for m in &h.messages {
-                if m.from_npub == npub {
-                    continue; // исходящие запрашивающего — не «доставлено»
-                }
-                if let Err(e) = db.shorten_expires_at(&m.envelope_hash, short_ttl) {
-                    warn!(err=%e, "shorten_expires_at failed on /api/history");
+            // v160y24 (Олег 2026-09-23): shorten ТОЛЬКО при visible=1.
+            // Фоновые poll'и (Power Nap, закрытая крышка мака) получают
+            // историю для badge/unread, но не сокращают TTL — сообщения
+            // живут полные 24ч до реального открытия.
+            if visible {
+                for m in &h.messages {
+                    if m.from_npub == npub {
+                        continue; // исходящие запрашивающего — не «доставлено»
+                    }
+                    if let Err(e) = db.shorten_expires_at(&m.envelope_hash, short_ttl) {
+                        warn!(err=%e, "shorten_expires_at failed on /api/history");
+                    }
                 }
             }
 
@@ -1658,6 +1706,86 @@ async fn handle_api_blob_download(
         .unwrap())
 }
 
+/// v160y26 (Олег 2026-09-23 16:20): POST /api/blob/receipt/{blob_id} — этапы 2+3 плана
+/// «вложения = текст». Получатель после успешного скачивания + OPFS-записи
+/// (checksum MATCH) шлёт квитанцию; сервер удаляет blob СРАЗУ после квитанции.
+/// Потолок 24ч от created_at остаётся (TTL-cron delete_orphan_blobs) для случая
+/// «никогда не забрали».
+///
+/// Auth: тот же bearer token, что у download (?t=<urlsafe-b64>) — только владелец
+/// токена (реально скачавший получатель) может подтвердить квитанцию.
+/// Дедуп-безопасность: attachment_refs декрементим; сам blob удаляем только когда
+/// ref_count = 0 (мульти-устройство держит вторую ссылку). Уникальные blob'ы не
+/// страдают, dedup не ломается.
+async fn handle_api_blob_receipt(
+    req: Request<Incoming>,
+    store: Option<crate::storage::MessageStore>,
+    push: &PushServer,
+) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    let db = match &store {
+        Some(db) => db,
+        None => return Ok(json_error(StatusCode::SERVICE_UNAVAILABLE, "message store not initialised")),
+    };
+
+    let blob_id = req.uri().path().trim_start_matches("/api/blob/receipt/");
+    if blob_id.is_empty() || blob_id.contains('/') {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "invalid blob_id"));
+    }
+
+    // Auth: тот же bearer token, что у download.
+    let token = req
+        .uri()
+        .query()
+        .unwrap_or("")
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("t="))
+        .unwrap_or("");
+    if token.is_empty() {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "missing blob token"));
+    }
+    let token_hash = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        Digest::update(&mut h, token.as_bytes());
+        hex::encode(Digest::finalize(h))
+    };
+    match db.verify_blob_token(blob_id, &token_hash) {
+        Ok(true) => {}
+        Ok(false) => return Ok(json_error(StatusCode::FORBIDDEN, "invalid blob token")),
+        Err(e) => return Ok(json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("token verify: {e}"))),
+    }
+
+    // Удаляем blob по квитанции. ref_count-декремент внутри; файл удаляем
+    // только когда ref_count = 0 (дедуп-безопасность).
+    match db.delete_blob_by_receipt(blob_id) {
+        Ok((deleted, from_npub)) => {
+            if deleted {
+                // WS-нотификация отправителю (service envelope, без web-push):
+                // «attachment скачан получателем» — живая сессия перезагрузит чат.
+                let fake_entry = crate::pending::PendingEntry {
+                    to_npub: from_npub,
+                    from_npub: "system:relay".into(),
+                    ts: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                    envelope_bytes: vec![],
+                    envelope_hash_hex: String::new(),
+                };
+                let _ = push.hub.broadcast(&fake_entry, None);
+            }
+            let resp = serde_json::json!({ "ok": true, "blob_id": blob_id, "deleted": deleted });
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "application/json")
+                .header("access-control-allow-origin", "*")
+                .body(Full::new(Bytes::from(resp.to_string())))
+                .unwrap())
+        }
+        Err(e) => Ok(json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("receipt delete: {e}"))),
+    }
+}
+
 fn url_decode(s: &str) -> String {
     use std::str;
     let mut out = Vec::with_capacity(s.len());
@@ -1792,6 +1920,7 @@ mod tests {
             title: "Murmur".into(),
             subtitle: "Ирина".into(),
             body: "new encrypted message (210 bytes)".into(),
+            ws_envelope_b64: None,
             badge: 3,
         };
         let s = p.to_json();
