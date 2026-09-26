@@ -9,3 +9,10 @@ node_modules/
 
 # Tauri build artefacts
 crates/*/gen/schemas/
+
+# deploy backup files (v160y-epoch lesson: .bak попали в git staging)
+*.bak
+*.bak-*
+pwa/cloudflared.log
+data/
+simulation/
