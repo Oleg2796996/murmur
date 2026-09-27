@@ -1846,13 +1846,20 @@ function openChat(peer, opts) {
         renderChatList();
         renderMessages();
         scrollToBottom();
-        // v160z10: первый полный рендер готов — убираем splash с лёгким фейдом.
-        // На тёплом заходе splash.hidden уже true — no-op.
+        // v160z11 (Олег 27.09 11:46 видео первого/второго захода «не сработало»):
+        // видео показало — splash скрылся СЛИШКОМ РАНО (после кэш-рендера), а
+        // сервер-рендер loadHistory + прыжок scrollToBottom идут ПОСЛЕ → сборка
+        // видна (устаревший срез → прыжок вниз). Держим splash до стабилизации:
+        // 800ms после первого рендера (кэш+сервер+decrypt-батч ≈ 0.5с, AES
+        // 35MB ≈ 100-300ms) + фейд 250ms. Спиннер в splash — тап сразу даёт
+        // видимую реакцию (кадр 1-3 видео: 0.5с без отклика = «не работает»).
         const splash = document.getElementById("chat-splash");
         if (splash && !splash.hidden) {
-            splash.style.transition = "opacity 150ms ease-out";
-            splash.style.opacity = "0";
-            setTimeout(() => { splash.hidden = true; }, 160);
+            setTimeout(() => {
+                splash.style.transition = "opacity 250ms ease-out";
+                splash.style.opacity = "0";
+                setTimeout(() => { splash.hidden = true; }, 260);
+            }, 800);
         }
     }).catch((e) => {
         console.warn("[murmur] openChat loadHistory failed:", e);
