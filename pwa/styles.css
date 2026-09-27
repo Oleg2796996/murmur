@@ -473,6 +473,15 @@ button.small { padding: 8px 12px; font-size: 13px; }
     flex: 1;
     background: var(--bg);
     min-width: 0;
+    /* v160z9 (Олег 27.09 09:32 «при первом заходе в чат видно как пошагово
+       страница собирается, буквально доли секунды; повторно — всё плавно»):
+       первый заход = рендер-конвейер (decrypt не в кэше, bubbles всплывают
+       по мере готовности), повторный — всё из IDB → мгновенно. Панель
+       появляется мгновенно (display:none→flex) → сборка видна. Фейд 220ms
+       маскирует сборку: один плавный переход вместо пошаговых прыжков.
+       Animation рестартует при каждом display:none→flex — на повторных
+       заходах 220ms незаметно. */
+    animation: chatViewIn 220ms ease-out;
     /* Lesson #234 (Олег 2026-08-26 19:27): min-height: 0 ОБЯЗАТЕЛЬНО для
        flex-column item. Без этого min-height: auto = контент растёт сверх
        flex:1, flex:1 не ужимает → .chat-view выше viewport → body overflow
@@ -1205,6 +1214,13 @@ button.small { padding: 8px 12px; font-size: 13px; }
 /* v160y34: fade-in ленты сообщений */
 @keyframes msgAreaIn {
     from { opacity: 0.4; }
+    to { opacity: 1; }
+}
+
+/* v160z9: fade-in всей chat-панели (маскирует пошаговую сборку первого
+   захода: decrypt-конвейер дёргает layout, панель собирается на глазах) */
+@keyframes chatViewIn {
+    from { opacity: 0.35; }
     to { opacity: 1; }
 }
 
