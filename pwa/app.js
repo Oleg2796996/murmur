@@ -4890,15 +4890,22 @@ window.addEventListener("hashchange", () => {
     // settle() скроллил 1px на нескроллируемом документе = no-op. Теперь:
     // удлиняем body на 80px → документ скроллится → РЕАЛЬНЫЙ scroll вниз/наверх
     // (WebKit обновляет visualViewport на scroll) → возвращаемся → restore.
+    // v160z7 (Олег 27.09 08:47 «экран немного дергается при проваливании в чат,
+    // только на iPhone, на маке норм»): амплитуда 80px = видимый прыжок контента
+    // на iPhone (композитинг медленный, мак прячет). Для синхронизации вьюпорта
+    // важен ФАКТ реального скролла, не амплитуда (v160x18: 1px был no-op только
+    // потому что документ был нескроллируемый — здесь документ удлиняется,
+    // 8px = настоящий scroll-ивент). 80 → 8: лечение то же, дёрганье почти
+    // незаметно.
     const scrollCure = () => {
         try {
             if (window.scrollY || window.scrollX) return;
             const b = document.body;
             if (!b) return;
             const prev = b.style.height;
-            b.style.height = (b.offsetHeight + 80) + "px";
+            b.style.height = (b.offsetHeight + 8) + "px";
             void b.offsetHeight;
-            window.scrollTo(0, 80);
+            window.scrollTo(0, 8);
             requestAnimationFrame(() => {
                 window.scrollTo(0, 0);
                 requestAnimationFrame(() => { b.style.height = prev; });
