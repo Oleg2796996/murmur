@@ -43,8 +43,39 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
     <link rel="shortcut icon" href="/favicon-2026b.ico">
     <link rel="mask-icon" href="/mask-icon.svg" color="#229ED9">
-    <meta name="app-version" content="v160y52">
+    <meta name="app-version" content="v160z13">
     <link rel="stylesheet" href="styles.css?v=160z11">
+    <script>
+    // v160z13 (Олег 22:52): анти-i18n-flash. Пользователь без ручного выбора языка
+    // видит русский HTML до загрузки defer-скриптов (WASM и пр.), потом i18n.js
+    // переводит → «прыгает» на en через пару секунд. Фикс: инлайн-скрипт в <head>
+    // прячет body (visibility:hidden) ДО первого рендера, если язык не ru;
+    // i18n.js в boot() показывает body ПОСЛЕ первичного translateRoot.
+    (function () {
+        try {
+            var saved = null;
+            try { saved = localStorage.getItem("murmur_lang"); } catch (e) {}
+            var pref = saved;
+            if (saved !== "ru" && saved !== "en" && saved !== "fr" && saved !== "es" && saved !== "de") {
+                var nl = (navigator.language || "en").toLowerCase();
+                pref = ["ru","en","fr","es","de"].find(function (p) { return nl.startsWith(p); }) || "en";
+            }
+            if (pref !== "ru") {
+                document.documentElement.style.visibility = "hidden";
+                document.documentElement.style.background = "#17212b";
+                window.__i18nPendingLocale = pref;
+                // Fallback: если i18n.js не загрузился/упал — показываем через 3с,
+                // чтобы не оставить чёрный экран навсегда.
+                setTimeout(function () {
+                    try {
+                        document.documentElement.style.visibility = "";
+                        document.documentElement.style.background = "";
+                    } catch (e) {}
+                }, 3000);
+            }
+        } catch (e) { /* без localStorage — рендерим как есть */ }
+    })();
+    </script>
 </head>
 <body>
     <div id="identity-screen" class="screen">
@@ -179,7 +210,7 @@
             } catch (e) { window.__APP_VERSION__ = "?"; }
         })();
     </script>
-    <script src="i18n.js?v=7" ></script>
+    <script src="i18n.js?v=160z13" ></script>
     <script src="blob-cache.js?v=160y41" defer></script>
     <script src="blob-opfs.js?v=160y41" defer></script>
     <script src="blob-opfs-worker.js?v=160y41" defer></script>

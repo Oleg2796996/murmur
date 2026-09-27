@@ -172,6 +172,9 @@
         ["Чтобы принять приглашение", { en: "To accept the invitation", fr: "Pour accepter l\u2019invitation", es: "Para aceptar la invitaci\u00f3n", de: "Um die Einladung anzunehmen" }],
         ["MurMur уже установлен?", { en: "MurMur already installed?", fr: "MurMur d\u00e9j\u00e0 install\u00e9 ?", es: "\u00bfMurMur ya instalado?", de: "MurMur schon installiert?" }],
         ["Нажмите на ссылку</b> — она скопируется, вставьте её в приложение:", { en: "Tap the link</b> — it copies, paste it into the app:", fr: "Touchez le lien</b> — il se copie, collez-le dans l\u2019application :", es: "Toca el enlace</b> — se copia, p\u00e9galo en la app:", de: "Link antippen</b> — kopiert, in der App einf\u00fcgen:" }],
+        // v160z13-fix: TreeWalker режет текст по </b>-тегу — tail-узел без тега не матчится
+        // полным ключом (остаток оставался русским на лендинге en). Отдельный tail-ключ.
+        ["— она скопируется, вставьте её в приложение:", { en: "— it copies, paste it into the app:", fr: "— il se copie, collez-le dans l\u2019application :", es: "— se copia, p\u00e9galo en la app:", de: "— kopiert, in der App einf\u00fcgen:" }],
         ["✓ Скопировано — вставьте в MurMur", { en: "✓ Copied — paste into MurMur", fr: "✓ Copi\u00e9 — collez dans MurMur", es: "✓ Copiado — pega en MurMur", de: "✓ Kopiert — in MurMur einf\u00fcgen" }],
         ["Ещё не установлен? Пара шагов:", { en: "Not installed yet? A few steps:", fr: "Pas encore install\u00e9 ? Quelques \u00e9tapes :", es: "\u00bfA\u00fan no instalado? Unos pasos:", de: "Noch nicht installiert? Ein paar Schritte:" }],
         ["(iPhone/iPad): Поделиться → На экран «Домой»", { en: "(iPhone/iPad): Share → Add to Home Screen", fr: "(iPhone/iPad) : Partager → \u00c9cran d\u2019accueil", es: "(iPhone/iPad): Compartir → A\u00f1adir a inicio", de: "(iPhone/iPad): Teilen → Home-Bildschirm" }],
@@ -320,12 +323,21 @@
     }
 
     // ── Boot: первичный pass + наблюдатель + кнопка (v160y33).
+    // v160z13: если head-скрипт спрятал body (не-ru язык) — показываем ПОСЛЕ
+    // первичного translateRoot (boot идёт после defer-скриптов, DOM уже полный).
+    function revealBody() {
+        try {
+            document.documentElement.style.visibility = "";
+            document.documentElement.style.background = "";
+        } catch (e) {}
+    }
     function boot() {
         // Кнопка 🌐 нужна в ОБОИХ режимах (иначе с ru не переключиться).
         addLangToggle();
-        if (isRu) return; // ru — родной текст, переводить нечего
+        if (isRu) { revealBody(); return; } // ru — родной текст, переводить нечего
         translateRoot(document.body);
         addLangToggle();
+        revealBody();
         const mo = new MutationObserver(function (muts) {
             // батчим: один pass на мутацию-всплеск
             requestAnimationFrame(function () {
