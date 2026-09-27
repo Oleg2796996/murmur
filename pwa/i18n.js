@@ -31,6 +31,10 @@
         "Прикрепить файл (до 50 МБ)": { en: "Attach a file (up to 50 MB)", fr: "Joindre un fichier (max 50 Mo)", es: "Adjuntar archivo (hasta 50 MB)", de: "Datei anhängen (max. 50 MB)" },
         "отправить": { en: "send", fr: "envoyer", es: "enviar", de: "senden" },
         "Чаты": { en: "Chats", fr: "Discussions", es: "Chats", de: "Chats" },
+        // v160z13-fix2: reply-bar + видео-инструкция на лендинге (E2E-находка 23:05)
+        "Ответ": { en: "Reply", fr: "Répondre", es: "Responder", de: "Antworten" },
+        "Отменить ответ": { en: "Cancel reply", fr: "Annuler la réponse", es: "Cancelar respuesta", de: "Antwort abbrechen" },
+        "Видео-инструкция": { en: "Video guide", fr: "Guide vidéo", es: "Guía en video", de: "Video-Anleitung" },
         "назад к списку": { en: "back to list", fr: "retour à la liste", es: "volver a la lista", de: "zurück zur Liste" },
         "удалить чат": { en: "delete chat", fr: "supprimer le chat", es: "eliminar chat", de: "Chat löschen" },
         "MurMur требует JavaScript. Включи JS в настройках Safari.": { en: "MurMur requires JavaScript. Enable JS in Safari settings.", fr: "MurMur nécessite JavaScript. Activez JS dans Safari.", es: "MurMur requiere JavaScript. Activa JS en Safari.", de: "MurMur benötigt JavaScript. Aktiviere JS in Safari." },
@@ -73,7 +77,10 @@
         "Скопировать": { en: "Copy", fr: "Copier", es: "Copiar", de: "Kopieren" },
         "Скопировано ✓": { en: "Copied ✓", fr: "Copié ✓", es: "Copiado ✓", de: "Kopiert ✓" },
         "✓ Скопировано": { en: "✓ Copied", fr: "✓ Copié", es: "✓ Copiado", de: "✓ Kopiert" },
+        // v160z13-fix: порядок ключей — длинный ключ должен идти ПЕРЕД коротким,
+        // иначе короткий «✓ Скопировано» матчится первым и хвост остаётся русским.
         "✓ Скопировано — вставьте в MurMur": { en: "✓ Copied — paste into MurMur", fr: "✓ Copié — collez dans MurMur", es: "✓ Copiado — pega en MurMur", de: "✓ Kopiert — in MurMur einfügen" },
+        "вставьте в MurMur": { en: "paste into MurMur", fr: "collez dans MurMur", es: "pega en MurMur", de: "in MurMur einfügen" },
         "✗ Ошибка": { en: "✗ Error", fr: "✗ Erreur", es: "✗ Error", de: "✗ Fehler" },
         "Закрыть": { en: "Close", fr: "Fermer", es: "Cerrar", de: "Schließen" },
         "✕ ЗАКРЫТЬ": { en: "✕ CLOSE", fr: "✕ FERMER", es: "✕ CERRAR", de: "✕ SCHLIESSEN" },
