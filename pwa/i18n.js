@@ -188,7 +188,10 @@
         ["(Android/ПК): ⋮ → Добавить на главный экран", { en: "(Android/PC): ⋮ → Add to Home Screen", fr: "(Android/PC) : ⋮ → Ajouter \u00e0 l\u2019\u00e9cran d\u2019accueil", es: "(Android/PC): ⋮ → A\u00f1adir a inicio", de: "(Android/PC): ⋮ → Zum Startbildschirm" }],
         [": меню → Установить", { en: ": menu → Install", fr: ": menu → Installer", es: ": men\u00fa → Instalar", de: ": Men\u00fc → Installieren" }],
         ["Откройте MurMur с новой иконки — аккаунт создастся сам, и чат уже будет ждать", { en: "Open MurMur from the new icon — the account is created automatically, and the chat is already waiting", fr: "Ouvrez MurMur depuis la nouvelle ic\u00f4ne — le compte se cr\u00e9e, le chat attend", es: "Abre MurMur desde el icono nuevo — la cuenta se crea sola", de: "MurMur \u00fcber das neue Icon \u00f6ffnen — Konto wird erstellt" }],
-        ["Нажмите на ссылку", { en: "Tap the link", fr: "Touchez le lien", es: "Toca el enlace", de: "Link antippen" }]
+        ["Нажмите на ссылку", { en: "Tap the link", fr: "Touchez le lien", es: "Toca el enlace", de: "Link antippen" }],
+        // v160z14 (Олег 23:35): лендинг без invite — новые строки (E2E-находка)
+        ["Как установить MurMur", { en: "How to install MurMur", fr: "Comment installer MurMur", es: "Cómo instalar MurMur", de: "MurMur installieren" }],
+        ["Откройте MurMur с новой иконки — аккаунт создастся сам, ничего больше не нужно", { en: "Open MurMur from the new icon — the account is created automatically, nothing else needed", fr: "Ouvrez MurMur depuis la nouvelle icône — le compte se crée, rien de plus", es: "Abre MurMur desde el icono nuevo — la cuenta se crea sola, nada más", de: "MurMur über das neue Icon öffnen — Konto wird erstellt, mehr nicht" }]
     ];
 
     // ── Resolve current language (v160y33: системный детект, en fallback)

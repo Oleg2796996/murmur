@@ -4593,6 +4593,9 @@ function showInviteLanding(inviteNpub) {
     const standalone = isStandalonePWA();
     // v160p6c: без кнопок (запрос Олега) — описание + инструкция + ссылка.
     // В standalone лендинг не нужен — чат откроется сам (start_url с invite).
+    // v160z14: без invite — секцию «принять приглашение» не показываем
+    // (нет ссылки), лендинг = буллеты + инструкция установки PWA + видео.
+    const hasInvite = !!inviteNpub;
     const inviteUrl = location.origin + "/?invite=" + inviteNpub;
     // v160p8 (Олег 18:59 «ставь на тест»): структура лендинга v3 (одобрена) —
     // буллеты приватности с иконками + сокращённый текст + выровненная
@@ -4609,7 +4612,8 @@ function showInviteLanding(inviteNpub) {
         '<div style="display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.55;color:var(--text-muted);margin-bottom:10px;"><span style="flex-shrink:0;">🧹</span><div><b style="color:var(--text);">Переписка удаляется с сервера</b> после доставки</div></div>' +
         '<div style="display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.55;color:var(--text-muted);margin-bottom:10px;"><span style="flex-shrink:0;">🕶️</span><div><b style="color:var(--text);">Нам не нужно знать</b> ваши имена, телефоны и почту</div></div>' +
         '</div>' +
-        '<div style="font-size:14.5px;font-weight:600;color:var(--text);margin-bottom:8px;">Чтобы принять приглашение</div>' +
+        '<div style="font-size:14.5px;font-weight:600;color:var(--text);margin-bottom:8px;">' + (hasInvite ? 'Чтобы принять приглашение' : 'Как установить MurMur') + '</div>' +
+        (hasInvite ?
         '<div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;color:var(--text-muted);font-size:13.5px;line-height:1.8;">' +
         '<div><b style="color:var(--text);">1)</b> MurMur уже установлен? <b style="color:var(--text);">Нажмите на ссылку</b> — она скопируется, вставьте её в приложение:</div>' +
         '<div id="invite-url-box" role="button" style="display:block;background:#0b1420;border:1px solid rgba(34,158,217,.4);background:rgba(34,158,217,.08);border-radius:8px;padding:9px 10px;margin:8px 0;font-family:monospace;font-size:11.5px;color:#7fd4f0;word-break:break-all;cursor:pointer;text-align:center;" title="Нажмите, чтобы скопировать">' + inviteUrl + '</div>' +
@@ -4618,7 +4622,13 @@ function showInviteLanding(inviteNpub) {
         '<div style="margin-top:4px;"><b style="color:#5eead4;">Safari</b> (iPhone/iPad): Поделиться → На экран «Домой»</div>' +
         '<div><b style="color:#5eead4;">Chrome</b> (Android/ПК): ⋮ → Добавить на главный экран</div>' +
         '<div style="margin-top:6px;color:var(--text);">Откройте MurMur с новой иконки — аккаунт создастся сам, и чат уже будет ждать</div>' +
-        '</div>' +
+        '</div>'
+        :
+        '<div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;color:var(--text-muted);font-size:13.5px;line-height:1.8;">' +
+        '<div><b style="color:var(--text);">Safari</b> (iPhone/iPad): Поделиться → На экран «Домой»</div>' +
+        '<div><b style="color:var(--text);">Chrome</b> (Android/ПК): ⋮ → Добавить на главный экран</div>' +
+        '<div style="margin-top:6px;color:var(--text);">Откройте MurMur с новой иконки — аккаунт создастся сам, ничего больше не нужно</div>' +
+        '</div>') +
         // v160q: видео-инструкции (Олег 16.09) — 2 карточки под секцией шагов.
         '<div style="font-size:14.5px;font-weight:600;color:var(--text);margin:14px 0 8px;">Видео-инструкция</div>' +
         '<div style="display:flex;gap:10px;">' +
@@ -4700,7 +4710,10 @@ async function tryAutoRestore() {
         // чтобы аккаунт не создался в Safari-контейнере впустую.
         // v160i: invite ищем и в URL, и в cookie-мосте (Safari→PWA).
         const inv = extractInviteNpub() || readInviteCookie();
-        if (inv && !isStandalonePWA()) showInviteLanding(inv);
+        // v160z14 (Олег 23:35): лендинг-инструкция показываем и без invite —
+        // новый пользователь на murmurchat.org тоже должен видеть инструкцию
+        // установки PWA (иначе аккаунт создастся в Safari-контейнере впустую).
+        if (!isStandalonePWA()) showInviteLanding(inv);
         return;
     }
     try {
