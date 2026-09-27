@@ -1790,7 +1790,24 @@ function openChat(peer, opts) {
         // лекарство БЕЗ гейта (unconditional). Теперь openChat зовёт ТОТ ЖЕ
         // набор БЕЗ гейта: forceReflow (реальный reflow = репейнт сталой зоны),
         // settle (scroll-защёлк layout), nudge слоя композера, setVvh.
-        [250, 700, 1400, 2400].forEach(t => setTimeout(() => {
+        // v160z8 (Олег 27.09 09:02 «стало лучше, но появилась пустая область под
+        // строкой ввода»): 8px НЕ лечит дыру (скролл должен пройти через ВСЮ
+        // сталую зону ~60-80px — амплитуда 80 возвращена). Дёрганье лечим ЧИСЛОМ
+        // вызовов: первый — immediate (0ms, экран переходный, прыжок незаметен),
+        // догон-серия сокращена 4→2 (700/2400).
+        setTimeout(() => {
+            try {
+                // v160y62: scrollCure ПЕРВЫЙ (реальный скролл — ЕДИНСТВЕННОЕ,
+                // что репейнтит сталую зону), потом forceReflow/nudge/settle/setVvh
+                // как страховка.
+                if (typeof window.scrollCure === "function") window.scrollCure();
+                if (typeof window.__murmurForceReflow === "function") window.__murmurForceReflow();
+                if (typeof window.__murmurSettle === "function") window.__murmurSettle();
+                if (typeof window.__murmurNudgeComposer === "function") window.__murmurNudgeComposer();
+                if (typeof window.__murmurSetVvh === "function") window.__murmurSetVvh();
+            } catch (e) {}
+        }, 0);
+        [700, 2400].forEach(t => setTimeout(() => {
             try {
                 // v160y62 (diag-скрин Олега 21:14: msBot=845/iaBot=845 — layout
                 // ДОХОДИТ до низа, PAINT устар): в v160y61 openChat-догон звал
@@ -4890,22 +4907,21 @@ window.addEventListener("hashchange", () => {
     // settle() скроллил 1px на нескроллируемом документе = no-op. Теперь:
     // удлиняем body на 80px → документ скроллится → РЕАЛЬНЫЙ scroll вниз/наверх
     // (WebKit обновляет visualViewport на scroll) → возвращаемся → restore.
-    // v160z7 (Олег 27.09 08:47 «экран немного дергается при проваливании в чат,
-    // только на iPhone, на маке норм»): амплитуда 80px = видимый прыжок контента
-    // на iPhone (композитинг медленный, мак прячет). Для синхронизации вьюпорта
-    // важен ФАКТ реального скролла, не амплитуда (v160x18: 1px был no-op только
-    // потому что документ был нескроллируемый — здесь документ удлиняется,
-    // 8px = настоящий scroll-ивент). 80 → 8: лечение то же, дёрганье почти
-    // незаметно.
+    // v160z8 (Олег 27.09 09:02 «стало лучше, но появилась пустая область под
+    // строкой ввода»): 8px НЕ лечит дыру (две точки данных: 80px — лечит+дёргает,
+    // 8px — не дёргает+дыра вернулась). Скролл должен пройти через ВСЮ сталую
+    // зону (~60-80px) — амплитуда 80 возвращена. Дёрганье лечим ЧИСЛОМ вызовов:
+    // первый — immediate (0ms, экран переходный, прыжок незаметен), догон-серия
+    // сокращена 4→2 в openChat (v160z8).
     const scrollCure = () => {
         try {
             if (window.scrollY || window.scrollX) return;
             const b = document.body;
             if (!b) return;
             const prev = b.style.height;
-            b.style.height = (b.offsetHeight + 8) + "px";
+            b.style.height = (b.offsetHeight + 80) + "px";
             void b.offsetHeight;
-            window.scrollTo(0, 8);
+            window.scrollTo(0, 80);
             requestAnimationFrame(() => {
                 window.scrollTo(0, 0);
                 requestAnimationFrame(() => { b.style.height = prev; });
