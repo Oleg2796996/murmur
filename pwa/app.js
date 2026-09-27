@@ -1718,6 +1718,21 @@ function openChat(peer, opts) {
     renderChatList();  // обновить бейдж в списке чатов
     chatView.style.display = "flex";
     chatView.hidden = false;
+    // v160z10 (Олег 27.09 10:32 «опять первый заход некрасивый, а второй
+    // идеально плавно»): фейд 0.35 (v160z9) сборку НЕ спрятал — просвечивает.
+    // Холодный заход (кэша нет, decrypt-конвейер, bubbles всплывают по мере
+    // готовности) = пошаговая сборка. Тёплый (всё из IDB/памяти) = мгновенно.
+    // Решение: на холодном — СПЛОШНАЯ заглушка (splash, bg) поверх панели до
+    // первого полного рендера; на тёплом — не ставится вовсе.
+    // Холодный = messages[peer] пуст при openChat (кэш ещё не загружен).
+    const coldOpen = !(messages[peer] && messages[peer].length);
+    const splash = document.getElementById("chat-splash");
+    if (coldOpen && splash) {
+        splash.hidden = false;
+        splash.style.opacity = "1";
+    } else if (splash) {
+        splash.hidden = true;
+    }
     noChat.style.display = "none"; // v160x3: чат открыт — панель не нужна
     noChat.hidden = true;
     inputArea.hidden = false;
@@ -1831,8 +1846,20 @@ function openChat(peer, opts) {
         renderChatList();
         renderMessages();
         scrollToBottom();
+        // v160z10: первый полный рендер готов — убираем splash с лёгким фейдом.
+        // На тёплом заходе splash.hidden уже true — no-op.
+        const splash = document.getElementById("chat-splash");
+        if (splash && !splash.hidden) {
+            splash.style.transition = "opacity 150ms ease-out";
+            splash.style.opacity = "0";
+            setTimeout(() => { splash.hidden = true; }, 160);
+        }
     }).catch((e) => {
         console.warn("[murmur] openChat loadHistory failed:", e);
+        // v160z10: даже при ошибке — не оставлять splash навсегда (стакан
+        // «застрявший splash» хуже некрасивого первого рендера).
+        const splash = document.getElementById("chat-splash");
+        if (splash) splash.hidden = true;
     });
 }
 
@@ -3481,6 +3508,10 @@ btnBack?.addEventListener("click", () => {
     const m = document.querySelector(".messenger");
     if (m) m.classList.remove("chat-open");
     activePeer = null;
+    // v160z10: при выходе из чата splash тоже прячем (если юзер вышел до конца
+    // холодной загрузки — иначе splash остаётся на панель до loadHistory).
+    const splash = document.getElementById("chat-splash");
+    if (splash) splash.hidden = true;
     chatView.style.display = "none";
     chatView.hidden = true;
     updateNoChatVisibility(); // v160x3: панель только если чатов нет (было: всегда flex → 50/50 сплит)
