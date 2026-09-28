@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>MurMur — Privacy Policy</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  :root { --bg:#0f1620; --card:rgba(255,255,255,.045); --accent:#229ED9; --accent2:#5eead4; --text:#e8eef5; --muted:#9fb0c3; }
+  body { min-height:100vh; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:28px 20px 40px;
+    background-image: radial-gradient(ellipse 60% 35% at 20% 0%, rgba(34,158,217,.13), transparent),
+      radial-gradient(ellipse 50% 45% at 85% 100%, rgba(94,234,212,.08), transparent); }
+  .wrap { max-width:680px; margin:0 auto; }
+  header { text-align:center; margin-bottom:26px; }
+  h1 { font-size:30px; font-weight:800; letter-spacing:-.5px;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  .sub { color:var(--muted); font-size:14px; margin-top:6px; }
+  .back { display:inline-block; color:var(--accent); text-decoration:none; font-size:14px; margin-bottom:14px; }
+  .panel { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:18px; padding:20px 18px;
+    backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); box-shadow:0 12px 40px rgba(0,0,0,.35); margin-bottom:16px; }
+  .panel h2 { font-size:16px; font-weight:700; color:var(--text); margin-bottom:12px; }
+  .panel p { font-size:14.5px; line-height:1.65; color:var(--muted); margin-bottom:10px; }
+  .panel p b { color:var(--text); font-weight:600; }
+  .panel ul { list-style:none; display:flex; flex-direction:column; gap:10px; margin-bottom:10px; }
+  .panel li { display:flex; gap:10px; align-items:flex-start; font-size:14px; line-height:1.5; color:var(--muted); }
+  .panel li b { color:var(--text); font-weight:600; }
+  .panel li .ic { flex-shrink:0; width:22px; text-align:center; font-size:15px; }
+  table { width:100%; border-collapse:collapse; margin-bottom:10px; }
+  td { font-size:13.5px; line-height:1.5; color:var(--muted); padding:8px 10px; border-top:1px solid rgba(255,255,255,.07); }
+  td:first-child { color:var(--text); font-weight:600; white-space:nowrap; }
+  .foot { text-align:center; margin-top:22px; font-size:12px; color:#5a6b80; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="back" href="/">← murmurchat.org</a>
+    <h1>Privacy Policy</h1>
+    <div class="sub">Last updated: 2026-09-28</div>
+  </header>
+
+  <div class="panel">
+    <p>MurMur is a private messenger. This page is short because there is almost
+    nothing to describe: <b>we hold no personal data about you.</b></p>
+  </div>
+
+  <div class="panel">
+    <h2>What we do NOT collect</h2>
+    <ul>
+      <li><span class="ic">🚫</span><div><b>No account.</b> No email, no phone number, no name is ever registered.</div></li>
+      <li><span class="ic">🔐</span><div><b>No message content.</b> Messages are end-to-end encrypted on your device. The server only relays encrypted envelopes it cannot read.</div></li>
+      <li><span class="ic">🧹</span><div><b>No message history.</b> An undelivered envelope stays on the server for at most <b>24 hours</b>, then is deleted permanently. We cannot recover a message we no longer have.</div></li>
+      <li><span class="ic">📇</span><div><b>No contact book.</b> Your contacts live on your device. We do not know who you talk to.</div></li>
+      <li><span class="ic">🕶️</span><div><b>No tracking.</b> No advertising SDKs, no fingerprinting, no analytics cookies.</div></li>
+      <li><span class="ic">🛡️</span><div><b>Nothing to hand over.</b> If someone demands your data, there is nothing to give.</div></li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <h2>What is technically visible to the server</h2>
+    <p>Running a relay inevitably exposes some information to the operator, even when
+    the content is encrypted:</p>
+    <ul>
+      <li><span class="ic">📦</span><div><b>Delivery metadata</b> — which encrypted envelope goes to which public key — exists only while the envelope is queued for delivery, then is deleted together with it.</div></li>
+      <li><span class="ic">📊</span><div><b>Traffic volume</b> is visible at the network layer, as it is for any internet service.</div></li>
+    </ul>
+    <p><b>We do not sell, share, or monetize this data.</b> There is no business model that depends on it.</p>
+  </div>
+
+  <div class="panel">
+    <h2>Data retention</h2>
+    <table>
+      <tr><td>Undelivered message</td><td>max 24 hours on the server, then deleted permanently</td></tr>
+      <tr><td>Delivered message content</td><td>never stored on the server; kept only on the devices of the chat participants</td></tr>
+      <tr><td>Identity keys</td><td>generated on your device, never sent to us</td></tr>
+      <tr><td>Operational logs</td><td>minimal, rotated, not used for profiling</td></tr>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>Your rights</h2>
+    <p>Because we do not hold personal data about you, there is usually nothing for us
+    to export or delete on request. If you believe we hold data about you, contact us
+    and we will verify.</p>
+  </div>
+
+  <div class="panel">
+    <h2>Donations</h2>
+    <p>If you choose to support MurMur, the payment processor may collect the information
+    required by law to process a payment. <b>We do not receive your card details</b>, and we
+    do not connect a donation to any chat identity.</p>
+    <p>You can also support the project with Monero — a privacy-preserving payment
+    that reveals nothing about you to us. <b>Tap the address to copy it:</b></p>
+    <div id="xmr-box" role="button" onclick="copyXmr()" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(94,234,212,.35);background:rgba(94,234,212,.06);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.6;color:#7eead4;word-break:break-all;cursor:pointer;text-align:center;">83mpQoMkdo1bcLPgqzY2ukbgr3nKb8JKhTJLtRxnNCCqCgsb6GkYDz6YRxm63jUHh3QjhiLKbmWbdQBFwMPjJKfLG8gVG6n</div>
+    <div id="xmr-hint" style="display:none;color:#3fd07a;font-size:12.5px;text-align:center;margin-top:6px;">✓ Copied</div>
+  </div>
+
+  <div class="panel">
+    <h2>Contact</h2>
+    <p>Website: <b>murmurchat.org</b> · Email: <b>murmurchat@outlook.com</b></p>
+  </div>
+
+  <div class="foot">MurMur — private messenger · murmurchat.org</div>
+</div>
+<script>
+function copyXmr() {
+  var t = document.getElementById("xmr-box").textContent.trim();
+  var ok = function () {
+    var h = document.getElementById("xmr-hint");
+    h.style.display = "block";
+    setTimeout(function () { h.style.display = "none"; }, 2500);
+  };
+  var fallback = function () {
+    var ta = document.createElement("textarea");
+    ta.value = t; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); } catch (e) {}
+    ta.remove();
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(ok).catch(function () { fallback(); ok(); });
+  } else { fallback(); ok(); }
+}
+</script>
+</body>
+</html>

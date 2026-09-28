@@ -2843,6 +2843,10 @@ async function sendMessage() {
         if (pendingAttachments.length > 0) { alert("Вложения в группах — следующий шаг (G5). Пока отправляйте текст."); return; }
         messageInput.value = "";
         messageInput.style.height = "auto";
+        // v160w5d2: сворачиваем клавиатуру сразу при отправке (Олег: «чтобы не
+        // было тряски при отправке») — collapse в переходный момент (шифруем/
+        // рендерим), идёт через штатную focusout-цепочку с полным набором лекарства.
+        try { messageInput.blur(); } catch (e) {}
         btnSend.disabled = true;
         try {
             const res = await sendGroupMessage(currentGroup, gText);
@@ -2877,6 +2881,8 @@ async function sendMessage() {
     await ensureWasm();
     messageInput.value = "";
     messageInput.style.height = "auto";
+    // v160w5d2: сворачиваем клавиатуру сразу при отправке (см. групповую ветку выше).
+    try { messageInput.blur(); } catch (e) {}
     btnSend.disabled = true;
     // Optimistic render — в safe state до encrypt, чтобы UI не зависал.
     let optimisticRendered = false;
@@ -4638,6 +4644,13 @@ function showInviteLanding(inviteNpub) {
         '<div role="button" class="vid-card" data-vid="chrome" style="flex:1;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:10px;text-align:center;cursor:pointer;">' +
         '<div style="font-size:20px;">🤖</div><div style="font-size:13px;font-weight:600;color:var(--text);margin-top:4px;">Chrome</div><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Android</div>' +
         '</div>' +
+        '</div>' +
+        // v160z15-fix2 (Олег 28.09 17:28): ссылка на Privacy Policy — на лендинге
+        // её не было (скрин Олега). Открывается в той же вкладке (window.location),
+        // т.к. лендинг — единственное, что видит посетитель до установки.
+        '<div style="text-align:center;margin-top:14px;">' +
+        '<a href="/privacy" style="font-size:12.5px;color:#5a6b80;text-decoration:none;">Privacy Policy</a>' +
+        '</div>' +
         '</div>';
 
     // v160p6e: tap on link box → copy to clipboard (нажми → скопировалось)
@@ -4813,6 +4826,11 @@ async function requestNotificationPermission() {
         // (переименование) подавляется, если long-press сработал.
         // Повторное удержание выключает. contextmenu глушим (iOS long-press).
         window.__buildVpDiag = build;
+        // v160z15-fix1 (Олег 28.09 17:28): diag-HUD торчал на лендинге в обычном
+        // браузере — localStorage murmur_diag=1 остался с отладок и строил overlay
+        // на ЛЮБОЙ странице, включая invite-landing (скрин Олега: лог над буллетами).
+        // Фикс: HUD — только в standalone-PWA (там и дебажим), в браузере не строим.
+        if (localStorage.getItem("murmur_diag") === "1" && isStandalonePWA()) build();
         let lpTimer = null, lpFired = false, sx = 0, sy = 0;
         document.addEventListener("contextmenu", (e) => {
             const h = document.querySelector("#chat-view .chat-header");
@@ -4842,7 +4860,6 @@ async function requestNotificationPermission() {
             if (h && h.contains(e.target)) { e.stopPropagation(); e.preventDefault(); }
             lpFired = false;
         }, true);
-        if (localStorage.getItem("murmur_diag") === "1") build();
     } catch (e) { /* ignore */ }
 })();
 
@@ -4889,7 +4906,18 @@ window.addEventListener("hashchange", () => {
                 ? (vv.height || 0) + (vv.pageTop || 0)
                 : (vv.height || 0) + (vv.offsetTop || 0);
             let h;
-            if (typing) {
+            // v160w5d2 (Олег 28.09 18:21, видео IMG_5095: «тряска, когда сначала
+            // вызываешь клавиатуру, а потом сворачиваешь»): сворачивание клавиатуры
+            // drag-вниз в iOS PWA НЕ блюрит инпут → typing остаётся true, focusout
+            // не срабатывает, а iOS шлёт ПРОМЕЖУТОЧНЫЙ vv.height (~783 из 844) →
+            // kb = 844-783 = 61 → инпут ЗАВИСАЕТ над свернувшейся клавиатурой с
+            // дырой под ним (видео: дыра ровно с accessory-бар, держится до конца).
+            // Если vvFull уже вернулся к полной высоте (innerHeight-2) — клавиатура
+            // фактически ЗАКРЫТА: лечим как не-typing (kb=0, полная высота из
+            // MAX-ветки). При открытии клавиатуры vv.height сжимается → vvFull
+            // мал → kbClosed=false → инпут над клавиатурой как было.
+            const kbClosed = typing && (vvFull >= (window.innerHeight || 0) - 2);
+            if (typing && !kbClosed) {
                 h = vv.height;
             } else {
                 const br = document.body && document.body.getBoundingClientRect();
@@ -4914,7 +4942,7 @@ window.addEventListener("hashchange", () => {
             // Клавиатура ↓ → inset = 0 → инпут в самом краю (НЕ зависит
             // от залипшего --vvh / layout viewport desync — iOS надёжно
             // позиционирует fixed bottom:0 композитором).
-            const kb = typing ? Math.max(0, (window.innerHeight || 0) - (vv.height || 0)) : 0;
+            const kb = (typing && !kbClosed) ? Math.max(0, (window.innerHeight || 0) - (vv.height || 0)) : 0;
             document.documentElement.style.setProperty("--kb-inset", Math.round(kb) + "px");
         } catch (e) { /* ignore */ }
     };
