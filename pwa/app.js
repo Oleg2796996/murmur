@@ -4965,9 +4965,12 @@ window.addEventListener("hashchange", () => {
                 ? (vv.height || 0) + (vv.pageTop || 0)
                 : (vv.height || 0) + (vv.offsetTop || 0);
             let h;
-            if (typing) {
-                h = vv.height;
-            } else if (Date.now() < collapseLockUntil) {
+            // w6a (Авито-путь): при открытой клавиатуре --vvh НЕ сжимается
+            // (честная полная высота, клавиатура покрывает низ, композер
+            // поднимается transform-ом через applyKb). Typing проваливается
+            // в else-ветку MAX(innerHeight, vvFull, bodyH) — при печати
+            // даёт innerHeight (честно) и идемпотентна.
+            if (Date.now() < collapseLockUntil) {
                 // v160w5k: во время коллапса (500мс после focusout) vv.height+pageTop
                 // врут (промежуточные высоты, stale pageTop) — только честный
                 // innerHeight. animateVvh делает это скольжением, а не скачком.
@@ -5003,7 +5006,10 @@ window.addEventListener("hashchange", () => {
             // Клавиатура ↓ → inset = 0 → инпут в самом краю (НЕ зависит
             // от залипшего --vvh / layout viewport desync — iOS надёжно
             // позиционирует fixed bottom:0 композитором).
-            const kb = typing ? Math.max(0, (window.innerHeight || 0) - (vv.height || 0)) : 0;
+            // w6a: typing-тернарник убран — kb теперь непрерывно = перекрытие
+            // (innerHeight - vv.height), ставится в applyKb. Переменная
+            // остаётся для diag-HUD.
+            const kb = Math.max(0, (window.innerHeight || 0) - (vv.height || 0));
             document.documentElement.style.setProperty("--kb-inset", Math.round(kb) + "px");
         } catch (e) { /* ignore */ }
     };
@@ -5034,6 +5040,36 @@ window.addEventListener("hashchange", () => {
         if (ma.scrollHeight - ma.scrollTop - ma.clientHeight < 80) ma.scrollTop = ma.scrollHeight;
     };
     const onVv = () => { setVvh(); reset(); requestAnimationFrame(pinBottom); };
+    // w6a (Авито-путь): единственный мутируемый параметр = transform композера.
+    // kb = innerHeight - vv.height (перекрытие клавиатуры). CSS transition
+    // (300ms) анимирует движение — композер едет с клавиатурой, зеркально
+    // при закрытии. Skip-during-transition: никакие таймер-лекарства во время
+    // анимации не стреляют; ретаргеты идут ТОЛЬКО от vv resize (CSS transition
+    // сам пересчитывает интерполяцию — плавная погоня, не рывок).
+    let kbTransform = "translate3d(0,0,0)";
+    const applyKb = (instant) => {
+        try {
+            const ia = document.getElementById("input-area");
+            if (!ia || ia.hidden) return;
+            if (vv && vv.scale && Math.abs(vv.scale - 1) > 0.01) return; // pinch-zoom
+            const kb = Math.max(0, Math.round((window.innerHeight || 0) - (vv ? (vv.height || 0) : 0)));
+            kbTransform = "translate3d(0," + (-kb) + "px,0)";
+            if (instant) {
+                ia.style.transition = "none";
+                ia.style.transform = kbTransform;
+                void ia.offsetHeight;
+                requestAnimationFrame(() => { ia.style.transition = ""; });
+            } else {
+                ia.style.transform = kbTransform;
+            }
+            const cp = document.querySelector(".chat-panel");
+            if (cp) cp.style.paddingBottom = kb + "px";
+            document.documentElement.style.setProperty("--kb-inset", kb + "px");
+        } catch (e) { /* ignore */ }
+    };
+    const onVvKb = () => { applyKb(false); };
+    // raw, без троттлинга: мутируется ТОЛЬКО transform (compositor-only), дёшево.
+    if (vv) vv.addEventListener("resize", onVvKb);
     // v160w5m (Telegram Web A windowSize.ts: WINDOW_RESIZE_THROTTLE_MS = 250):
     // vv resize с троттлингом 250мс — iOS шлёт resize серией во время
     // анимации клавиатуры, без троттлинга каждый вызов = потенциальный
@@ -5086,6 +5122,10 @@ window.addEventListener("hashchange", () => {
             if (!vv || !vv.removeEventListener || !vv.addEventListener) return;
             vv.removeEventListener("resize", onVvThrottled);
             vv.addEventListener("resize", onVvThrottled);
+            // w6a: перерегистрация распространена и на raw kb-слушатель
+            // (v160x18: vv resize listener НЕ стреляет больше одного раза).
+            vv.removeEventListener("resize", onVvKb);
+            vv.addEventListener("resize", onVvKb);
         } catch (e) {}
     };
     // v160x13 (Олег 10:04, скрин с diag: kb=0px, iaBot=844, но композер
@@ -5153,6 +5193,7 @@ window.addEventListener("hashchange", () => {
         // = один репейнт), повторы — только forceReflow+nudge (безвизуальные).
         forceReflow();
         nudgeComposerLayer();
+        applyKb(false); // w6a: страховка поверх — если vv-ресайз после коллапса не долетел (bug 254861), watchdog переустанавливает transform по осевшему vv (один transition-догон, не прыжок)
         if (!gapFixTimer) scrollCure(); // только первый вызов цепочки
         // v160w5v (Олег 29.09 15:22 «делай», видео IMG_5108: 2-й цикл клавиатуры —
         // дыра y=1125 стоит до конца видео, scrollCure 1-го захода НЕ лечит:
@@ -5175,9 +5216,13 @@ window.addEventListener("hashchange", () => {
         try {
             const ia = document.getElementById("input-area");
             if (!ia || ia.hidden) return;
-            ia.style.transform = "translateZ(0)";
+            // w6a: transform теперь НЕСЁТ позицию (translateY(-kb)) — стирать
+            // в "" нельзя (уронит композер вниз). Переустановка ТЕКУЩЕГО
+            // значения + краткий translateZ-toggle внутри него: слой
+            // пересчитывается, позиция сохраняется.
+            ia.style.transform = kbTransform + " translateZ(0)";
             void ia.offsetHeight;
-            requestAnimationFrame(() => { ia.style.transform = ""; });
+            requestAnimationFrame(() => { ia.style.transform = kbTransform; });
         } catch (e) {}
     };
     document.addEventListener("focusout", (e) => {
@@ -5187,14 +5232,13 @@ window.addEventListener("hashchange", () => {
             typing = false;
             collapseLockUntil = Date.now() + 500;
             animateVvh(Math.round(window.innerHeight || 0));
-            // Поллинг (v160x12) оставлен: дотягивает --kb-inset/--vvh при оседании.
-            [100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000].forEach(t => setTimeout(() => { setVvh(); syncComposerSpace(); }, t));
-            // forceReflow: сразу + догон после анимации клавиатуры (~350мс) + поздний.
-            [120, 400, 900].forEach(t => setTimeout(forceReflow, t));
-            // nudgeComposerLayer: дёргает слой самого композера (promote/demote).
-            [150, 450, 1000].forEach(t => setTimeout(nudgeComposerLayer, t));
-            [80, 250, 350, 600, 1200].forEach(t => setTimeout(settle, t));
-            // watchdog: проверяет РЕАЛЬНЫЙ PAINT низа после оседания и дёргает reflow.
+            // w6a: поллинг сокращён 9 точек → 3 (skip-during-transition, уроки
+            // w5h/w5w: таймеры в середине анимации = видимые рывки). setVvh
+            // дотягивает --vvh после оседания; transform ретаргетят vv-ресайзы.
+            [500, 1000, 2000].forEach(t => setTimeout(() => { setVvh(); syncComposerSpace(); }, t));
+            // w6a: forceReflow/nudge/settle УБРАНЫ из сетки — reflow остаётся
+            // ТОЛЬКО внутри gapWatchdog (страхование по реальному дыра-состоянию).
+            // watchdog: страховка поверх, стреляет после оседания клавиатуры.
             [600, 1200, 2000].forEach(t => setTimeout(gapWatchdog, t));
             // v160w5n (Олег 29.09 11:02: «с 3-го сворачивания над строкой НЕ конец
             // ленты, а немного предыдущее сообщение, приходится руками мотать»):
@@ -5224,6 +5268,7 @@ window.addEventListener("hashchange", () => {
     document.addEventListener("focusin", (e) => {
         if (!isInput(e.target)) return;
         typing = true;
+        applyKb(false); // w6a: рекефокус без закрытия — transform пересчитывается по текущему vv
         // v160x20 (Олег 11:11: «когда тапаешь в печать — выше появляется не последнее
         // сообщение, а предыдущие»): при открытии клавиатуры клавиатура сжимает
         // messages-area и iOS держит scrollTop — юзер видит предпоследние. Скроллим
