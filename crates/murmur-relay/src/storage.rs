@@ -1242,12 +1242,18 @@ impl MessageStore {
                 "SELECT COUNT(DISTINCT npub_hash) FROM seen_users_day WHERE day >= ?1",
                 now - (now % 86400) - 86400,
             ),
-            // недоставленные — в TTL-окне И 24h-TTL (не сокращён после доставки).
-            // v160y31 (Олег 23:23): system:relay-нотификации («Адресат не забрал»,
-            // TTL 86400 > 600) попадали в счётчик как «недоставленные» — 2 хвоста
-            // на проде при пустом счётчике. Фейковые нотификации — НЕ сообщения.
+            // Недоставленные — только пользовательские сообщения в TTL-окне.
+            // Служебные envelopes (receipts, undelivered notifications и прочие
+            // routing-события) лежат в той же таблице, но не являются сообщениями
+            // пользователя и не должны попадать в этот показатель. Ранее фильтр
+            // исключал только from_npub=system:relay, поэтому 4 сообщения + 4
+            // receipts отображались как 8 недоставленных.
             envelopes_undelivered: q1(
-                "SELECT COUNT(*) FROM envelopes WHERE expires_at > ?1 AND (expires_at - ts) > 600 AND from_npub != 'system:relay'",
+                "SELECT COUNT(*) FROM envelopes
+                 WHERE expires_at > ?1
+                   AND (expires_at - ts) > 600
+                   AND from_npub != 'system:relay'
+                   AND body NOT LIKE '%\"_kind\"%'",
                 now,
             ),
             // диск: занято = envelopes (body+sig) + blobs (size) по таблицам;

@@ -398,8 +398,17 @@ button.small { padding: 8px 12px; font-size: 13px; }
     text-align: left;
     font-family: inherit;
     font-size: 14px;
+    /* v160w5f (Олег 29.09 06:42 «не с первого раза тап внутрь чата»):
+       touch-action:manipulation убирает double-tap-zoom/tap-delay; hover-стили
+       (классический iOS double-tap: первый тап = hover, click = второй) —
+       только на мышиных устройствах через @media (hover:hover). */
+    touch-action: manipulation;
 }
-.chat-item:hover { background: var(--border); }
+/* v160w5f: hover только на устройствах с мышью — на iOS первый тап
+   применял hover-фон и click требовал второго тапа. */
+@media (hover: hover) {
+    .chat-item:hover { background: var(--border); }
+}
 .chat-item.active { background: var(--bubble-out); }
 .chat-item-avatar {
     width: 40px; height: 40px;

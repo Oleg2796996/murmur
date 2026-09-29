@@ -110,6 +110,7 @@ async fn deliver_posts_vapid_signed_payload_to_mock_endpoint() {
         subtitle: "npub1qq…q".to_string(),
         body: "new encrypted message (42 bytes)".to_string(),
         badge: 2,
+        ws_envelope_b64: None,
     };
     let delivered = push_server.deliver(&payload).await.unwrap();
     assert_eq!(delivered, 1, "expected exactly 1 delivery");

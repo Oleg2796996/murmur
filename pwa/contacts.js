@@ -292,7 +292,13 @@ function renderChatList() {
                 "<span class='chat-item-time'>" + timeDisplay + "</span>" +
                 badge +
             "</div>";
-        div.addEventListener("click", () => openChat(c.peer, {fromUser: true}));
+        // v160w5g (Олег 29.09 07:37 «залипающий тап на чате — зависит от
+        // подкраски строки»): click-обработчики на самих .chat-item терялись,
+        // когда renderChatList rebuild попадал между touchstart и click
+        // (WS/typing-пинги, poll каждые 5с) — узел удалялся, клик умирал.
+        // Подкрашенная строка = как раз свежий rebuild (active-класс).
+        // Обработчики убраны с итемов; тап ловит ДЕЛЕГИРОВАННЫЙ слушатель
+        // на #chat-list (живёт вечно) — setupChatListTap ниже.
         chatList.appendChild(div);
     }
     // v160x: вернуть скролл. Если высота не изменилась — точная позиция;
@@ -342,6 +348,39 @@ function renderChatList() {
         }
     } catch (e) { console.warn("[murmur] groups render:", e); }
 }
+
+// v160w5g (Олег 29.09 07:37 «залипающий тап на чате»): ЕДИНСТВЕННЫЙ тап-обработчик
+// на контейнере #chat-list (существует с загрузки, НЕ пересоздаётся renderChatList).
+// Делегирование: e.target.closest(".chat-item") → data-peer → openChat;
+// .group-item → data-group-id → openGroupChat. Ни один rebuild не убивает тап.
+// touchstart с hover-гейтом НЕ нужен: hover уже в @media (hover:hover) (w5f).
+// v160w5g2 (Олег 29.09 07:52 «совсем не проваливается в чат» при w5g):
+// w5g вешал слушатель на chatList СРАЗУ при загрузке contacts.js — но contacts.js
+// (классик) исполняется ДО app.js, где объявлена const chatList → в момент bind
+// chatList ещё не существует, guard молча выходил, обработчик НЕ вешался (урок
+// w5d3). Плюс итем-обработчики убраны → тапов нет вообще. Фикс: делегирование
+// на DOCUMENT (существует всегда) + ЛЕНИВЫЙ поиск списка внутри обработчика
+// (к моменту клика всё загружено).
+function setupChatListTap() {
+    if (setupChatListTap._bound || !document.addEventListener) return;
+    setupChatListTap._bound = true;
+    document.addEventListener("click", (e) => {
+        try {
+            const item = e.target && e.target.closest ? e.target.closest(".chat-item") : null;
+            if (!item) return;
+            const list = (typeof chatList !== "undefined" && chatList) || document.getElementById("chat-list");
+            if (!list || !list.contains(item)) return;
+            if (item.classList.contains("group-item")) {
+                const gid = item.dataset && item.dataset.groupId;
+                if (gid) { try { openGroupChat(gid); } catch (err) { console.warn("[murmur] openGroupChat:", err); } }
+                return;
+            }
+            const peer = item.dataset && item.dataset.peer;
+            if (peer && typeof openChat === "function") openChat(peer, { fromUser: true });
+        } catch (err) { console.warn("[murmur] chat-list tap:", err); }
+    });
+}
+setupChatListTap();
 
 // v160g7 (Олег 13:32: «Я тапаю на группу, но ничего не происходит»):
 // ЗАГЛУШКА БЕЗ ПОЛЯ ВВОДА выглядела как «ничего не произошло» — рисовали

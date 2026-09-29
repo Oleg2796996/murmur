@@ -170,7 +170,7 @@ async function ensureWasm() {
     await loadWasmModule();
 }
 
-const RELAY = "https://murmurchat.org";
+const RELAY = "https://murmur.senswifi.ru";
 const LS_NPUB = "murmur.npub";
 const LS_KEY = "murmur.sk";
 const LS_NAME = "murmur.name";
@@ -2843,10 +2843,6 @@ async function sendMessage() {
         if (pendingAttachments.length > 0) { alert("Вложения в группах — следующий шаг (G5). Пока отправляйте текст."); return; }
         messageInput.value = "";
         messageInput.style.height = "auto";
-        // v160w5d2: сворачиваем клавиатуру сразу при отправке (Олег: «чтобы не
-        // было тряски при отправке») — collapse в переходный момент (шифруем/
-        // рендерим), идёт через штатную focusout-цепочку с полным набором лекарства.
-        try { messageInput.blur(); } catch (e) {}
         btnSend.disabled = true;
         try {
             const res = await sendGroupMessage(currentGroup, gText);
@@ -2881,8 +2877,6 @@ async function sendMessage() {
     await ensureWasm();
     messageInput.value = "";
     messageInput.style.height = "auto";
-    // v160w5d2: сворачиваем клавиатуру сразу при отправке (см. групповую ветку выше).
-    try { messageInput.blur(); } catch (e) {}
     btnSend.disabled = true;
     // Optimistic render — в safe state до encrypt, чтобы UI не зависал.
     let optimisticRendered = false;
@@ -3224,6 +3218,42 @@ messageInput?.addEventListener("keydown", (e) => {
     }
 });
 
+// v160w5e3 (Олег 29.09 07:09, скрин+уточнение «галочка — норм, стрелка — дергается»
+// при w5e2): w5e2 (touchend preventDefault) НЕ сработал — на iOS blur инпута
+// происходит на TOUCHSTART по другому элементу (клавиатура уезжает ещё до
+// touchend), к моменту touchend фокус уже потерян, guard не срабатывает.
+// Рабочая точка перехвата — TOUCHSTART СТРЕЛКИ (capture, passive:false):
+// preventDefault на touchstart отменяет дефолтный blur-на-touchstart И
+// синтетический click. Путь = Enter-пути: клавиатура остаётся ОТКРЫТОЙ.
+// Отправку делаем на touchend (не touchstart — палец может соскользнуть).
+btnSend?.addEventListener("touchstart", (e) => {
+    try {
+        if (messageInput && document.activeElement === messageInput) {
+            e.preventDefault();
+            btnSend.__kbSendPending = true;
+        }
+    } catch (err) { /* fallthrough к обычному обработчику */ }
+}, { capture: true, passive: false });
+btnSend?.addEventListener("touchend", (e) => {
+    try {
+        if (btnSend.__kbSendPending) {
+            btnSend.__kbSendPending = false;
+            e.preventDefault();
+            sendMessage();
+        }
+    } catch (err) { /* fallthrough к обычному обработчику */ }
+}, { capture: true, passive: false });
+btnSend?.addEventListener("touchcancel", () => {
+    try { btnSend.__kbSendPending = false; } catch (err) {}
+}, { capture: true });
+btnSend?.addEventListener("click", (e) => {
+    try {
+        if (messageInput && document.activeElement === messageInput) {
+            e.preventDefault();
+            sendMessage();
+        }
+    } catch (err) { /* fallthrough к обычному обработчику */ }
+}, true);
 btnSend?.addEventListener("click", sendMessage);
 window.sendMessage = sendMessage;
 
@@ -4727,6 +4757,11 @@ async function tryAutoRestore() {
         // новый пользователь на murmurchat.org тоже должен видеть инструкцию
         // установки PWA (иначе аккаунт создастся в Safari-контейнере впустую).
         if (!isStandalonePWA()) showInviteLanding(inv);
+        // v160w5e1 (Олег 28.09 21:49): секция «Создать» скрыта в HTML по
+        // умолчанию (hidden) — показываем ТОЛЬКО когда аккаунта нет (сюда).
+        // Пока PWA грузится с существующим аккаунтом — кнопки «Создать» не видно.
+        const createSection = document.getElementById("identity-create-section");
+        if (createSection) createSection.hidden = false;
         return;
     }
     try {
@@ -4895,6 +4930,30 @@ window.addEventListener("hashchange", () => {
     // залипало 744 → тёмная полоса фона под input. Решение: НЕ-typing высота
     // = MAX(vv.height+vv.offsetTop, body, innerHeight) — врёт один источник,
     // другие вытягивают. typing → vv.height (клавиатура) как было.
+    // v160w5j (Олег 29.09 09:04, видео IMG_5100 покадрово 20fps): w5i
+    // (transition: height на .messenger) НЕ сработал на iOS — WebKit НЕ
+    // анимирует height, когда значение приходит через custom property (--vvh),
+    // transition от переменной физически не запускается.
+    // v160w5m (Олег 29.09 10:21 «Делай» — упрощение по Telegram Web A,
+    // windowSize.ts): w5j-анимация rAF УБРАНА. Причины: (1) ретаргет на
+    // мусорных промежуточных значениях при коллапсе давал тряску/мигание
+    // (Олег 10:05); (2) Telegram НЕ анимирует --vh вообще — мгновенная
+    // установка, троттлинг 250мс. Плавность даёт троттлинг: iOS шлёт resize
+    // серией, каждое значение честное, между ними 250мс пауза = без ретаргетов.
+    const setVvhProperty = (targetPx) => {
+        try {
+            document.documentElement.style.setProperty("--vvh", Math.round(targetPx) + "px");
+        } catch (e) {}
+    };
+    const animateVvh = setVvhProperty; // w5m: имя сохранено для вызовов, анимации нет
+    // v160w5k (Олег 29.09 10:05, «после очередного нажатия галочки клавиатура
+    // уходит и вместе с ней уходит и строка ввода + тряска и мигание»):
+    // при коллапсе vv/pageTop возвращают ПРОМЕЖУТОЧНЫЕ/мусорные значения,
+    // vvFull может стать БОЛЬШЕ экрана → .messenger выше физического низа →
+    // композер уходит за экран вместе с клавиатурой. Сразу после focusout
+    // (500мс) целиком доверяем ТОЛЬКО window.innerHeight (урок v160y59:
+    // он не врёт в gap-состоянии) — vvFull/bodyH игнорируем.
+    let collapseLockUntil = 0;
     const setVvh = () => {
         try {
             if (vv.scale && Math.abs(vv.scale - 1) > 0.01) return; // pinch-zoom — не трогаем
@@ -4906,19 +4965,13 @@ window.addEventListener("hashchange", () => {
                 ? (vv.height || 0) + (vv.pageTop || 0)
                 : (vv.height || 0) + (vv.offsetTop || 0);
             let h;
-            // v160w5d2 (Олег 28.09 18:21, видео IMG_5095: «тряска, когда сначала
-            // вызываешь клавиатуру, а потом сворачиваешь»): сворачивание клавиатуры
-            // drag-вниз в iOS PWA НЕ блюрит инпут → typing остаётся true, focusout
-            // не срабатывает, а iOS шлёт ПРОМЕЖУТОЧНЫЙ vv.height (~783 из 844) →
-            // kb = 844-783 = 61 → инпут ЗАВИСАЕТ над свернувшейся клавиатурой с
-            // дырой под ним (видео: дыра ровно с accessory-бар, держится до конца).
-            // Если vvFull уже вернулся к полной высоте (innerHeight-2) — клавиатура
-            // фактически ЗАКРЫТА: лечим как не-typing (kb=0, полная высота из
-            // MAX-ветки). При открытии клавиатуры vv.height сжимается → vvFull
-            // мал → kbClosed=false → инпут над клавиатурой как было.
-            const kbClosed = typing && (vvFull >= (window.innerHeight || 0) - 2);
-            if (typing && !kbClosed) {
+            if (typing) {
                 h = vv.height;
+            } else if (Date.now() < collapseLockUntil) {
+                // v160w5k: во время коллапса (500мс после focusout) vv.height+pageTop
+                // врут (промежуточные высоты, stale pageTop) — только честный
+                // innerHeight. animateVvh делает это скольжением, а не скачком.
+                h = Math.max(window.innerHeight || 0, 0);
             } else {
                 const br = document.body && document.body.getBoundingClientRect();
                 const bodyH = br && br.height > 100 ? br.height : 0;
@@ -4935,14 +4988,22 @@ window.addEventListener("hashchange", () => {
                 // → vvFull дорастал до 844 → MAX выдавал честную высоту.
                 h = Math.max(window.innerHeight || 0, vvFull, bodyH);
             }
-            if (h && h > 100) document.documentElement.style.setProperty("--vvh", Math.round(h) + "px");
+            // v160w5l (Олег 29.09 10:19, «на ~5-й раз сворачивания строка
+            // уезжает под экран»): stale pageTop при коллапсе даёт vvFull
+            // БОЛЬШЕ физической высоты (панувший viewport) → .messenger выше
+            // экрана → композер (в потоке) уходит за низ вместе с клавиатурой.
+            // Клэмп: при scrollY=0 (fixed-body не скроллит) --vvh физически
+            // НЕ может быть больше window.innerHeight.
+            const phys = window.innerHeight || 0;
+            if (phys && !window.scrollY && h > phys) h = phys;
+            if (h && h > 100) animateVvh(Math.round(h)); // v160w5j: плавная интерполяция вместо скачка
             // v160x11: keyboard inset для fixed-композера. .input-area якорится
             // к физическому низу: bottom: var(--kb-inset). Клавиатура ↑ →
             // inset = innerHeight - vv.height → инпут над клавиатурой.
             // Клавиатура ↓ → inset = 0 → инпут в самом краю (НЕ зависит
             // от залипшего --vvh / layout viewport desync — iOS надёжно
             // позиционирует fixed bottom:0 композитором).
-            const kb = (typing && !kbClosed) ? Math.max(0, (window.innerHeight || 0) - (vv.height || 0)) : 0;
+            const kb = typing ? Math.max(0, (window.innerHeight || 0) - (vv.height || 0)) : 0;
             document.documentElement.style.setProperty("--kb-inset", Math.round(kb) + "px");
         } catch (e) { /* ignore */ }
     };
@@ -4973,6 +5034,17 @@ window.addEventListener("hashchange", () => {
         if (ma.scrollHeight - ma.scrollTop - ma.clientHeight < 80) ma.scrollTop = ma.scrollHeight;
     };
     const onVv = () => { setVvh(); reset(); requestAnimationFrame(pinBottom); };
+    // v160w5m (Telegram Web A windowSize.ts: WINDOW_RESIZE_THROTTLE_MS = 250):
+    // vv resize с троттлингом 250мс — iOS шлёт resize серией во время
+    // анимации клавиатуры, без троттлинга каждый вызов = потенциальный
+    // ретаргет/рывок. Первое событие прогоняем сразу (trailing edge),
+    // остальные раз в 250мс.
+    let vvResizeLast = 0;
+    const onVvThrottled = () => {
+        const now = Date.now();
+        if (now - vvResizeLast >= 250) { vvResizeLast = now; onVv(); }
+        else { vvResizeLast = Math.max(vvResizeLast, now - 250 + 1); setTimeout(onVv, 250 - (now - vvResizeLast)); }
+    };
     // v160x11: scroll-to-settle (research-подтверждённый Fix B). При закрытии
     // клавиатуры iOS может залипнуть layout viewport — renders 781 при
     // честных 844. Крошечный scroll (0,1)→(0,0) заставляет композитор
@@ -5012,8 +5084,8 @@ window.addEventListener("hashchange", () => {
     const refreshVvListener = () => {
         try {
             if (!vv || !vv.removeEventListener || !vv.addEventListener) return;
-            vv.removeEventListener("resize", onVv);
-            vv.addEventListener("resize", onVv);
+            vv.removeEventListener("resize", onVvThrottled);
+            vv.addEventListener("resize", onVvThrottled);
         } catch (e) {}
     };
     // v160x13 (Олег 10:04, скрин с diag: kb=0px, iaBot=844, но композер
@@ -5055,8 +5127,40 @@ window.addEventListener("hashchange", () => {
     let gapFixTimer = null;
     // watchdog: если дыра активна, дёргает И reflow, И слой композера.
     const gapWatchdog = () => {
-        if (!gapDetector()) return;
-        scrollCure();
+        // v160w5r (Олег 29.09 13:18 «Делай» после отката w5p/w5q, доки проекта:
+        // v160x18/x19 scrollCure-лекарство подтверждено, но оно перезапускает
+        // композер, НЕ растит .messenger — при срезанном --vvh композер остаётся
+        // в дыре; урок w5q: rAF-анимация + lastFullViewportH = «ещё больше
+        // дёрганий»). ОДНА правка: после оседания iOS (таймеры 450+мс) если
+        // --vvh срезан ниже реального экрана — МГНОВЕННАЯ установка
+        // --vvh = window.innerHeight (честный после оседания, урок v160y59)
+        // + scrollCure. Без анимации (дёргания w5q), само-повтор 300мс макс 5.
+        // v160w5t (Олег 29.09 14:50 diag-скрин в дыре на v160w5s: ВСЕ метрики
+        // ЧЕСТНЫЕ — innerH=844, vvH=844, --vvh=844, iaBot=844, msBot=844 при
+        // ВИДИМОЙ дыре = точь-в-точь урок v160y61: layout НЕ врёт, PAINT устар.
+        // Поэтому w5r/w5s молчали: --vvh и так честный. Лекарство = БЕЗ гейта
+        // (урок v160y61: gapDetector = LAYOUT-проба, при композере в потоке
+        // находит композер ВСЕГДА даже при дыре → гейт мёртвый код → watchdog
+        // не звал лекарство никогда). Височностный чек w5r/s убран, вместо
+        // гейта — безусловный набор как у тапа в поле: forceReflow (реальный
+        // reflow = репейнт сталой зоны), nudge слоя композера, scrollCure.
+        // Само-повтор 300мс макс 5 (счётчик gapFixTimer) — прежний.
+        // v160w5u (Олег 29.09 15:00, diag-скрин w5t в дыре: --vvh=912=innerH,
+        // iaBot=912 — дыра ЗАКРЫВАЕТСЯ, но рывками: «поле рывками опускается
+        // вниз экрана»). Cure-набор стреляет 5 раз (само-повтор 300мс×5), каждый
+        // scrollCure (реальный скролл 0→80→0) дёргает композер на шаг = видимые
+        // рывки. Фикс: scrollCure ТОЛЬКО на ПЕРВОМ вызове watchdog (один скролл
+        // = один репейнт), повторы — только forceReflow+nudge (безвизуальные).
+        forceReflow();
+        nudgeComposerLayer();
+        if (!gapFixTimer) scrollCure(); // только первый вызов цепочки
+        // v160w5v (Олег 29.09 15:22 «делай», видео IMG_5108: 2-й цикл клавиатуры —
+        // дыра y=1125 стоит до конца видео, scrollCure 1-го захода НЕ лечит:
+        // layout уже в стабильном stale-состоянии, скролл физически не проходит.
+        // В проверенном v160x18 лечение было СЕРИЕЙ 80/300/600 — возвращаем
+        // 2-й заход через 150мс: первый скролл расширяет body, второй проходит
+        // через всю stale-зону. Прыжок незаметен (оба после оседания клавиатуры).
+        if (!gapFixTimer) setTimeout(scrollCure, 150);
         // повтор через 300мс — если iOS снова срезал, дёргаем ещё раз (макс 5 попыток)
         const n = (parseInt(gapFixTimer || "0", 10) || 0) + 1;
         gapFixTimer = null;
@@ -5078,6 +5182,11 @@ window.addEventListener("hashchange", () => {
     };
     document.addEventListener("focusout", (e) => {
         if (e.target && (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT")) {
+            // v160w5k: блокируем vv-источники на время коллапса (500мс) —
+            // иначе vvFull с stale pageTop уводит .messenger за экран.
+            typing = false;
+            collapseLockUntil = Date.now() + 500;
+            animateVvh(Math.round(window.innerHeight || 0));
             // Поллинг (v160x12) оставлен: дотягивает --kb-inset/--vvh при оседании.
             [100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000].forEach(t => setTimeout(() => { setVvh(); syncComposerSpace(); }, t));
             // forceReflow: сразу + догон после анимации клавиатуры (~350мс) + поздний.
@@ -5087,6 +5196,29 @@ window.addEventListener("hashchange", () => {
             [80, 250, 350, 600, 1200].forEach(t => setTimeout(settle, t));
             // watchdog: проверяет РЕАЛЬНЫЙ PAINT низа после оседания и дёргает reflow.
             [600, 1200, 2000].forEach(t => setTimeout(gapWatchdog, t));
+            // v160w5n (Олег 29.09 11:02: «с 3-го сворачивания над строкой НЕ конец
+            // ленты, а немного предыдущее сообщение, приходится руками мотать»):
+            // при закрытии клавиатуры высота ленты РАСТЁТ (клавиатура уходит),
+            // а scrollTop остаётся — юзер видит предпоследние. Догоняем к низу
+            // с поллингом после оседания (аналог focusin-поллинга scrollBottomKb).
+            const scrollBottomUnfocus = () => {
+                try {
+                    const ma = document.querySelector(".messages-area");
+                    if (!ma) return;
+                    ma.scrollTop = ma.scrollHeight;
+                } catch (err) {}
+            };
+            // v160w5o (Олег 29.09 11:26, видео IMG_5102: «подтягивание не должно
+            // быть видно пользователю»): покадровый разбор показал — при коллапсе
+            // лента вырастает на ~300px, порог pinBottom (<80px) не проходит →
+            // подтяжка уезжает в поллинг на 600мс+ = видимый скролл. Фикс: СРАЗУ
+            // при фокусе-ауте (пока лента ещё сжата, юзер был у низа) скроллим
+            // к низу мгновенно; при росте высоты контента iOS держит нижний край
+            // видимого окна на конце ленты автоматически (scroll anchoring),
+            // поллинг остаётся как страховка. Порог НЕ трогаем (нужен для
+            // обычных скроллов вверх — иначе лента прилипнет намертво).
+            scrollBottomUnfocus();
+            [600, 800, 1200, 2000].forEach(t => setTimeout(scrollBottomUnfocus, t));
         }
     }, true);
     document.addEventListener("focusin", (e) => {
@@ -5134,13 +5266,20 @@ window.addEventListener("hashchange", () => {
             } catch (err) {}
         };
         [100, 250, 500, 750, 1000, 1500, 2000].forEach(t => setTimeout(unmarkKb, t));
-        // v160x18: scroll-лекарство после закрытия клавиатуры — расширяем body,
-        // реальный scroll вниз/наверх, restore. Лечит stale-вьюпорт (bug 254861).
-        [80, 300, 600].forEach(t => setTimeout(scrollCure, t));
-        [150, 400, 800].forEach(t => setTimeout(() => { setVvh(); reset(); }, t));
+        // v160w5h (Олег 29.09 08:07 «дергается именно при сворачивании клавиатуры»):
+        // прежняя серия безусловных лекарств (scrollCure 80/300/600 + settle 150/400/800
+        // + forceReflow/nudge от focusout-цепочки) стартовала в СЕРЕДИНЕ анимации
+        // клавиатуры (~350мс): каждая итерация = видимый рывок (settle-скролл 0→1→0,
+        // body +1px, nudge слоя), 5+ рывков за 2 секунды. Фикс: НЕ дёргать по
+        // расписанию — ЕДИНСТВЕННЫЙ gapWatchdog (чекает РЕАЛЬНЫЙ paint низа через
+        // elementFromPoint): дёргает ТОЛЬКО если stale-дыра реальна, и ПОСЛЕ оседания
+        // клавиатуры (450/900/1500 — не в середине анимации). На здоровом вьюпорте —
+        // no-op, ни одного рывка. setVvh/reset/settle-поллинг убраны из focusout:
+        // vv resize/scroll-слушатели уже дотягивают --vvh на каждое изменение высоты.
+        [450, 900, 1500, 2400].forEach(t => setTimeout(gapWatchdog, t));
     }, true);
     window.addEventListener("scroll", reset, { passive: true });
-    vv.addEventListener("resize", onVv);
+    vv.addEventListener("resize", onVvThrottled);
     // v160x10b (Олег 2026-09-21, скрин «дыра 63px»): vv scroll = изменение
     // offsetTop БЕЗ изменения height. В gap-состоянии после цикла клавиатуры
     // iOS оседает: vv.height+vvTop = полная высота, но последнийvv resize
