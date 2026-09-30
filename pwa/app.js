@@ -170,7 +170,7 @@ async function ensureWasm() {
     await loadWasmModule();
 }
 
-const RELAY = "https://murmur.senswifi.ru";
+const RELAY = "https://murmurchat.org";
 const LS_NPUB = "murmur.npub";
 const LS_KEY = "murmur.sk";
 const LS_NAME = "murmur.name";
@@ -5397,81 +5397,3 @@ window.addEventListener("hashchange", () => {
     try { window.__murmurSetVvh = setVvh; } catch (e) {}
 })();
 
-// v160w6d-diag (вариант 1, Олег 14:30: «попробуем вариант 1» — диагностическая
-// панель на iPhone): реальный клавиатурный цикл на устройстве — ВСЕ события
-// в реальном времени. window.__murmurKbLog пишет каждую запись vv/scroll/focusout
-// + top композера + --vvh. Панель: fixed div снизу, обновляется по таймеру.
-(function installKbDiag() {
-    try {
-        const w = window;
-        w.__murmurKbLog = [];
-        const log = (kind, data) => {
-            try {
-                const ma = document.querySelector(".messages-area");
-                const ia = document.getElementById("input-area");
-                const mTop = ma ? Math.round(ma.getBoundingClientRect().top) : null;
-                const mBottom = ma ? Math.round(ma.getBoundingClientRect().bottom) : null;
-                const iTop = ia ? Math.round(ia.getBoundingClientRect().top) : null;
-                const iBottom = ia ? Math.round(ia.getBoundingClientRect().bottom) : null;
-                w.__murmurKbLog.push(Object.assign({
-                    t: Date.now() % 100000,
-                    kind: kind,
-                    scrollY: Math.round(w.scrollY || 0),
-                    vvH: Math.round((w.visualViewport && w.visualViewport.height) || 0),
-                    vvTop: Math.round((w.visualViewport && w.visualViewport.offsetTop) || 0),
-                    innerH: w.innerHeight || 0,
-                    vvh: (document.documentElement.style.getPropertyValue("--vvh") || "").trim(),
-                    docH: Math.round(document.documentElement.scrollHeight || 0),
-                    mTop, mBottom, iTop, iBottom,
-                }, data || {}));
-                if (w.__murmurKbLog.length > 120) w.__murmurKbLog.shift();
-            } catch (e) {}
-        };
-        w.__murmurKbLogFn = log;
-        const vv = w.visualViewport;
-        if (vv) {
-            vv.addEventListener("resize", () => log("vv-resize"), { passive: true });
-            vv.addEventListener("scroll", () => log("vv-scroll"), { passive: true });
-        }
-        w.addEventListener("scroll", () => log("win-scroll"), { passive: true });
-        document.addEventListener("focusout", (e) => {
-            if (e.target && (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT")) log("focusout");
-        }, true);
-        document.addEventListener("focusin", (e) => {
-            if (e.target && (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT")) log("focusin");
-        }, true);
-        // Кнопка «копировать лог» — floating рядом с diag (standalone PWA).
-        const btn = document.createElement("button");
-        btn.textContent = "KB";
-        btn.setAttribute("aria-label", "копировать клавиатурный лог");
-        Object.assign(btn.style, {
-            position: "fixed", right: "8px", bottom: "96px", zIndex: 99999,
-            padding: "10px 14px", borderRadius: "8px", border: "1px solid #888",
-            background: "rgba(20,20,20,0.85)", color: "#fff", fontSize: "14px",
-        });
-        btn.addEventListener("click", () => {
-            try {
-                const lines = w.__murmurKbLog.map(r =>
-                    [r.t, r.kind, "sy=" + r.scrollY, "vv=" + r.vvH, "vvT=" + r.vvTop,
-                     "ih=" + r.innerH, "vvh=" + r.vvh, "doc=" + r.docH,
-                     "mA=" + r.mTop + "/" + r.mBottom, "iA=" + r.iTop + "/" + r.iBottom].join(" "));
-                navigator.clipboard.writeText(lines.join("\n")).then(() => {
-                    btn.textContent = "OK";
-                    setTimeout(() => { btn.textContent = "KB"; }, 1500);
-                }).catch(() => {
-                    // Fallback: textarea select
-                    const ta = document.createElement("textarea");
-                    ta.value = lines.join("\n");
-                    document.body.appendChild(ta);
-                    ta.select();
-                    document.execCommand("copy");
-                    ta.remove();
-                    btn.textContent = "OK";
-                    setTimeout(() => { btn.textContent = "KB"; }, 1500);
-                });
-            } catch (e) { btn.textContent = "ERR"; }
-        });
-        document.body.appendChild(btn);
-        log("installed");
-    } catch (e) {}
-})();
