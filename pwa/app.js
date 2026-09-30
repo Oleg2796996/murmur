@@ -5031,7 +5031,11 @@ window.addEventListener("hashchange", () => {
         if (!ma) return;
         if (ma.scrollHeight - ma.scrollTop - ma.clientHeight < 80) ma.scrollTop = ma.scrollHeight;
     };
-    const onVv = () => { setVvh(); reset(); requestAnimationFrame(pinBottom); };
+    // kb-oob(f): reset заглушён на collapse (window.__murmurQuiet) — нативный
+    // контр-пан/scroll-restore iOS проходит без нашего вмешательства. Это
+    // УБИРАЕТ контр-скролл против restore = главный источник дёрганья на
+    // реальном устройстве (в сим no-op — сим этот механизм НЕ видит).
+    const onVv = () => { setVvh(); if (!window.__murmurQuiet) reset(); requestAnimationFrame(pinBottom); };
     // v160w5m (Telegram Web A windowSize.ts: WINDOW_RESIZE_THROTTLE_MS = 250):
     // vv resize с троттлингом — iOS шлёт resize серией во время анимации
     // клавиатуры, без троттлинга каждый вызов = потенциальный ретаргет/рывок.
@@ -5196,6 +5200,11 @@ window.addEventListener("hashchange", () => {
             // иначе vvFull с stale pageTop уводит .messenger за экран.
             typing = false;
             collapseLockUntil = Date.now() + 500;
+            // kb-oob(f): 600мс тишины для reset() — покрывает анимацию закрытия
+            // (~250-300мс) + запас. Нативный scroll-restore iOS проходит без
+            // контр-скролла. gapWatchdog [450,900,1500] остаётся страховкой.
+            window.__murmurQuiet = true;
+            setTimeout(() => { window.__murmurQuiet = false; }, 600);
             animateVvh(Math.round(window.innerHeight || 0));
             // v160x12: Поллинг оставлен (дотягивает --kb-inset/--vvh при оседании,
             // идемпотентен, без визуального эффекта).
@@ -5242,7 +5251,10 @@ window.addEventListener("hashchange", () => {
                 } catch (err) {}
             };
             [100, 250, 500, 750, 1000, 1500, 2000].forEach(t => setTimeout(unmarkKb, t));
-            scrollBottomUnfocus();
+            // kb-oob(f)+(b): мгновенный scrollBottomUnfocus УБРАН из клиники
+            // закрытия — реальный ma.scrollTop в кадре, когда layout в полёте,
+            // рвёт нативный scroll anchoring/restore. Поллинг 600+ остаётся
+            // (страховка «предпоследнего сообщения» после оседания, v160w5n).
             [600, 800, 1200, 2000].forEach(t => setTimeout(scrollBottomUnfocus, t));
         }
     }, true);
@@ -5280,7 +5292,8 @@ window.addEventListener("hashchange", () => {
         [50, 150, 300, 500, 800].forEach(t => setTimeout(markKb, t));
         [50, 150, 300, 500, 800].forEach(t => setTimeout(reset, t));
     }, true);
-    window.addEventListener("scroll", reset, { passive: true });
+    // kb-oob(f): reset заглушён на collapse (окно тишины из focusout).
+    window.addEventListener("scroll", (e) => { if (!window.__murmurQuiet) reset(); }, { passive: true });
     vv.addEventListener("resize", onVvThrottled);
     // v160x10b (Олег 2026-09-21, скрин «дыра 63px»): vv scroll = изменение
     // offsetTop БЕЗ изменения height. В gap-состоянии после цикла клавиатуры
@@ -5289,7 +5302,7 @@ window.addEventListener("hashchange", () => {
     // 54px. reset() тут НЕ пересчитывает высоту. Добавляем setVvh: каждый
     // vv scroll дотягивает --vvh до честного MAX(...). Дешёво (setVvh
     // идемпотентен, guard от pinch-zoom внутри).
-    vv.addEventListener("scroll", () => { setVvh(); reset(); });
+    vv.addEventListener("scroll", () => { setVvh(); if (!window.__murmurQuiet) reset(); });
     setVvh();
     reset();
     // v160x19: экспорт scrollCure на window (module scope — lesson #363/#364),
