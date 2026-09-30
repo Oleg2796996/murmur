@@ -5187,11 +5187,19 @@ window.addEventListener("hashchange", () => {
             animateVvh(Math.round(window.innerHeight || 0));
             // Поллинг (v160x12) оставлен: дотягивает --kb-inset/--vvh при оседании.
             [100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000].forEach(t => setTimeout(() => { setVvh(); syncComposerSpace(); }, t));
-            // forceReflow: сразу + догон после анимации клавиатуры (~350мс) + поздний.
-            [120, 400, 900].forEach(t => setTimeout(forceReflow, t));
-            // nudgeComposerLayer: дёргает слой самого композера (promote/demote).
-            [150, 450, 1000].forEach(t => setTimeout(nudgeComposerLayer, t));
-            [80, 250, 350, 600, 1200].forEach(t => setTimeout(settle, t));
+            // v160w6c-fast (Олег 30.09 10:55: «осталась задержка перед тем,
+            // как поле опустится вниз — можем обнулить?»): forceReflow/nudge
+            // СРАЗУ (0мс) при focusout — высота уже честная (animateVvh выше),
+            // лечим stale paint немедленно, а не через 120-150мс. Мутирующих
+            // лекарств больше нет (setVvh без анимации, settle-скроллы убраны
+            // из цепочки? нет — settle остался, но он после оседания), дёргать
+            // слой безопасно. Догоны 400/900 — страховка после оседания.
+            [0, 400, 900].forEach(t => setTimeout(forceReflow, t));
+            [0, 450, 1000].forEach(t => setTimeout(nudgeComposerLayer, t));
+            // v160w6c-fast: settle СРАЗУ (0мс) вместо 80мс — крошечный scroll
+            // (0,1)→(0,0) в первый же кадр, не в середине анимации. Догоны
+            // 350/600/1200 — страховка после оседания.
+            [0, 350, 600, 1200].forEach(t => setTimeout(settle, t));
             // watchdog: проверяет РЕАЛЬНЫЙ PAINT низа после оседания и дёргает reflow.
             [600, 1200, 2000].forEach(t => setTimeout(gapWatchdog, t));
             // v160w5n (Олег 29.09 11:02: «с 3-го сворачивания над строкой НЕ конец
