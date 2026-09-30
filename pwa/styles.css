@@ -172,12 +172,15 @@ button.small { padding: 8px 12px; font-size: 13px; }
        Falls back to 100vh on older browsers. Combined with viewport-fit=cover
        in <meta>, this gives full-screen layout without cutting off the input
        area below the home indicator. */
-    height: 100vh;
-    /* v160x4: --vvh ставит app.js из visualViewport.height (вкл. safe-зону).
-       100dvh на iOS standalone исключает нижний safe-inset → не доходил
-       до физического низа (пустота+светлая полоса body под input).
+    /* v160w6b (Авито-финал, Олег 30.09 «Делай»): высота КОНТЕЙНЕРА фиксирована
+       на --vvh-full (MAX(innerHeight, vvFull) — считается ОДИН раз при осевшей
+       клавиатуре, без bodyH-инфляции) и НЕ мутируется в цикле клавиатуры.
+       У Авито/Telegram лента не сжимается: клавиатура перекрывает только
+       композер (transform), лента скроллит под ним. Источник дёрганий был:
+       --vvh менялся на каждое vv-событие (сжатие/расширение всего .messenger).
        Фолбэк 100dvh остаётся для старых браузеров без visualViewport. */
-    height: var(--vvh, 100dvh);
+    height: var(--vvh-full, 100dvh);
+    /* СТАРЫЙ мутируемый путь (v160x4..w5v) удалён — см. комментарий выше. */
     width: 100%;
     /* v160x (Олег 2026-09-20): padding-bottom safe-area УБРАН — он дублировал
        локальные резервы страниц: .input-area на чате (safe-bottom + 8px) и
