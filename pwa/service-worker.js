@@ -9,7 +9,7 @@
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
 const APP_DISPLAY_NAME = "MurMur";
-const SW_VERSION = "murmur-sw23"; // v160b4: badge из push payload (сервер кладёт точный unread)
+const SW_VERSION = "murmur-sw31"; // v160b4: badge из push payload (сервер кладёт точный unread)
 
 function pushDebugToClients(event, detail) {
   try {

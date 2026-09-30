@@ -4959,34 +4959,21 @@ window.addEventListener("hashchange", () => {
             if (vv.scale && Math.abs(vv.scale - 1) > 0.01) return; // pinch-zoom — не трогаем
             // v160x17 (research: Telegram windowSize.ts): на iOS vv.height НЕ включает
             // pageTop — высота на mobile должна быть vv.height + vv.pageTop.
-            const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
-                (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-            const vvFull = isIOS
-                ? (vv.height || 0) + (vv.pageTop || 0)
-                : (vv.height || 0) + (vv.offsetTop || 0);
+            // v160w6d: vvFull убран — при закрытии следуем за vv.height,
+            // формула высоты больше не использует vvFull/pageTop.
             let h;
             if (typing) {
                 h = vv.height;
-            } else if (Date.now() < collapseLockUntil) {
-                // v160w5k: во время коллапса (500мс после focusout) vv.height+pageTop
-                // врут (промежуточные высоты, stale pageTop) — только честный
-                // innerHeight. animateVvh делает это скольжением, а не скачком.
-                h = Math.max(window.innerHeight || 0, 0);
             } else {
-                const br = document.body && document.body.getBoundingClientRect();
-                const bodyH = br && br.height > 100 ? br.height : 0;
-                // v160y59 (Олег 25.09 19:13, «дыра осталась — те же симптомы»):
-                // на iOS standalone в gap-состоянии vv.height+pageTop даёт
-                // ПРОМЕЖУТОЧНУЮ высоту (сталую клавиатурную, ~783 из 844),
-                // body rect может быть тоже срезан → --vvh залипает → .messenger
-                // НЕ доходит до физического низа → дыра ~1/10 экрана под
-                // композером. window.innerHeight на iOS standalone возвращает
-                // ЛАЙАУТ-высоту (844, включает safe-inset) — она ЧЕСТНЕЕ в
-                // gap-состоянии. Формула: MAX(innerHeight, vvFull, bodyH) —
-                // innerHeight страхует именно сценарий Олега. Тап в поле
-                // ввода чинил по той же причине: focusout-поллинг оседал vv
-                // → vvFull дорастал до 844 → MAX выдавал честную высоту.
-                h = Math.max(window.innerHeight || 0, vvFull, bodyH);
+                // v160w6d (вариант 2): при закрытии СЛЕДУЕМ за vv.height
+                // (растёт в такт анимации закрытия 450->852). НЕ innerHeight:
+                // мгновенное --vvh=innerHeight сжимает docH при пане (клэмп-рывок)
+                // и даёт финальный прыжок (область внизу). Канон Avito: высота
+                // страницы едет вместе с клавиатурой. collapseLockUntil больше
+                // не влияет на высоту. Клэмп от мусора остаётся: vv.height
+                // физически не может быть больше innerHeight при закрытии
+                // (клавиатура ПЕРЕКРЫВАЕТ, а не сжимает layout).
+                h = Math.min(vv.height || window.innerHeight || 0, window.innerHeight || 99999);
             }
             // v160w5l (Олег 29.09 10:19, «на ~5-й раз сворачивания строка
             // уезжает под экран»): stale pageTop при коллапсе даёт vvFull
@@ -5185,8 +5172,13 @@ window.addEventListener("hashchange", () => {
             // v160w5k: блокируем vv-источники на время коллапса (500мс) —
             // иначе vvFull с stale pageTop уводит .messenger за экран.
             typing = false;
+            // v160w6d (вариант 2, Олег 14:05 "давай сначала проверим вариант 2"):
+            // РАДИКАЛЬНЫЙ канон Avito: при закрытии НЕ форсируем высоту вообще.
+            // animateVvh(innerHeight) при focusout УБРАН — мгновенное сжатие
+            // docH до innerHeight при пане layout = клэмп-рывок одним кадром.
+            // setVvh теперь СЛЕДУЕТ за vv.height (растёт 450->852 в такт
+            // анимации): композер в потоке едет вниз ВМЕСТЕ с клавиатурой.
             collapseLockUntil = Date.now() + 500;
-            animateVvh(Math.round(window.innerHeight || 0));
             // Поллинг (v160x12) оставлен: дотягивает --kb-inset/--vvh при оседании.
             [100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000].forEach(t => setTimeout(() => { setVvh(); syncComposerSpace(); }, t));
             // forceReflow: сразу + догон после анимации клавиатуры (~350мс) + поздний.
