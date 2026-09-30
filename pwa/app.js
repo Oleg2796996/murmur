@@ -5197,33 +5197,21 @@ window.addEventListener("hashchange", () => {
             typing = false;
             collapseLockUntil = Date.now() + 500;
             animateVvh(Math.round(window.innerHeight || 0));
-            // Поллинг (v160x12) оставлен: дотягивает --kb-inset/--vvh при оседании.
+            // v160x12: Поллинг оставлен (дотягивает --kb-inset/--vvh при оседании,
+            // идемпотентен, без визуального эффекта).
             [100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000].forEach(t => setTimeout(() => { setVvh(); syncComposerSpace(); }, t));
-            // v160w6c-fast (Олег 30.09 10:55: «осталась задержка перед тем,
-            // как поле опустится вниз — можем обнулить?»): forceReflow/nudge
-            // СРАЗУ (0мс) при focusout — высота уже честная (animateVvh выше),
-            // лечим stale paint немедленно, а не через 120-150мс. Мутирующих
-            // лекарств больше нет (setVvh без анимации, settle-скроллы убраны
-            // из цепочки? нет — settle остался, но он после оседания), дёргать
-            // слой безопасно. Догоны 400/900 — страховка после оседания.
-            [0, 400, 900].forEach(t => setTimeout(forceReflow, t));
-            [0, 450, 1000].forEach(t => setTimeout(nudgeComposerLayer, t));
-            // v160w6c-fast: settle СРАЗУ (0мс) вместо 80мс — крошечный scroll
-            // (0,1)→(0,0) в первый же кадр, не в середине анимации. Догоны
-            // 350/600/1200 — страховка после оседания.
-            [0, 350, 600, 1200].forEach(t => setTimeout(settle, t));
-            // v160w6c4 (Олег 30.09 11:13: «пару раз идеально, остальные с
-            // задержкой; надо ещё снижать»): scrollCure (реальный скролл 0→80→0
-            // — ЕДИНСТВЕННОЕ, что репейнтит stale-зону, урок v160x18) добавлен
-            // в ПЕРВЫЙ кадр: 0мс + 150мс (2-й заход после оседания первой
-            // ступени). Нестабильность «идеально/с задержкой» = forceReflow/
-            // settle иногда не репейнтят (iOS рандомно клеит композитор),
-            // а лечение ждало догона 400-1000мс. Теперь самое сильное лекарство
-            // в первом кадре на каждом цикле. Дёрганье незаметно: 0мс — экран
-            // переходный; 150мс — клавиатура ещё на выходе.
-            [0, 150].forEach(t => setTimeout(scrollCure, t));
-            // watchdog: проверяет РЕАЛЬНЫЙ PAINT низа после оседания и дёргает reflow.
-            [350, 700, 1500].forEach(t => setTimeout(gapWatchdog, t));
+            // v160w6c6 (avito-deep-dive2 12:20, Олег 12:28 «Делай»): МЕХАНИЗМ AVITO =
+            // ОТСУТСТВИЕ МЕХАНИЗМА — живой m.avito.ru: input position:absolute,
+            // transform:none, transition:0s; reference-симуляция (3 цикла, реальная
+            // iOS-модель): layout не мутирует НИ РАЗУ, композер 806/844 на всех
+            // ступенях, закрытие = нативный scroll-restore iOS. Рывки w6c5 = ~30
+            // таймеров в 1-м кадре (~10 реальных скроллов/мутаций; scrollCure 0/150
+            // ВНУТРИ анимации закрытия) + двойной focusout. Фикс: 1-й кадр ОЧИЩЕН —
+            // остаются ТОЛЬКО формула высоты (animateVvh, без визуального эффекта)
+            // и scrollBottom (якорь ленты, как у Telegram). scrollCure/forceReflow/
+            // nudge/settle из первого кадра УБРАНЫ — лечение в ЕДИНСТВЕННОМ
+            // gapWatchdog после оседания (no-op на здоровом вьюпорте).
+            [450, 900, 1500].forEach(t => setTimeout(gapWatchdog, t));
             // v160w5n (Олег 29.09 11:02: «с 3-го сворачивания над строкой НЕ конец
             // ленты, а немного предыдущее сообщение, приходится руками мотать»):
             // при закрытии клавиатуры высота ленты РАСТЁТ (клавиатура уходит),
@@ -5245,6 +5233,15 @@ window.addEventListener("hashchange", () => {
             // видимого окна на конце ленты автоматически (scroll anchoring),
             // поллинг остаётся как страховка. Порог НЕ трогаем (нужен для
             // обычных скроллов вверх — иначе лента прилипнет намертво).
+            // v160w6c6: unmarkKb перенесён сюда (слит с window-focusout — двойной
+            // слушатель = двойное лечение в случайных фазах, диагноз avito-deep-dive2).
+            const unmarkKb = () => {
+                try {
+                    const active = (vv.height || 0) < (document.documentElement.clientHeight || 0) - 2;
+                    document.body.classList.toggle("keyboard-visible", active);
+                } catch (err) {}
+            };
+            [100, 250, 500, 750, 1000, 1500, 2000].forEach(t => setTimeout(unmarkKb, t));
             scrollBottomUnfocus();
             [600, 800, 1200, 2000].forEach(t => setTimeout(scrollBottomUnfocus, t));
         }
@@ -5282,29 +5279,6 @@ window.addEventListener("hashchange", () => {
         markKb();
         [50, 150, 300, 500, 800].forEach(t => setTimeout(markKb, t));
         [50, 150, 300, 500, 800].forEach(t => setTimeout(reset, t));
-    }, true);
-    window.addEventListener("focusout", () => {
-        typing = false;
-        // v160x17: клавиатура закрылась — снимаем keyboard-visible с поллингом
-        // (iOS оседает позже анимации).
-        const unmarkKb = () => {
-            try {
-                const active = (vv.height || 0) < (document.documentElement.clientHeight || 0) - 2;
-                document.body.classList.toggle("keyboard-visible", active);
-            } catch (err) {}
-        };
-        [100, 250, 500, 750, 1000, 1500, 2000].forEach(t => setTimeout(unmarkKb, t));
-        // v160w5h (Олег 29.09 08:07 «дергается именно при сворачивании клавиатуры»):
-        // прежняя серия безусловных лекарств (scrollCure 80/300/600 + settle 150/400/800
-        // + forceReflow/nudge от focusout-цепочки) стартовала в СЕРЕДИНЕ анимации
-        // клавиатуры (~350мс): каждая итерация = видимый рывок (settle-скролл 0→1→0,
-        // body +1px, nudge слоя), 5+ рывков за 2 секунды. Фикс: НЕ дёргать по
-        // расписанию — ЕДИНСТВЕННЫЙ gapWatchdog (чекает РЕАЛЬНЫЙ paint низа через
-        // elementFromPoint): дёргает ТОЛЬКО если stale-дыра реальна, и ПОСЛЕ оседания
-        // клавиатуры (450/900/1500 — не в середине анимации). На здоровом вьюпорте —
-        // no-op, ни одного рывка. setVvh/reset/settle-поллинг убраны из focusout:
-        // vv resize/scroll-слушатели уже дотягивают --vvh на каждое изменение высоты.
-        [450, 900, 1500, 2400].forEach(t => setTimeout(gapWatchdog, t));
     }, true);
     window.addEventListener("scroll", reset, { passive: true });
     vv.addEventListener("resize", onVvThrottled);
