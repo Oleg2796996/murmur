@@ -5199,6 +5199,13 @@ window.addEventListener("hashchange", () => {
             document.documentElement.style.setProperty("--kb-inset", "0px");
             // Поллинг оставлен: после разморозки дотягивает --vvh/--kb-inset.
             [100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000].forEach(t => setTimeout(() => { setVvh(); syncComposerSpace(); }, t));
+            // v160w6f2 (лог Олега 16:40 «уже лучше!!!!», хвост: mA=0/820 ~250-600мс
+            // после focusout = последнее сообщение частично ПОД композером, поллинг
+            // 600+ дотягивает позже): мгновенный scrollBottomUnfocus ВЕРНУТ — с
+            // заморозкой w6f он безопасен (--vvh стоит на финале, layout не мутирует,
+            // контр-скролл-войн больше нет), а лента дотягивается к низу СРАЗУ.
+            scrollBottomUnfocus();
+            [100, 300, 600, 800, 1200, 2000].forEach(t => setTimeout(scrollBottomUnfocus, t));
             // forceReflow: сразу + догон после анимации клавиатуры (~350мс) + поздний.
             [120, 400, 900].forEach(t => setTimeout(forceReflow, t));
             // nudgeComposerLayer: дёргает слой самого композера (promote/demote).
