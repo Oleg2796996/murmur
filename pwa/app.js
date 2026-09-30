@@ -5278,6 +5278,15 @@ window.addEventListener("hashchange", () => {
         // (iOS оседает позже анимации).
         const unmarkKb = () => {
             try {
+                // v160w6f4 (лог Олега 17:40, w6f3-сессия: цикл 78661 focusout ->
+                // 78702 mA всё ещё 0/820 -> 79107 только 133/820): в окне заморозки
+                // vv=497 (клавиатура ещё «открыта») — вычисление active из vv
+                // ДЕЛАЛО toggle(true) = шапка вешалась обратно (моя ошибка w6f3:
+                // мгновенный unmarkKb() сам возвращал keyboard-visible).
+                if (Date.now() < kbFreezeUntil) {
+                    document.body.classList.remove("keyboard-visible");
+                    return;
+                }
                 const active = (vv.height || 0) < (document.documentElement.clientHeight || 0) - 2;
                 document.body.classList.toggle("keyboard-visible", active);
             } catch (err) {}
@@ -5288,7 +5297,9 @@ window.addEventListener("hashchange", () => {
         // МГНОВЕННО при focusout — мы сами инициируем закрытие, финал известен
         // (lastStableClosedH), ждать осцилляции не нужно. unmarkKb-поллинг остаётся
         // страховкой (нужен для iOS-оседания при ОТКРЫТИИ клавиатуры).
-        unmarkKb();
+        // v160w6f4: ЯВНОЕ удаление keyboard-visible (не unmarkKb() — тот в момент
+        // focusout вычисляет active=true из vv=497 и вешает класс обратно).
+        document.body.classList.remove("keyboard-visible");
         [100, 250, 500, 750, 1000, 1500, 2000].forEach(t => setTimeout(unmarkKb, t));
         // v160w5h (Олег 29.09 08:07 «дергается именно при сворачивании клавиатуры»):
         // прежняя серия безусловных лекарств (scrollCure 80/300/600 + settle 150/400/800
