@@ -5043,6 +5043,14 @@ window.addEventListener("hashchange", () => {
     // сразу (leading edge), остальные раз в 80мс.
     let vvResizeLast = 0;
     const onVvThrottled = () => {
+        // v160w6c5 (Олег 30.09 11:24: «а если убрать пересчёт высоты?»):
+        // при закрытии (typing=false) пересчёт даёт РОВНО innerHeight (формула
+        // w6c) — значение ОДИНАКОВОЕ на каждом событии, троттлинг там только
+        // лишняя задержка (до 80мс). Прогоняем КАЖДОЕ vv-событие СРАЗУ (0мс).
+        // Полностью убирать пересчёт НЕЛЬЗЯ: при открытии (typing=true) он
+        // поднимает инпут над клавиатурой (сжатие = vv.height) — там ретаргет
+        // возможен, троттлинг 80мс остаётся только для typing.
+        if (!typing) { onVv(); return; }
         const now = Date.now();
         if (now - vvResizeLast >= 80) { vvResizeLast = now; onVv(); }
         else { vvResizeLast = Math.max(vvResizeLast, now - 80 + 1); setTimeout(onVv, 80 - (now - vvResizeLast)); }
