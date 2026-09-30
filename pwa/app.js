@@ -4954,6 +4954,7 @@ window.addEventListener("hashchange", () => {
     // (500мс) целиком доверяем ТОЛЬКО window.innerHeight (урок v160y59:
     // он не врёт в gap-состоянии) — vvFull/bodyH игнорируем.
     let collapseLockUntil = 0;
+    let kbFreezeUntil = 0; // v160w6e: заморозка высоты на время закрытия клавиатуры
     const setVvh = () => {
         try {
             if (vv.scale && Math.abs(vv.scale - 1) > 0.01) return; // pinch-zoom — не трогаем
@@ -4964,6 +4965,12 @@ window.addEventListener("hashchange", () => {
             let h;
             if (typing) {
                 h = vv.height;
+            } else if (Date.now() < kbFreezeUntil) {
+                // v160w6e: заморозка на закрытии (700мс) — iOS осциллирует
+                // vv 845<->912, любое значение в этот период = ложное.
+                // --vvh уже стоит на финале (animateVvh при focusout),
+                // высоту НЕ трогаем вообще.
+                return;
             } else {
                 // v160w6d (вариант 2): при закрытии СЛЕДУЕМ за vv.height
                 // (растёт в такт анимации закрытия 450->852). НЕ innerHeight:
@@ -5172,14 +5179,21 @@ window.addEventListener("hashchange", () => {
             // v160w5k: блокируем vv-источники на время коллапса (500мс) —
             // иначе vvFull с stale pageTop уводит .messenger за экран.
             typing = false;
-            // v160w6d (вариант 2, Олег 14:05 "давай сначала проверим вариант 2"):
-            // РАДИКАЛЬНЫЙ канон Avito: при закрытии НЕ форсируем высоту вообще.
-            // animateVvh(innerHeight) при focusout УБРАН — мгновенное сжатие
-            // docH до innerHeight при пане layout = клэмп-рывок одним кадром.
-            // setVvh теперь СЛЕДУЕТ за vv.height (растёт 450->852 в такт
-            // анимации): композер в потоке едет вниз ВМЕСТЕ с клавиатурой.
+            // v160w6e (KB-диагностика Олега 15:53, цикл 87438-88367): iOS на
+            // закрытии ОСЦИЛЛИРУЕТ vv/innerHeight 845<->912 ШЕСТЬ раз (~300-900мс):
+            // resize-события скачут туда-обратно. ЛЮБАЯ формула, следующая за
+            // каждым значением (w6c innerHeight-trust, w6d vv-follow), дёргает
+            // высоту туда-сюда = «задержка и дёрганье». ФИКС — ЗАМОРОЗКА:
+            // (1) при focusout ставим --vvh РАЗ И НАВСЕГДА = window.innerHeight
+            // (финальное значение, iOS даёт его честно в первом событии 87471);
+            // (2) замораживаем все vv-источники высоты на 700мс (kbFreezeUntil) —
+            // осцилляцию игнорируем ЦЕЛИКОМ, высота стоит на финале весь цикл;
+            // (3) после разморозки поллинги дотягивают по факту.
             collapseLockUntil = Date.now() + 500;
-            // Поллинг (v160x12) оставлен: дотягивает --kb-inset/--vvh при оседании.
+            kbFreezeUntil = Date.now() + 700;
+            animateVvh(Math.round(window.innerHeight || 0));
+            document.documentElement.style.setProperty("--kb-inset", "0px");
+            // Поллинг оставлен: после разморозки дотягивает --vvh/--kb-inset.
             [100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000].forEach(t => setTimeout(() => { setVvh(); syncComposerSpace(); }, t));
             // forceReflow: сразу + догон после анимации клавиатуры (~350мс) + поздний.
             [120, 400, 900].forEach(t => setTimeout(forceReflow, t));
@@ -5298,4 +5312,83 @@ window.addEventListener("hashchange", () => {
     // v160y61: экспорт setVvh — openChat-догоны зовут его БЕЗ гейта (диаг-скрин:
     // метрики честные при видимой дыре — PAINT устар, layout не врёт).
     try { window.__murmurSetVvh = setVvh; } catch (e) {}
+})();
+
+// v160w6d-diag (вариант 1, Олег 14:30: «попробуем вариант 1» — диагностическая
+// панель на iPhone): реальный клавиатурный цикл на устройстве — ВСЕ события
+// в реальном времени. window.__murmurKbLog пишет каждую запись vv/scroll/focusout
+// + top композера + --vvh. Панель: fixed div снизу, обновляется по таймеру.
+(function installKbDiag() {
+    try {
+        const w = window;
+        w.__murmurKbLog = [];
+        const log = (kind, data) => {
+            try {
+                const ma = document.querySelector(".messages-area");
+                const ia = document.getElementById("input-area");
+                const mTop = ma ? Math.round(ma.getBoundingClientRect().top) : null;
+                const mBottom = ma ? Math.round(ma.getBoundingClientRect().bottom) : null;
+                const iTop = ia ? Math.round(ia.getBoundingClientRect().top) : null;
+                const iBottom = ia ? Math.round(ia.getBoundingClientRect().bottom) : null;
+                w.__murmurKbLog.push(Object.assign({
+                    t: Date.now() % 100000,
+                    kind: kind,
+                    scrollY: Math.round(w.scrollY || 0),
+                    vvH: Math.round((w.visualViewport && w.visualViewport.height) || 0),
+                    vvTop: Math.round((w.visualViewport && w.visualViewport.offsetTop) || 0),
+                    innerH: w.innerHeight || 0,
+                    vvh: (document.documentElement.style.getPropertyValue("--vvh") || "").trim(),
+                    docH: Math.round(document.documentElement.scrollHeight || 0),
+                    mTop, mBottom, iTop, iBottom,
+                }, data || {}));
+                if (w.__murmurKbLog.length > 120) w.__murmurKbLog.shift();
+            } catch (e) {}
+        };
+        w.__murmurKbLogFn = log;
+        const vv = w.visualViewport;
+        if (vv) {
+            vv.addEventListener("resize", () => log("vv-resize"), { passive: true });
+            vv.addEventListener("scroll", () => log("vv-scroll"), { passive: true });
+        }
+        w.addEventListener("scroll", () => log("win-scroll"), { passive: true });
+        document.addEventListener("focusout", (e) => {
+            if (e.target && (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT")) log("focusout");
+        }, true);
+        document.addEventListener("focusin", (e) => {
+            if (e.target && (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT")) log("focusin");
+        }, true);
+        // Кнопка «копировать лог» — floating рядом с diag (standalone PWA).
+        const btn = document.createElement("button");
+        btn.textContent = "KB";
+        btn.setAttribute("aria-label", "копировать клавиатурный лог");
+        Object.assign(btn.style, {
+            position: "fixed", right: "8px", bottom: "96px", zIndex: 99999,
+            padding: "10px 14px", borderRadius: "8px", border: "1px solid #888",
+            background: "rgba(20,20,20,0.85)", color: "#fff", fontSize: "14px",
+        });
+        btn.addEventListener("click", () => {
+            try {
+                const lines = w.__murmurKbLog.map(r =>
+                    [r.t, r.kind, "sy=" + r.scrollY, "vv=" + r.vvH, "vvT=" + r.vvTop,
+                     "ih=" + r.innerH, "vvh=" + r.vvh, "doc=" + r.docH,
+                     "mA=" + r.mTop + "/" + r.mBottom, "iA=" + r.iTop + "/" + r.iBottom].join(" "));
+                navigator.clipboard.writeText(lines.join("\n")).then(() => {
+                    btn.textContent = "OK";
+                    setTimeout(() => { btn.textContent = "KB"; }, 1500);
+                }).catch(() => {
+                    // Fallback: textarea select
+                    const ta = document.createElement("textarea");
+                    ta.value = lines.join("\n");
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand("copy");
+                    ta.remove();
+                    btn.textContent = "OK";
+                    setTimeout(() => { btn.textContent = "KB"; }, 1500);
+                });
+            } catch (e) { btn.textContent = "ERR"; }
+        });
+        document.body.appendChild(btn);
+        log("installed");
+    } catch (e) {}
 })();
