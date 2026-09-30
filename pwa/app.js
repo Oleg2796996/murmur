@@ -5033,15 +5033,19 @@ window.addEventListener("hashchange", () => {
     };
     const onVv = () => { setVvh(); reset(); requestAnimationFrame(pinBottom); };
     // v160w5m (Telegram Web A windowSize.ts: WINDOW_RESIZE_THROTTLE_MS = 250):
-    // vv resize с троттлингом 250мс — iOS шлёт resize серией во время
-    // анимации клавиатуры, без троттлинга каждый вызов = потенциальный
-    // ретаргет/рывок. Первое событие прогоняем сразу (trailing edge),
-    // остальные раз в 250мс.
+    // vv resize с троттлингом — iOS шлёт resize серией во время анимации
+    // клавиатуры, без троттлинга каждый вызов = потенциальный ретаргет/рывок.
+    // v160w6c3 (Олег 30.09 11:05: «пару раз получилось почти без задержки»):
+    // троттлинг 250мс = до 250мс лишней задержки на пересчёт --vvh после
+    // коллапса. Снижен 250 → 80мс: iOS-анимация ~250-300мс оседает ступенями
+    // (симуляция: 6 ступеней по 50мс), при 80мс пересчёт ловит каждую ступень
+    // — «почти без задержки» становится нормой. Первое событие прогоняем
+    // сразу (leading edge), остальные раз в 80мс.
     let vvResizeLast = 0;
     const onVvThrottled = () => {
         const now = Date.now();
-        if (now - vvResizeLast >= 250) { vvResizeLast = now; onVv(); }
-        else { vvResizeLast = Math.max(vvResizeLast, now - 250 + 1); setTimeout(onVv, 250 - (now - vvResizeLast)); }
+        if (now - vvResizeLast >= 80) { vvResizeLast = now; onVv(); }
+        else { vvResizeLast = Math.max(vvResizeLast, now - 80 + 1); setTimeout(onVv, 80 - (now - vvResizeLast)); }
     };
     // v160x11: scroll-to-settle (research-подтверждённый Fix B). При закрытии
     // клавиатуры iOS может залипнуть layout viewport — renders 781 при
