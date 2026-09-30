@@ -172,15 +172,12 @@ button.small { padding: 8px 12px; font-size: 13px; }
        Falls back to 100vh on older browsers. Combined with viewport-fit=cover
        in <meta>, this gives full-screen layout without cutting off the input
        area below the home indicator. */
-    /* v160w6b (Авито-финал, Олег 30.09 «Делай»): высота КОНТЕЙНЕРА фиксирована
-       на --vvh-full (MAX(innerHeight, vvFull) — считается ОДИН раз при осевшей
-       клавиатуре, без bodyH-инфляции) и НЕ мутируется в цикле клавиатуры.
-       У Авито/Telegram лента не сжимается: клавиатура перекрывает только
-       композер (transform), лента скроллит под ним. Источник дёрганий был:
-       --vvh менялся на каждое vv-событие (сжатие/расширение всего .messenger).
+    height: 100vh;
+    /* v160x4: --vvh ставит app.js из visualViewport.height (вкл. safe-зону).
+       100dvh на iOS standalone исключает нижний safe-inset → не доходил
+       до физического низа (пустота+светлая полоса body под input).
        Фолбэк 100dvh остаётся для старых браузеров без visualViewport. */
-    height: var(--vvh-full, 100dvh);
-    /* СТАРЫЙ мутируемый путь (v160x4..w5v) удалён — см. комментарий выше. */
+    height: var(--vvh, 100dvh);
     width: 100%;
     /* v160x (Олег 2026-09-20): padding-bottom safe-area УБРАН — он дублировал
        локальные резервы страниц: .input-area на чате (safe-bottom + 8px) и
@@ -558,11 +555,7 @@ button.small { padding: 8px 12px; font-size: 13px; }
     flex-direction: column;
     position: relative;
     /* v160x17: композер снова в потоке — резерв НЕ нужен, убираем. */
-    /* w6a (Авито-путь): композер fixed — лента обязана иметь резерв под ним.
-       При открытой клавиатуре JS растит padding-bottom на kb (перекрытие),
-       синхронно с transform-анимацией (тот же вызов applyKb). */
     padding-bottom: 0;
-    transition: padding-bottom 300ms cubic-bezier(0.33, 1, 0.68, 1);
 }
 
 /* ================= EMPTY STATE (.no-chat) ================= */
@@ -671,22 +664,18 @@ button.small { padding: 8px 12px; font-size: 13px; }
 
 /* INPUT AREA */
 .input-area {
-    /* w6a (Авито-путь): композер fixed bottom:0 + ПОСТОЯННЫЙ композитный
-       слой (translate3d) + CSS transition transform 300ms — композер едет
-       с клавиатурой, не прыгает. JS ставит только transform: translateY(-kb),
-       kb = innerHeight - vv.height; во время анимации sync по расписанию
-       не ретаргетится (skip-during-transition), остались gapWatchdog-страховки.
-       Урок w5x не повторяется: там были клэмп cliH и мгновенные сеты высот;
-       здесь клэмпов нет, единственная мутируемая величина = transform. */
     display: flex;
     flex-direction: column;
     gap: 6px;
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    transform: translate3d(0, 0, 0);
-    transition: transform 300ms cubic-bezier(0.33, 1, 0.68, 1);
+    /* v160x17 (research: Telegram Web A/K source-verified): убрали fixed-композер
+       — он красился на промежуточной фазе закрытия клавиатуры и НЕ перерисовывался
+       (WebKit bug 254861, family). Telegram-подход: композер — ОБЫЧНЫЙ flex-child
+       в конце колонки (tweb: flex: 0 0 auto), шапка ЧАТА СКРЫТА при открытой
+       клавиатуре (body.keyboard-visible) — низ клавиатуры прижимается к низу
+       колонки, высота освобождается, никаких fixed-элементов внизу вообще. */
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
     z-index: 30;
     flex-shrink: 0;
     padding: 8px 8px calc(var(--safe-bottom, 0px) + 8px) 8px;
