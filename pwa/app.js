@@ -1585,34 +1585,11 @@ function setupInviteUI() {
             // iOS Safari/PWA requires this; after any await the gesture is consumed
             // and clipboard APIs throw NotAllowedError (Lesson #355).
             const copied = legacyCopy(inviteLink);
-            // Step 2: native share menu when available (mobile UX preference).
-            if (navigator.share) {
-                try {
-                    // v158c (Олег 22:49): macOS share sheet discard'ит поле url,
-                    // когда есть text → в мессенджер уходит голый текст без ссылки.
-                    // Зашиваем ссылку В текст — тогда она доходит везде.
-                    await navigator.share({
-                        title: "murmur",
-                        text: window.MurmurI18N.t("Присоединяйся в приватном мессенджере murmur!") + " " + inviteLink,
-                    });
-                    return;
-                } catch (e) {
-                    if (e.name === "AbortError") return; // user closed the share sheet
-                    // real share failure → fall through, we already tried copying
-                }
-            }
-            // Step 3: report result
-            if (copied) {
-                alert("Ссылка скопирована в буфер обмена!");
-            } else {
-                try {
-                    await navigator.clipboard.writeText(inviteLink);
-                    alert("Ссылка скопирована в буфер обмена!");
-                } catch (e) {
-                    // Last resort: manual copy overlay (fresh gesture works there)
-                    showInviteManualCopy(inviteLink);
-                }
-            }
+            // v160w6g (Олег 30.09): QR-оверлей — друг рядом наводит камеру телефона
+            // на код, открывается ссылка #invite=npub… (deep-link работает с v152).
+            // Оверлей вместо авто-share: у кнопки «Поделиться» свежий жест
+            // (как у manual-copy overlay) — NotAllowedError не страшен (Lesson #355).
+            showInviteQr(inviteLink, copied);
         });
     }
 
@@ -1649,6 +1626,83 @@ function legacyCopy(text) {
     try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
     document.body.removeChild(ta);
     return ok;
+}
+
+// v160w6g (Олег 30.09): QR-код инвайта — друг рядом наводит камеру телефона
+// на код, открывается ссылка #invite=npub… (deep-link работает с v152).
+// Библиотека qrcode-generator 1.4.4 (MIT, Kazuhiko Arase), vendored в pwa/qrcode.js.
+function showInviteQr(inviteLink, alreadyCopied) {
+    let ov = document.getElementById("invite-qr");
+    if (ov) ov.remove();
+    ov = document.createElement("div");
+    ov.id = "invite-qr";
+    ov.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px;";
+    const box = document.createElement("div");
+    box.style.cssText = "background:#17212b;border-radius:12px;padding:18px;max-width:340px;width:100%;color:#e8edf2;font:14px -apple-system,sans-serif;box-sizing:border-box;text-align:center;";
+    const title = document.createElement("div");
+    title.textContent = window.MurmurI18N ? window.MurmurI18N.t("Пригласить друга") : "Пригласить друга";
+    title.style.cssText = "margin-bottom:6px;font-weight:600;font-size:15px;";
+    const hint = document.createElement("div");
+    hint.textContent = window.MurmurI18N ? window.MurmurI18N.t("Пусть друг наведёт камеру телефона на QR-код") : "Пусть друг наведёт камеру телефона на QR-код";
+    hint.style.cssText = "margin-bottom:12px;color:#8a97a5;font-size:13px;line-height:1.4;";
+    const qrHolder = document.createElement("div");
+    qrHolder.id = "invite-qr-holder";
+    qrHolder.style.cssText = "display:inline-block;background:#fff;border-radius:8px;padding:12px;margin-bottom:4px;";
+    const err = document.createElement("div");
+    err.style.cssText = "display:none;color:#e8a;font-size:13px;margin:10px 0;";
+    // Кнопки — в том же стиле, что key-reveal / manual-copy оверлеи.
+    const btnShare = document.createElement("button");
+    btnShare.textContent = window.MurmurI18N ? window.MurmurI18N.t("Поделиться") : "Поделиться";
+    btnShare.style.cssText = "margin-top:12px;width:100%;background:#2b5278;color:#fff;border:0;border-radius:8px;padding:10px;font-size:14px;";
+    btnShare.addEventListener("click", async () => {
+        if (navigator.share) {
+            try {
+                // v158c: ссылку зашиваем В текст — macOS share sheet discard'ит url.
+                await navigator.share({
+                    title: "murmur",
+                    text: (window.MurmurI18N ? window.MurmurI18N.t("Присоединяйся в приватном мессенджере murmur!") : "Присоединяйся в приватном мессенджере murmur!") + " " + inviteLink,
+                });
+            } catch (e) {
+                if (e.name !== "AbortError") console.warn("share failed:", e);
+            }
+        } else {
+            // Нет share API (десктоп) → копируем в буфер.
+            if (legacyCopy(inviteLink)) { btnShare.textContent = "Скопировано ✓"; setTimeout(() => ov.remove(), 800); }
+        }
+    });
+    const btnCopy = document.createElement("button");
+    btnCopy.textContent = window.MurmurI18N ? window.MurmurI18N.t("Скопировать ссылку") : "Скопировать ссылку";
+    btnCopy.style.cssText = "margin-top:8px;width:100%;background:#22303e;color:#e8edf2;border:0;border-radius:8px;padding:10px;font-size:14px;";
+    btnCopy.addEventListener("click", () => {
+        if (legacyCopy(inviteLink)) { btnCopy.textContent = "Скопировано ✓"; setTimeout(() => ov.remove(), 800); }
+    });
+    const btnClose = document.createElement("button");
+    btnClose.textContent = window.MurmurI18N ? window.MurmurI18N.t("Закрыть") : "Закрыть";
+    btnClose.style.cssText = "margin-top:8px;width:100%;background:#22303e;color:#8a97a5;border:0;border-radius:8px;padding:10px;font-size:14px;";
+    btnClose.addEventListener("click", () => ov.remove());
+    ov.addEventListener("click", (e) => { if (e.target === ov) ov.remove(); });
+    box.appendChild(title); box.appendChild(hint); box.appendChild(qrHolder); box.appendChild(err);
+    box.appendChild(btnShare); box.appendChild(btnCopy); box.appendChild(btnClose);
+    ov.appendChild(box); document.body.appendChild(ov);
+    // Генерация QR — после вставки оверлея, обёрнута в try (битая библиотека
+    // не должна ломать весь invite-флоу: ссылка уже скопирована в жесте).
+    try {
+        const q = typeof QRCode !== "undefined" ? QRCode : (typeof qrcode !== "undefined" ? qrcode : null);
+        if (!q) throw new Error("qrcode lib not loaded");
+        const qr = q(0, "M");
+        qr.addData(inviteLink);
+        qr.make();
+        const img = document.createElement("img");
+        img.alt = "QR инвайта";
+        // createDataURL даёт GIF — легче SVG, и pixelated-рендер чётче с камеры.
+        img.src = qr.createDataURL(6, 0);
+        img.style.cssText = "width:220px;height:220px;image-rendering:pixelated;display:block;";
+        qrHolder.appendChild(img);
+    } catch (e) {
+        console.warn("QR render failed:", e);
+        err.textContent = "QR не отрисовался — используй «Поделиться» или «Скопировать»";
+        err.style.display = "block";
+    }
 }
 
 function showInviteManualCopy(inviteLink) {
