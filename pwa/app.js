@@ -4955,6 +4955,7 @@ window.addEventListener("hashchange", () => {
     // он не врёт в gap-состоянии) — vvFull/bodyH игнорируем.
     let collapseLockUntil = 0;
     let kbFreezeUntil = 0; // v160w6e: заморозка высоты на время закрытия клавиатуры
+    let lastStableClosedH = 0; // v160w6f: финальная высота закрытого состояния (запоминается при vv>=ih-2)
     const setVvh = () => {
         try {
             if (vv.scale && Math.abs(vv.scale - 1) > 0.01) return; // pinch-zoom — не трогаем
@@ -4966,21 +4967,18 @@ window.addEventListener("hashchange", () => {
             if (typing) {
                 h = vv.height;
             } else if (Date.now() < kbFreezeUntil) {
-                // v160w6e: заморозка на закрытии (700мс) — iOS осциллирует
-                // vv 845<->912, любое значение в этот период = ложное.
-                // --vvh уже стоит на финале (animateVvh при focusout),
-                // высоту НЕ трогаем вообще.
+                // v160w6e: заморозка на закрытии — --vvh уже на финале
+                // (lastStableClosedH при focusout), высоту НЕ трогаем.
                 return;
+            } else if ((vv.height || 0) >= (window.innerHeight || 0) - 2) {
+                // v160w6f: СТАБИЛЬНО ЗАКРЫТО (vv >= ih-2) — финал всегда vv=ih=912,
+                // единственное честное значение. Осцилляция 845 всегда vv<ih.
+                h = window.innerHeight || 0;
+                lastStableClosedH = h;
             } else {
-                // v160w6d (вариант 2): при закрытии СЛЕДУЕМ за vv.height
-                // (растёт в такт анимации закрытия 450->852). НЕ innerHeight:
-                // мгновенное --vvh=innerHeight сжимает docH при пане (клэмп-рывок)
-                // и даёт финальный прыжок (область внизу). Канон Avito: высота
-                // страницы едет вместе с клавиатурой. collapseLockUntil больше
-                // не влияет на высоту. Клэмп от мусора остаётся: vv.height
-                // физически не может быть больше innerHeight при закрытии
-                // (клавиатура ПЕРЕКРЫВАЕТ, а не сжимает layout).
-                h = Math.min(vv.height || window.innerHeight || 0, window.innerHeight || 99999);
+                // v160w6f: не typing, vv < ih-2 = переход/осцилляция — НЕ трогаем
+                // высоту (прошлые фиксы брали эти ложные значения = дёрганье).
+                return;
             }
             // v160w5l (Олег 29.09 10:19, «на ~5-й раз сворачивания строка
             // уезжает под экран»): stale pageTop при коллапсе даёт vvFull
@@ -5191,7 +5189,13 @@ window.addEventListener("hashchange", () => {
             // (3) после разморозки поллинги дотягивают по факту.
             collapseLockUntil = Date.now() + 500;
             kbFreezeUntil = Date.now() + 700;
-            animateVvh(Math.round(window.innerHeight || 0));
+            // v160w6f (лог Олега 16:10, цикл 40171-41397): финал = lastStableClosedH
+            // (запомнен из СТАБИЛЬНОГО закрытого состояния до открытия = 912).
+            // НЕ innerHeight: на этом iOS клавиатура УЖИМАЕТ innerHeight на 67px
+            // при открытии (912 закрыта -> 845 открыта) — w6e брал animateVvh(845)
+            // = неверный финал -> страница стояла на 845, пока видимая росла к
+            // 912 = дыра 67px под композером ~350-1000мс = «задержка».
+            animateVvh(Math.round(lastStableClosedH || window.innerHeight || 0));
             document.documentElement.style.setProperty("--kb-inset", "0px");
             // Поллинг оставлен: после разморозки дотягивает --vvh/--kb-inset.
             [100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000].forEach(t => setTimeout(() => { setVvh(); syncComposerSpace(); }, t));
