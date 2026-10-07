@@ -516,7 +516,14 @@
       return;
     }
     if (s.kind === "offer") {
-      callDirection = "in";
+      // v160w6q (Олег 07.10 22:01 «исходящий отображается как входящий без минут»):
+      // glare-разрешение холодного ответа: МЫ звоним (out, connecting), пир
+      // проснулся от пуша, принял и выслал СВОЙ fresh offer. Это НЕ входящий:
+      // направление остаётся "out", замена полу-открытой связи — без записи
+      // в историю (иначе closeCall пишет "missed/Входящий" и callRecorded=true
+      // съедает финальный completed с длительностью).
+      const glare = callDirection === "out" && remotePeer === from && !!pc;
+      if (!glare) callDirection = "in";
       callMode = s.mode === "video" ? "video" : "audio";
       // call25: mode can arrive with the offer AFTER accept (push path) —
       // enter fullscreen then too, not only at accept time.
@@ -528,7 +535,11 @@
       if (pc) {
         if (remotePeer && remotePeer !== from) return;
         if (callState !== "connecting") return;
+        // glare: закрываем старую полу-открытую связь БЕЗ промежуточной записи
+        // (финальный completed с длительностью запишется по завершении).
+        if (glare) callRecorded = true;
         closeCall();
+        if (glare) callRecorded = false;
         try {
           setCallState("connecting", from);
           await setup(from);
