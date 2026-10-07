@@ -171,7 +171,11 @@
         recordCall("cancelled");
         try { send(from, { kind: "bye" }); } catch (_) {}
       } else if (callState !== "idle") {
-        recordCall("cancelled");
+        // v160w6o (Олег 07.10 21:15): продолжительность важнее того, кто положил
+        // трубку. Если соединение состоялось (таймер тикал) — завершённый звонок
+        // с длительностью, а не «отменен». Раньше кнопка всегда писала cancelled
+        // ДО closeCall (callRecorded=true), и завершённый звонок терялся.
+        recordCall(callState === "connected" || callStartedAt ? "completed" : "cancelled");
       }
       closeCall("cancelled");
     });
@@ -336,7 +340,9 @@
       try { send(remotePeer, { kind: "bye" }); } catch (_) {}
     }
     if (callState !== "idle" && !callRecorded) {
-      const status = callState === "connected" ? "completed" :
+      // v160w6o: callStartedAt > 0 значит соединение состоялось — завершённый
+      // звонок с длительностью независимо от reason (bye/failed/disconnect).
+      const status = (callState === "connected" || callStartedAt) ? "completed" :
         (reason || (callDirection === "out" ? "cancelled" : "missed"));
       recordCall(status);
     }
@@ -497,7 +503,14 @@
   async function onSignal(msg) {
     const from = msg.from_npub; const s = msg.signal;
     if (!from || !s) return;
-    if (s.kind === "bye") return closeCall(callDirection === "out" ? "declined" : "cancelled");
+    if (s.kind === "bye") {
+      // v160w6o (Олег 07.10 21:15): продолжительность важнее того, кто положил
+      // трубку. Если соединение состоялось (таймер тикал) — у ОБЕИХ сторон в
+      // истории завершённый звонок с длительностью, независимо от того,
+      // кто инициировал разрыв. Раньше получатель bye писал «отменен».
+      closeCall(callStartedAt ? "completed" : (callDirection === "out" ? "declined" : "cancelled"));
+      return;
+    }
     if (s.kind === "ring") {
       if (!pc && !pendingOffer) { pendingOffer = { from, signal: null, mode: null }; callModeKnown = false; setCallState("incoming", from); }
       return;
