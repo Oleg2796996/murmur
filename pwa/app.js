@@ -4789,6 +4789,7 @@ async function tryAutoRestore() {
 if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", async () => {
         await requestNotificationPermission();
+        requestPersistentStorage(); // v160w6m: не ждем — параллельно
         warmOutboxCache();
         wireReplyBarControls(); // v160r: reply-bar controls wiring
         wireBubbleTap();        // v160r: тап на bubble → reply (текст)
@@ -4798,12 +4799,43 @@ if (document.readyState === "loading") {
     });
 } else {
     requestNotificationPermission();
+    requestPersistentStorage(); // v160w6m: не ждем — параллельно
     warmOutboxCache();
     wireReplyBarControls(); // v160r
     wireBubbleTap();        // v160r
     wireLongPressReply();   // v160y27: long-press → reply
     try { const bg = document.getElementById("btn-new-group"); if (bg) bg.addEventListener("click", openCreateGroupModal); } catch (e) {}
     tryAutoRestore();
+}
+
+// v160w6m (Олег 07.10.2026): requestPersistentStorage — просим у браузера
+// persistent-storage сразу после входа в мессенджер. Без persist() данные
+// (IDB: переписка, outbox-plaintext'ы исходящих) живут в «best-effort» режиме
+// и МОГУТ быть эвицированы браузером под давлением квоты — особенно агрессивен
+// iOS Safari/WebKit. Симптомы, которые это чинит: пропавшие сообщения после
+// reload («кэш эвицирован, сервер уже отдал 5-min TTL») и
+// «[исходящее сообщение»]-placeholder (outbox-запись вылетела).
+// persist() НЕ меняет приватность: данные остаются только на устройстве,
+// меняется лишь политика eviction. Логируем estimate() для диагностики.
+async function requestPersistentStorage() {
+    try {
+        if (!navigator.storage) return;
+        if (navigator.storage.persist) {
+            const already = await navigator.storage.persisted();
+            if (!already) {
+                const ok = await navigator.storage.persist();
+                console.log("[murmur] storage.persist() →", ok, already ? "(was already persisted)" : "");
+            } else {
+                console.log("[murmur] storage: already persisted");
+            }
+        }
+        if (navigator.storage.estimate) {
+            const est = await navigator.storage.estimate();
+            console.log("[murmur] storage estimate: usage=", est.usage, "quota=", est.quota);
+        }
+    } catch (e) {
+        console.warn("[murmur] requestPersistentStorage failed:", e);
+    }
 }
 
 async function requestNotificationPermission() {
