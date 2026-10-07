@@ -4,6 +4,13 @@
 // Classic script, загружается ДО app.js (index.html) — глобалы общие.
 
 const LS_OUTBOX = "murmur.outbox";
+// v160w6m (Олег 07.10.2026: «исходящее сообщение»-placeholder): cap 200 был
+// ГЛОБАЛЬНЫМ на все чаты — при активной переписке plaintext'ы старых исходящих
+// вылетали из кэша, и после reload они рисовались как «[исходящее сообщение]»
+// (app.js pollHist/loadHistory fallback). 1000 записей (~30-60KB, plaintext
+// аттачментов >1.5MB/видео всё равно НЕ пишутся — v160o) покрывает месяцы
+// активной переписки. IDB — основное хранилище, LS — fallback.
+const OUTBOX_MAX_ENTRIES = 1000;
 const LS_MESSAGES_CACHE = "murmur.messages_cache";
 const __murmurCacheLoading = new Map(); // peer → Promise<messages[peer] resolved>
 const LS_POSTERS = "murmur.posters.v1";
@@ -308,9 +315,9 @@ async function saveToOutbox(msg, plaintext, attachmentsPlaintext) {
             const outbox = (await window.appStore.kv.get(LS_OUTBOX)) || {};
             outbox[key] = entry;
             const keys = Object.keys(outbox);
-            if (keys.length > 200) {
+            if (keys.length > OUTBOX_MAX_ENTRIES) {
                 keys.sort((a, b) => (outbox[a].ts || 0) - (outbox[b].ts || 0));
-                keys.slice(0, keys.length - 200).forEach((k) => delete outbox[k]);
+                keys.slice(0, keys.length - OUTBOX_MAX_ENTRIES).forEach((k) => delete outbox[k]);
             }
             await window.appStore.kv.set(LS_OUTBOX, outbox);
             _outboxKVCache = outbox; // Lesson #346: keep sync cache fresh
@@ -322,9 +329,9 @@ async function saveToOutbox(msg, plaintext, attachmentsPlaintext) {
         const outbox = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
         outbox[key] = entry;
         const keys = Object.keys(outbox);
-        if (keys.length > 200) {
+        if (keys.length > OUTBOX_MAX_ENTRIES) {
             keys.sort((a, b) => (outbox[a].ts || 0) - (outbox[b].ts || 0));
-            const toDelete = keys.slice(0, keys.length - 200);
+            const toDelete = keys.slice(0, keys.length - OUTBOX_MAX_ENTRIES);
             toDelete.forEach(k => delete outbox[k]);
         }
         localStorage.setItem(LS_OUTBOX, JSON.stringify(outbox));

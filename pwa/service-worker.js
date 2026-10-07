@@ -9,7 +9,7 @@
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
 const APP_DISPLAY_NAME = "MurMur";
-const SW_VERSION = "murmur-sw33-call33f"; // call33f: notificationclick гейт kind=incoming_call (пуш сообщения открывал меню аудио-звонка) // v160b4: badge из push payload (сервер кладёт точный unread)
+const SW_VERSION = "murmur-sw34-call33f-storfix"; // call33f: notificationclick гейт kind=incoming_call + v160w6m: storage.persist() (v160b4: badge из push payload)
 
 function pushDebugToClients(event, detail) {
   try {
