@@ -891,6 +891,25 @@ button.small { padding: 8px 12px; font-size: 13px; }
 }
 .bubble.bubble-media .msg-attach-list { margin: 0; } /* был 0 0 4px — лишний зазор снизу */
 
+/* ═══ v160w6p (Олег 07.10 21:26 «рамки бабла с медиа тонкими по бокам»): ═══
+   Бабл «медиа + подпись»: медиа вплотную к краям бабла (без боковых 11px),
+   скругление только сверху (снизу — у текста). Текст с боковым паддингом.
+   Время — штатное под текстом (не плашка — текст нужен фон). */
+.bubble.bubble-media-cap {
+    padding: 0; /* убираем боковые/верхний паддинг — медиа вплотную */
+}
+.bubble.bubble-media-cap .msg-attach-list { margin: 0; }
+.bubble.bubble-media-cap .attach-image,
+.bubble.bubble-media-cap .video-preview {
+    border-radius: 14px 14px 0 0; /* верхние углы = радиус бабла, низ прямые */
+}
+.bubble.bubble-media-cap .msg-body {
+    padding: 4px 11px 6px 11px; /* подпись: боковые отступы возвращаем тексту */
+}
+.bubble.bubble-media-cap .quoted {
+    margin: 4px 8px 4px 8px; /* цитата над медиа — с боковым отступом */
+}
+
 .day-divider {
     align-self: center;
     background: rgba(0,0,0,0.3);

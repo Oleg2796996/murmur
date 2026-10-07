@@ -2624,7 +2624,13 @@ function renderMessages() {
                     div = existingBubble;
                     // v160w6n: если bubble отрендерился до того, как attachments_meta
                     // доехал (repair-путь), класс мог не выставиться — дожимаем тут.
-                    if (!String(m.body || "").trim()) div.classList.add("bubble-media");
+                    if (!String(m.body || "").trim()) {
+                        div.classList.add("bubble-media");
+                        div.classList.remove("bubble-media-cap");
+                    } else if (Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0) {
+                        div.classList.add("bubble-media-cap");
+                        div.classList.remove("bubble-media");
+                    }
                     _rerenderAttachments = true;
                 } else {
                     continue;
@@ -2655,6 +2661,10 @@ function renderMessages() {
                 const mediaOnly = Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0 &&
                     !String(m.body || "").trim();
                 if (mediaOnly) div.classList.add("bubble-media");
+                // v160w6p (Олег 07.10 21:26 «рамки бабла с видео/фото тонкими по бокам»):
+                // медиа + подпись → паддинг убираем, медиа вплотную к краям бабла,
+                // текст с боковым паддингом снизу. :has() ненадёжен на iOS — класс.
+                else if (Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0) div.classList.add("bubble-media-cap");
             }
             div.setAttribute("data-sig", sig);
             let statusGlyph = "";
