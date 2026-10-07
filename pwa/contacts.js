@@ -12,27 +12,43 @@ function loadContactNames() {
     catch (e) { return {}; }
 }
 
+function contactNameKey(peer) {
+    return normalizePeer(peer);
+}
+
+function contactNameFor(peer, map = loadContactNames()) {
+    const key = contactNameKey(peer);
+    return map[key] || (key !== peer ? map[peer] : "") || "";
+}
+
 function setContactName(peer, name) {
-    if (!peer || !name) return;
+    const key = contactNameKey(peer);
+    if (!key || !name) return;
     const map = loadContactNames();
     const trimmed = name.trim().slice(0, 24);
     if (!trimmed) return;
     // Don't overwrite an existing manual name with a generic one.
-    if (map[peer] && map[peer] === trimmed) return;
-    map[peer] = trimmed;
+    if (map[key] && map[key] === trimmed) return;
+    map[key] = trimmed;
     localStorage.setItem(LS_CONTACT_NAMES, JSON.stringify(map));
 }
 
 function saveContactName(peer, name) {
+    const key = contactNameKey(peer);
+    if (!key) return;
     const map = loadContactNames();
-    if (name) map[peer] = name;
-    else delete map[peer];
+    const trimmed = String(name || "").trim().slice(0, 24);
+    if (trimmed) map[key] = trimmed;
+    else {
+        delete map[key];
+        if (key !== peer) delete map[peer];
+    }
     localStorage.setItem(LS_CONTACT_NAMES, JSON.stringify(map));
 }
 
 function contactDisplay(peer) {
     // Privacy v157: npub-fallback убран — без имени показываем «Без имени».
-    return loadContactNames()[peer] || "Без имени";
+    return contactNameFor(peer) || "Без имени";
 }
 
 
@@ -222,7 +238,7 @@ function renderChatList() {
             // Lesson #129: hidden peers не отображаются в sidebar.
             if (isHiddenPeer(c.peer)) return false;
             if (!filter) return true;
-            const display = (nameMap[c.peer] || "").toLowerCase();
+            const display = contactNameFor(c.peer, nameMap).toLowerCase();
             return c.peer.toLowerCase().includes(filter) || display.includes(filter);
         })
         .sort((a, b) => b.lastTs - a.lastTs);
@@ -269,7 +285,7 @@ function renderChatList() {
             : noPreview
             ? (contactsLoaded ? "Нет сообщений" : "")
             : (c.lastMessagePreview.length > 60 ? c.lastMessagePreview.slice(0, 60) + "…" : c.lastMessagePreview)
-        const name = nameMap[c.peer];
+        const name = contactNameFor(c.peer, nameMap);
         // Privacy v157: npub не показываем в списке чатов. Без имени — «Без имени».
         const displayName = name || "Без имени";
         const avatarInitial = (name || "?").slice(0, 1).toUpperCase();

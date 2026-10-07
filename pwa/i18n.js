@@ -19,6 +19,10 @@
         "Восстановить": { en: "Restore", fr: "Restaurer", es: "Restaurar", de: "Wiederherstellen" },
         "Пригласить друга ✉": { en: "Invite a friend ✉", fr: "Inviter un ami ✉", es: "Invitar a un amigo ✉", de: "Freund einladen ✉" },
         "Вставить ссылку 📋": { en: "Paste link 📋", fr: "Coller le lien 📋", es: "Pegar enlace 📋", de: "Link einfügen 📋" },
+        "Скачать": { en: "Download", fr: "Télécharger", es: "Descargar", de: "Herunterladen" },
+        "Скачать backup": { en: "Download backup", fr: "Télécharger la sauvegarde", es: "Descargar copia de seguridad", de: "Backup herunterladen" },
+        "Восстановить backup": { en: "Restore backup", fr: "Restaurer la sauvegarde", es: "Restaurar copia de seguridad", de: "Backup wiederherstellen" },
+        "Восстановить из backup": { en: "Restore from backup", fr: "Restaurer depuis une sauvegarde", es: "Restaurar desde una copia de seguridad", de: "Aus Backup wiederherstellen" },
         "Удалить все данные": { en: "Delete all data", fr: "Supprimer toutes les données", es: "Eliminar todos los datos", de: "Alle Daten löschen" },
         "Пригласите друга или вставьте полученную ссылку для начала общения": { en: "Invite a friend or paste a received link to start chatting", fr: "Invitez un ami ou collez le lien reçu pour commencer", es: "Invita a un amigo o pega el enlace recibido para empezar", de: "Lade einen Freund ein oder füge den erhaltenen Link ein" },
         "Выберите чат": { en: "Select a chat", fr: "Sélectionnez un chat", es: "Selecciona un chat", de: "Chat auswählen" },
@@ -262,7 +266,9 @@
         while ((n = walker.nextNode())) nodes.push(n);
         for (const tn of nodes) {
             let v = tn.nodeValue;
-            for (const [ru, entry] of Object.entries(dict)) {
+            // Longest phrases first: otherwise "Скачать" would replace the
+            // beginning of "Скачать backup" before the full phrase is checked.
+            for (const [ru, entry] of Object.entries(dict).sort((a, b) => b[0].length - a[0].length)) {
                 const trv = pick(entry);
                 if (trv && v.indexOf(ru) >= 0) v = v.split(ru).join(trv);
             }
@@ -279,7 +285,7 @@
                     const v = el.getAttribute(attr);
                     if (!v || !/[А-Яа-яЁё]/.test(v)) continue;
                     let nv = v;
-                    for (const [ru, entry] of Object.entries(dict)) {
+                    for (const [ru, entry] of Object.entries(dict).sort((a, b) => b[0].length - a[0].length)) {
                         const trv = pick(entry);
                         if (trv && nv.indexOf(ru) >= 0) nv = nv.split(ru).join(trv);
                     }

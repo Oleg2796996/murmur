@@ -467,6 +467,26 @@ const chats = {
 // ============= BLOBS STORE =============
 
 const blobs = {
+    async exportAll() {
+        return _tx(STORE_BLOBS, "readonly", (store) => new Promise((resolve, reject) => {
+            const req = store.getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => reject(req.error);
+        }));
+    },
+    async importAll(records) {
+        if (!Array.isArray(records) || !records.length) return;
+        await _tx(STORE_BLOBS, "readwrite", (store) => new Promise((resolve, reject) => {
+            for (const rec of records) {
+                if (!rec || !rec.blob_id || !rec.data) continue;
+                const bytes = Uint8Array.from(atob(rec.data), c => c.charCodeAt(0));
+                store.put({ blob_id: rec.blob_id, data: bytes.buffer, mime: rec.mime || "application/octet-stream", size: rec.size || bytes.byteLength, ts: Date.now(), hits: 0 });
+            }
+            const tx = store.transaction;
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        }));
+    },
     async get(blobId) {
         return _tx(STORE_BLOBS, "readonly", (store) => new Promise((resolve, reject) => {
             const req = store.get(blobId);
@@ -712,6 +732,53 @@ function _migrateBlobsDb(oldDb) {
 
 // ============= EXPORTS =============
 
+// Storage-resilience export/import helpers. They deliberately exclude binary blob
+// cache: chat text, identity and contact metadata are portable; large attachment
+// blobs are best-effort cache and must not make the backup unusable.
+async function exportBackupData() {
+    await open();
+    const keys = await kv.keys();
+    const kvData = {};
+    for (const key of keys) {
+        if (typeof key === "string" && (key.startsWith("chats_backup:") || key === "murmur.backup.key" || key === "murmur.backup.handle" || key === "murmur.backup.meta")) continue;
+        kvData[key] = await kv.get(key);
+    }
+    const peers = await chats.listPeers();
+    const chatsData = {};
+    for (const peer of peers) chatsData[peer] = await chats.getMessages(peer);
+    const blobRecords = [];
+    for (const rec of await blobs.exportAll()) {
+        let bytes = null;
+        if (rec && rec.data) bytes = new Uint8Array(rec.data);
+        else if (rec && rec.blob) bytes = new Uint8Array(await rec.blob.arrayBuffer());
+        if (!rec || !rec.blob_id || !bytes || !bytes.length) continue;
+        let bin = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        blobRecords.push({ blob_id: rec.blob_id, mime: rec.mime, size: rec.size || bytes.length, data: btoa(bin) });
+    }
+    return { kv: kvData, chats: chatsData, blobs: blobRecords };
+}
+
+async function importBackupData(data) {
+    if (!data || typeof data !== "object") throw new Error("Неверные данные backup");
+    await open();
+    const keepKeys = new Set(["murmur.backup.meta", "murmur.backup.key", "murmur.backup.handle"]);
+    for (const key of await kv.keys()) {
+        if (!keepKeys.has(key)) await kv.del(key);
+    }
+    for (const peer of await chats.listPeers()) await chats.deleteMessages(peer);
+    const kvData = data.kv && typeof data.kv === "object" ? data.kv : {};
+    for (const [key, value] of Object.entries(kvData)) {
+        if (key.startsWith("chats_backup:") || keepKeys.has(key)) continue;
+        await kv.set(key, value);
+    }
+    const chatsData = data.chats && typeof data.chats === "object" ? data.chats : {};
+    for (const [peer, msgs] of Object.entries(chatsData)) {
+        if (Array.isArray(msgs) && msgs.length) await chats.saveMessages(peer, msgs);
+    }
+    await blobs.importAll(data.blobs || []);
+}
+
 window.appStore = {
     isAvailable,
     open,
@@ -719,6 +786,8 @@ window.appStore = {
     chats,
     blobs,
     vapid,
+    exportBackupData,
+    importBackupData,
     MAX_MESSAGES_PER_PEER,
     MAX_BLOB_CACHE_BYTES,
     stats: () => Promise.all([kv.keys(), chats.listPeers(), blobs.stats()]).then(([kvKeys, peers, blobStats]) => ({

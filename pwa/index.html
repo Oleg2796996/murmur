@@ -3,7 +3,7 @@
 <head>
     <base href="/">
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"> <!-- call33e: Android Chrome - клавиатура ужимает layout вместо пана vvTop; Safari игнорирует ключ, iOS не задет -->
     <meta name="theme-color" content="#17212b">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -44,7 +44,7 @@
     <link rel="shortcut icon" href="/favicon-2026b.ico">
     <link rel="mask-icon" href="/mask-icon.svg" color="#229ED9">
     <meta name="app-version" content="v160w6c7">
-    <link rel="stylesheet" href="styles.css?v=160w6c7">
+    <link rel="stylesheet" href="styles.css?v=call34-send">
     <script>
     // v160z13 (Олег 22:52): анти-i18n-flash. Пользователь без ручного выбора языка
     // видит русский HTML до загрузки defer-скриптов (WASM и пр.), потом i18n.js
@@ -104,6 +104,8 @@
             <div class="identity-section" id="identity-create-section" hidden>
                 <h2>Новый аккаунт</h2>
                 <button id="btn-create" class="primary">Создать</button>
+                <button id="btn-backup-restore-identity" class="identity-restore">Восстановить из backup</button>
+                <input id="backup-restore-file" type="file" accept=".murmur,application/octet-stream" hidden>
             </div>
         </div>
     </div>
@@ -120,9 +122,14 @@
                 <button id="btn-notifications" class="notif-btn" title="Включить уведомления">🔔</button>
             </header>
             <div class="sidebar-footer">
-                <button id="btn-invite" class="invite-btn-green">Пригласить друга ✉</button>
-                <button id="btn-add-by-link" class="logout-btn-danger" title="Вставить invite-ссылку или npub" style="background:#2b5278;">Вставить ссылку 📋</button>
-                <button id="btn-logout" class="logout-btn-danger" title="Удалить все данные">Удалить все данные</button>
+                <div class="sidebar-actions-grid">
+                    <button id="btn-invite" class="invite-btn-green">Пригласить друга ✉</button>
+                    <button id="btn-add-by-link" class="action-tile" title="Вставить invite-ссылку или npub">Вставить ссылку 📋</button>
+                    <button id="btn-backup-download" class="action-tile">Скачать backup</button>
+                    <button id="btn-backup-restore" class="action-tile">Восстановить backup</button>
+                    <button id="btn-logout" class="action-tile danger-tile" title="Удалить все данные">Удалить все данные</button>
+                </div>
+                <div id="backup-status" hidden></div>
             </div>
             <div class="chat-search-wrap">
                 <input id="chat-search" type="search" placeholder="поиск чатов…" autocomplete="off">
@@ -141,6 +148,8 @@
                 <div class="chat-peer">
                     <div class="chat-peer-name" id="chat-peer-name">Выберите чат</div>
                 </div>
+                <button id="btn-call" class="icon-btn call-btn" title="Аудиозвонок" aria-label="Аудиозвонок этому контакту" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg></button>
+                <button id="btn-video-call" class="icon-btn call-btn video-call-btn" title="Видеозвонок" aria-label="Видеозвонок этому контакту" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="12" height="10" rx="2.5"/><path d="M15 10.5l6-3v9l-6-3"/></svg></button>
                 <button id="btn-delete-chat" class="icon-btn delete-btn" title="Удалить чат" aria-label="удалить чат" hidden>🗑</button>
             </header>
             <section id="chat-panel" class="chat-panel">
@@ -166,6 +175,7 @@
             </footer>
         </main>
     </div>
+    <div id="call-ui-root" aria-live="polite"></div>
     <script>
       function bindHandler(elemId, fnName, label) {
         const el = document.getElementById(elemId);
@@ -205,7 +215,6 @@
         return true;
       }
       bindHandler("btn-create", "_handleCreate", "Создать");
-      bindHandler("btn-restore", "_handleRestore", "Восстановить");
     </script>
     <script>
         (function() {
@@ -216,26 +225,29 @@
             } catch (e) { window.__APP_VERSION__ = "?"; }
         })();
     </script>
-    <script src="i18n.js?v=160z13" ></script>
+    <script src="i18n.js?v=160z14" ></script>
     <script src="blob-cache.js?v=160y41" defer></script>
     <script src="blob-opfs.js?v=160y41" defer></script>
     <script src="blob-opfs-worker.js?v=160y41" defer></script>
     <script src="mp4box.all.min.js" defer></script>
     <script src="mp4-muxer.min.js" defer></script>
     <script src="video-fast.js?v=160y47" defer></script>
-    <script src="app-store.js?v=160y41" defer></script>
+    <script src="app-store.js?v=160y43" defer></script>
+    <script src="backup.js?v=backup4" defer></script>
     <script src="render-attachments.js?v=160y52&i18n=1" defer></script>
     <script src="receipts.js?v=160z1&i18n=2" defer></script>
     <script src="chat-state.js?v=160z2&i18n=2" defer></script>
     <script src="contacts.js?v=160w5g2&i18n=2" defer></script>
     <script src="decrypt-groups.js?v=160z4&i18n=2" defer></script>
     <script src="groups.js?v=160z5&i18n=2" defer></script>
+    <script src="call-audio.js?v=call31f" defer></script>
     <script src="message-cache.js?v=160z3&i18n=2" defer></script>
-    <script src="app.js?v=160w6c7&i18n=2" defer></script>
+    <script src="qrcode.js?v=160w6g1" defer></script>
+    <script src="app.js?v=call33g" defer></script>
     <script>
       if ("serviceWorker" in navigator) {
         // v160y20: чистый UI — только 🔔, без 💾📊, hover без нажатого эффекта
-        navigator.serviceWorker.register("/service-worker.js?v=sw24w6c7&t=" + Date.now(), { updateViaCache: "none" }).then((reg) => {
+        navigator.serviceWorker.register("/service-worker.js?v=sw32-call20&t=" + Date.now(), { updateViaCache: "none" }).then((reg) => {
           if (reg.waiting) {
             reg.waiting.postMessage({ type: "SKIP_WAITING" });
           }

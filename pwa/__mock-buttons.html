@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Murmur — варианты кнопок звонка</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "SF Pro Text", Segoe UI, Roboto, sans-serif; background: #0b1118; color: #e8eef5; padding: 24px 16px 60px; }
+  h1 { font-size: 20px; text-align: center; margin-bottom: 6px; }
+  .sub { text-align: center; color: #8fa3b8; font-size: 13px; margin-bottom: 28px; }
+  .variant { max-width: 420px; margin: 0 auto 34px; background: #050b12; border-radius: 20px; padding: 22px 18px; border: 1px solid rgba(142,197,255,.12); }
+  .vtitle { font-size: 15px; font-weight: 700; margin-bottom: 2px; }
+  .vdesc { font-size: 12px; color: #8fa3b8; margin-bottom: 16px; }
+  .row { display: flex; align-items: center; justify-content: center; gap: 16px; min-height: 84px; }
+  .demo-video { position: relative; height: 150px; border-radius: 14px; overflow: hidden; margin-bottom: 14px;
+    background: linear-gradient(135deg, #22344a 0%, #0d1622 60%, #1a2c3f 100%); }
+  .demo-video .pip { position: absolute; top: 10px; right: 10px; width: 64px; height: 84px; border-radius: 10px;
+    background: linear-gradient(135deg, #4a3a2a, #2a1f14); border: 2px solid rgba(255,255,255,.75); }
+  .btn { width: 52px; height: 52px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 22px; cursor: pointer; border: none; color: #fff; }
+  .btn.small { width: 46px; height: 46px; font-size: 19px; }
+  .btn.red { background: #e5484d; font-size: 20px; }
+
+  /* A: FaceTime glass */
+  .a .btn { background: rgba(120,120,128,.36); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  .a .btn.off { background: rgba(120,120,128,.36); color: #ff9f0a; }
+
+  /* B: тёмный контур (outline) */
+  .b .btn { background: rgba(10,16,24,.55); border: 1.5px solid rgba(255,255,255,.35); }
+  .b .btn.off { color: #ff453a; border-color: rgba(255,69,58,.6); }
+
+  /* C: призрачные иконки (ghost, без фона до нажатия) */
+  .c .btn { background: transparent; color: #e8eef5; }
+  .c .btn.off { color: #ff453a; }
+  .c .btn.red { background: rgba(229,72,77,.92); }
+
+  /* D: неон-акцент (актив = голубой круг) */
+  .d .btn { background: rgba(88,166,255,.18); border: 1px solid rgba(88,166,255,.5); color: #7cc0ff; }
+  .d .btn.off { background: rgba(255,69,58,.15); border-color: rgba(255,69,58,.55); color: #ff453a; }
+  svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .lbl { display:block; text-align:center; font-size: 10px; color:#5c718a; margin-top:6px; }
+</style>
+</head>
+<body>
+<h1>Murmur · кнопки звонка — 4 варианта</h1>
+<div class="sub">Иконки без текста, состояние выключения — цветом (как в мессенджерах)</div>
+
+<div class="variant a">
+  <div class="vtitle">A · FaceTime glass</div>
+  <div class="vdesc">Полупрозрачный серый круг с blur, оранжевая иконка = выключено. Классика iOS.</div>
+  <div class="demo-video"><div class="pip"></div></div>
+  <div class="row">
+    <div><button class="btn"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M6 11a6 6 0 0 0 12 0"/><path d="M12 17v4"/></svg></button><span class="lbl">mic</span></div>
+    <div><button class="btn off"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M6 11a6 6 0 0 0 12 0"/><path d="M12 17v4"/><path d="M4 4l16 16"/></svg></button><span class="lbl">mic off</span></div>
+    <div><button class="btn"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="13" height="11" rx="2"/><path d="M16 10l5-2.5v9L16 14"/></svg></button><span class="lbl">cam</span></div>
+    <div><button class="btn"><svg viewBox="0 0 24 24"><path d="M9 4H4v5M15 20h5v-5M4 20l6-6M20 4l-6 6"/></svg></button><span class="lbl">fs</span></div>
+    <div><button class="btn red"><svg viewBox="0 0 24 24"><path d="M3 12h18" transform="rotate(45 12 12)"/></svg></button><span class="lbl">end</span></div>
+  </div>
+</div>
+
+<div class="variant b">
+  <div class="vtitle">B · Тёмный контур</div>
+  <div class="vdesc">Тёмная подложка + светлая обводка; выключено = красная иконка и обводка.</div>
+  <div class="demo-video"><div class="pip"></div></div>
+  <div class="row">
+    <div><button class="btn"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M6 11a6 6 0 0 0 12 0"/><path d="M12 17v4"/></svg></button><span class="lbl">mic</span></div>
+    <div><button class="btn off"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M6 11a6 6 0 0 0 12 0"/><path d="M12 17v4"/><path d="M4 4l16 16"/></svg></button><span class="lbl">mic off</span></div>
+    <div><button class="btn"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="13" height="11" rx="2"/><path d="M16 10l5-2.5v9L16 14"/></svg></button><span class="lbl">cam</span></div>
+    <div><button class="btn"><svg viewBox="0 0 24 24"><path d="M9 4H4v5M15 20h5v-5M4 20l6-6M20 4l-6 6"/></svg></button><span class="lbl">fs</span></div>
+    <div><button class="btn red"><svg viewBox="0 0 24 24"><path d="M3 12h18" transform="rotate(45 12 12)"/></svg></button><span class="lbl">end</span></div>
+  </div>
+</div>
+
+<div class="variant c">
+  <div class="vtitle">C · Ghost (без фона)</div>
+  <div class="vdesc">Только иконки поверх видео, максимально минимализм; красный круг — только завершить.</div>
+  <div class="demo-video"><div class="pip"></div></div>
+  <div class="row">
+    <div><button class="btn"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M6 11a6 6 0 0 0 12 0"/><path d="M12 17v4"/></svg></button><span class="lbl">mic</span></div>
+    <div><button class="btn off"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M6 11a6 6 0 0 0 12 0"/><path d="M12 17v4"/><path d="M4 4l16 16"/></svg></button><span class="lbl">mic off</span></div>
+    <div><button class="btn"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="13" height="11" rx="2"/><path d="M16 10l5-2.5v9L16 14"/></svg></button><span class="lbl">cam</span></div>
+    <div><button class="btn"><svg viewBox="0 0 24 24"><path d="M9 4H4v5M15 20h5v-5M4 20l6-6M20 4l-6 6"/></svg></button><span class="lbl">fs</span></div>
+    <div><button class="btn red"><svg viewBox="0 0 24 24"><path d="M3 12h18" transform="rotate(45 12 12)"/></svg></button><span class="lbl">end</span></div>
+  </div>
+</div>
+
+<div class="variant d">
+  <div class="vtitle">D · Голубой неон-акцент</div>
+  <div class="vdesc">Актив = голубой контур; выключено = красный. Фирменный цвет Murmur.</div>
+  <div class="demo-video"><div class="pip"></div></div>
+  <div class="row">
+    <div><button class="btn"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M6 11a6 6 0 0 0 12 0"/><path d="M12 17v4"/></svg></button><span class="lbl">mic</span></div>
+    <div><button class="btn off"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z"/><path d="M6 11a6 6 0 0 0 12 0"/><path d="M12 17v4"/><path d="M4 4l16 16"/></svg></button><span class="lbl">mic off</span></div>
+    <div><button class="btn"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="13" height="11" rx="2"/><path d="M16 10l5-2.5v9L16 14"/></svg></button><span class="lbl">cam</span></div>
+    <div><button class="btn"><svg viewBox="0 0 24 24"><path d="M9 4H4v5M15 20h5v-5M4 20l6-6M20 4l-6 6"/></svg></button><span class="lbl">fs</span></div>
+    <div><button class="btn red"><svg viewBox="0 0 24 24"><path d="M3 12h18" transform="rotate(45 12 12)"/></svg></button><span class="lbl">end</span></div>
+  </div>
+</div>
+
+</body>
+</html>

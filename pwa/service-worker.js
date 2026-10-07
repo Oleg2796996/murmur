@@ -9,7 +9,7 @@
 // SW нужен ТОЛЬКО ради Web Push уведомлений.
 
 const APP_DISPLAY_NAME = "MurMur";
-const SW_VERSION = "murmur-sw30"; // v160b4: badge из push payload (сервер кладёт точный unread)
+const SW_VERSION = "murmur-sw33-call33f"; // call33f: notificationclick гейт kind=incoming_call (пуш сообщения открывал меню аудио-звонка) // v160b4: badge из push payload (сервер кладёт точный unread)
 
 function pushDebugToClients(event, detail) {
   try {
@@ -47,6 +47,42 @@ self.addEventListener("message", (event) => {
   }
 });
 
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const data = event.notification.data || {};
+  event.waitUntil((async () => {
+    const list = await clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const client of list) {
+      if ("focus" in client) {
+        try { await client.focus(); } catch (_) {}
+        // call33f: incoming_call handoff — ТОЛЬКО для пушей звонка. Обычные
+        // message-пуши тоже несут from_npub; слепой postMessage открывал
+        // меню приёма АУДИО-звонка по клику на пуш сообщения.
+        if (data.kind === "incoming_call") {
+            try { client.postMessage({ type: "incoming_call", from_npub: data.from_npub || "", call_mode: data.call_mode || "" }); } catch (_) {}
+        }
+        return;
+      }
+    }
+    if (clients.openWindow) {
+      // A cold-started window cannot receive postMessage yet. Carry the
+      // incoming-call peer in the navigation URL so app.js can restore the
+      // incoming-call UI after identity/app initialization.
+        // call33f: URL-handoff только для звонковых пушей (иначе холодный
+        // старт по пушу сообщения получал ?incoming_call=<peer> без call= →
+        // дефолт audio → меню приёма звонка).
+        if (data.kind === "incoming_call") {
+            const from = data.from_npub || "";
+            const callQ = data.call_mode === "video" || data.call_mode === "audio" ? "&call=" + data.call_mode : "";
+            const url = from ? "/?incoming_call=" + encodeURIComponent(from) + callQ : "/";
+            await clients.openWindow(url);
+            return;
+        }
+        await clients.openWindow("/");
+    }
+  })());
+});
+
 self.addEventListener("push", (event) => {
   pushDebugToClients("push-received", "data=" + (event.data ? "yes" : "no"));
   // v160y (Олег 19:20): платформенный сплит против дубля заголовка.
@@ -65,7 +101,8 @@ self.addEventListener("push", (event) => {
     console.warn("[murmur-sw] push payload not JSON", e);
     pushDebugToClients("push-parse-error", e && e.message || String(e));
   }
-  const text = payload.body || "New message — open the app to read it";
+  const isIncomingCall = payload.kind === "incoming_call";
+  const text = isIncomingCall ? "Incoming call — open MurMur to answer" : (payload.body || "New message — open the app to read it");
   // WorkerNavigator.userAgent доступен в SW; iPad отдаёт Macintosh-UA →
   // исключаем мобильные явно.
   const ua = (self.navigator && self.navigator.userAgent) || "";
@@ -87,6 +124,11 @@ self.addEventListener("push", (event) => {
       from_npub: payload.from_npub,
       ts: payload.ts,
       envelope_hash_hex: payload.envelope_hash_hex,
+      kind: payload.kind || "message",
+      // call20: keep the audio/video mode available to the click handler
+      // and to a cold-start URL handoff. Push payload can carry it; without
+      // it the recipient defaults to audio and ignores a video caller.
+      call_mode: payload.call_mode || payload.callMode || "",
     },
   };
   pushDebugToClients("push-show", "isMac=" + isMac + " isIOS=" + isIOS + " title='" + title.slice(0, 40) + "' body='" + (options.body || "").slice(0, 40) + "' alias=" + (payload.alias || "?"));

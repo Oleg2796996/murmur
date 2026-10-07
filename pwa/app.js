@@ -202,6 +202,8 @@ const chatSearch = $("chat-search");
 const btnSend = $("btn-send");
 const btnBack = $("btn-back");
 const btnDeleteChat = $("btn-delete-chat"); // Lesson #129
+const btnCall = $("btn-call");
+const btnVideoCall = $("btn-video-call");
 
 let myNpub = null;
 let myAlias = "anon";
@@ -263,6 +265,36 @@ let oldestTsForPeer = {};
 // Expose for E2E test diagnostics (Олег 2026-08-26)
 window.__murmurState = () => ({ messages, activePeer, contacts });
 
+// Local call history events. These are intentionally not sent through the
+// relay: call metadata stays on each participant's device.
+window.recordCallEvent = function (peer, event) {
+    if (!peer || !event || !event.status) return;
+    const ts = event.ts || Math.floor(Date.now() / 1000);
+    const item = {
+        direction: "system", callEvent: true, callStatus: event.status,
+        callDirection: event.direction || "in", callDuration: Math.max(0, Number(event.duration) || 0),
+        body: "", ts, _sig: "call:" + peer + ":" + ts + ":" + Math.random().toString(36).slice(2),
+    };
+    (messages[peer] = messages[peer] || []).push(item);
+    // Call events are appended in real time without rebuilding the message
+    // list. A full render + forced scroll here races iOS keyboard/viewport
+    // settling and was the source of visible chat jumps.
+    if (activePeer === peer && messagesArea) {
+        const label = item.callDirection === "out"
+            ? (item.callStatus === "declined" ? "Исходящий отклонен" : "Исходящий")
+            : (item.callStatus === "cancelled" ? "Входящий отменен" : "Входящий");
+        const duration = item.callDuration > 0 ? " - " + formatDurationForCall(item.callDuration) : "";
+        const node = document.createElement("div");
+        node.className = "call-event-text";
+        node.dataset.sig = item._sig;
+        node.textContent = label + " " + formatTime(item.ts) + duration;
+        messagesArea.appendChild(node);
+        try { window.__murmurRenderedSigs?.add(item._sig); } catch (_) {}
+    }
+    try { saveMessagesCacheForPeer(peer); } catch (_) {}
+    try { window.appStore?.saveMessages(peer, messages[peer]); } catch (_) {}
+};
+
 // E2E test hooks (Playwright WebKit, 2026-08-30). Только explicit evaluate.
 window.__murmurTestHooks = {
     npub: () => myNpub,
@@ -280,6 +312,18 @@ let pendingAttachmentsMeta = [];   // [{name, mime, size}] — public metadata �
 let pendingReply = null;           // {sig, preview, ts} | null
 let ws = null;
 let wsConnected = false;
+window.MurmurRuntime = window.MurmurRuntime || {};
+window.addEventListener("message", (event) => {
+    const d = event.data || {};
+    if (d.type === "incoming_call" && window.MurmurCall && d.from_npub) {
+        window.MurmurCall.notifyIncoming(d.from_npub, d.call_mode);
+    }
+});
+Object.defineProperties(window.MurmurRuntime, {
+    activePeer: { get: () => activePeer },
+    myNpub: { get: () => myNpub },
+    ws: { get: () => ws }
+});
 let wsReconnectDelay = WS_RECONNECT_BASE;
 
 function formatSize(n) {
@@ -406,6 +450,10 @@ function renderOutgoingAttachment({ mime, name, url, size, poster, att }) {
 
 function formatTime(ts) {
     return new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+function formatDurationForCall(seconds) {
+    const s = Math.max(0, Math.floor(seconds));
+    return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
 }
 
 function formatDate(ts) {
@@ -900,6 +948,8 @@ function enterMessenger() {
     // invite-ссылку, cookie-мост добавит чат (handleInviteHash уже мог съесть
     // cookie через peer===ck — тогда bridge тихо выйдет).
     checkInviteCookieBridge(false);
+    // Cold-start handoff from the service worker notification click.
+    handleIncomingCallLink();
 }
 
 // (старый мягкий logout-обработчик удалён 2026-08-31: кнопка btn-logout теперь
@@ -1418,6 +1468,25 @@ function updateNoChatVisibility() {
         noChat.hidden = !empty;
         noChat.style.display = empty ? "flex" : "none";
     }
+    // call32: на стартовой странице (нет чатов) поле списка чатов не показываем:
+    // сайдбар схлопывается в компактную колонку кнопок, no-chat занимает весь остаток.
+    const msgr = document.querySelector(".messenger");
+    if (msgr) msgr.classList.toggle("no-chats", empty);
+}
+
+function handleIncomingCallLink() {
+    const params = new URLSearchParams(location.search);
+    const from = params.get("incoming_call");
+    if (!from || !/^npub1[a-z0-9]+$/i.test(from)) return;
+    const callMode = params.get("call") === "video" ? "video" : (params.get("call") === "audio" ? "audio" : null);
+    // Consume the one-shot handoff before showing the UI, so a reload cannot
+    // reopen a stale incoming-call dialog.
+    try { history.replaceState(null, "", location.pathname); } catch (e) {}
+    if (window.MurmurCall && typeof window.MurmurCall.notifyIncoming === "function") {
+        // Let the deferred call-audio module finish attaching its API and let
+        // the messenger DOM settle after a cold start.
+        setTimeout(() => window.MurmurCall.notifyIncoming(from, callMode), 0);
+    }
 }
 
 function handleInviteHash() {
@@ -1581,38 +1650,9 @@ function setupInviteUI() {
     if (btnInvite) {
         btnInvite.addEventListener("click", async () => {
             const inviteLink = `${window.location.origin}${window.location.pathname}#invite=${myNpub}`;
-            // Step 1: synchronous copy INSIDE the user gesture.
-            // iOS Safari/PWA requires this; after any await the gesture is consumed
-            // and clipboard APIs throw NotAllowedError (Lesson #355).
+            // Copy synchronously inside the gesture, then show QR/share overlay.
             const copied = legacyCopy(inviteLink);
-            // Step 2: native share menu when available (mobile UX preference).
-            if (navigator.share) {
-                try {
-                    // v158c (Олег 22:49): macOS share sheet discard'ит поле url,
-                    // когда есть text → в мессенджер уходит голый текст без ссылки.
-                    // Зашиваем ссылку В текст — тогда она доходит везде.
-                    await navigator.share({
-                        title: "murmur",
-                        text: window.MurmurI18N.t("Присоединяйся в приватном мессенджере murmur!") + " " + inviteLink,
-                    });
-                    return;
-                } catch (e) {
-                    if (e.name === "AbortError") return; // user closed the share sheet
-                    // real share failure → fall through, we already tried copying
-                }
-            }
-            // Step 3: report result
-            if (copied) {
-                alert("Ссылка скопирована в буфер обмена!");
-            } else {
-                try {
-                    await navigator.clipboard.writeText(inviteLink);
-                    alert("Ссылка скопирована в буфер обмена!");
-                } catch (e) {
-                    // Last resort: manual copy overlay (fresh gesture works there)
-                    showInviteManualCopy(inviteLink);
-                }
-            }
+            showInviteQr(inviteLink, copied);
         });
     }
 
@@ -1649,6 +1689,80 @@ function legacyCopy(text) {
     try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
     document.body.removeChild(ta);
     return ok;
+}
+
+function showInviteQr(inviteLink, alreadyCopied) {
+    let ov = document.getElementById("invite-qr");
+    if (ov) ov.remove();
+    ov = document.createElement("div");
+    ov.id = "invite-qr";
+    ov.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px;";
+    const box = document.createElement("div");
+    box.style.cssText = "background:#17212b;border-radius:12px;padding:18px;max-width:340px;width:100%;color:#e8edf2;font:14px -apple-system,sans-serif;box-sizing:border-box;text-align:center;";
+    const title = document.createElement("div");
+    title.textContent = window.MurmurI18N ? window.MurmurI18N.t("Пригласить друга") : "Пригласить друга";
+    title.style.cssText = "margin-bottom:6px;font-weight:600;font-size:15px;";
+    const hint = document.createElement("div");
+    hint.textContent = window.MurmurI18N ? window.MurmurI18N.t("Пусть друг наведёт камеру телефона на QR-код") : "Пусть друг наведёт камеру телефона на QR-код";
+    hint.style.cssText = "margin-bottom:12px;color:#8a97a5;font-size:13px;line-height:1.4;";
+    const qrHolder = document.createElement("div");
+    qrHolder.id = "invite-qr-holder";
+    qrHolder.style.cssText = "display:inline-block;background:#fff;border-radius:8px;padding:12px;margin-bottom:4px;";
+    const err = document.createElement("div");
+    err.style.cssText = "display:none;color:#e8a;font-size:13px;margin:10px 0;";
+    // Кнопки — в том же стиле, что key-reveal / manual-copy оверлеи.
+    const btnShare = document.createElement("button");
+    btnShare.textContent = window.MurmurI18N ? window.MurmurI18N.t("Поделиться") : "Поделиться";
+    btnShare.style.cssText = "margin-top:12px;width:100%;background:#2b5278;color:#fff;border:0;border-radius:8px;padding:10px;font-size:14px;";
+    btnShare.addEventListener("click", async () => {
+        if (navigator.share) {
+            try {
+                // v158c: ссылку зашиваем В текст — macOS share sheet discard'ит url.
+                await navigator.share({
+                    title: "murmur",
+                    text: (window.MurmurI18N ? window.MurmurI18N.t("Присоединяйся в приватном мессенджере murmur!") : "Присоединяйся в приватном мессенджере murmur!") + " " + inviteLink,
+                });
+            } catch (e) {
+                if (e.name !== "AbortError") console.warn("share failed:", e);
+            }
+        } else {
+            // Нет share API (десктоп) → копируем в буфер.
+            if (legacyCopy(inviteLink)) { btnShare.textContent = "Скопировано ✓"; setTimeout(() => ov.remove(), 800); }
+        }
+    });
+    const btnCopy = document.createElement("button");
+    btnCopy.textContent = window.MurmurI18N ? window.MurmurI18N.t("Скопировать ссылку") : "Скопировать ссылку";
+    btnCopy.style.cssText = "margin-top:8px;width:100%;background:#22303e;color:#e8edf2;border:0;border-radius:8px;padding:10px;font-size:14px;";
+    btnCopy.addEventListener("click", () => {
+        if (legacyCopy(inviteLink)) { btnCopy.textContent = "Скопировано ✓"; setTimeout(() => ov.remove(), 800); }
+    });
+    const btnClose = document.createElement("button");
+    btnClose.textContent = window.MurmurI18N ? window.MurmurI18N.t("Закрыть") : "Закрыть";
+    btnClose.style.cssText = "margin-top:8px;width:100%;background:#22303e;color:#8a97a5;border:0;border-radius:8px;padding:10px;font-size:14px;";
+    btnClose.addEventListener("click", () => ov.remove());
+    ov.addEventListener("click", (e) => { if (e.target === ov) ov.remove(); });
+    box.appendChild(title); box.appendChild(hint); box.appendChild(qrHolder); box.appendChild(err);
+    box.appendChild(btnShare); box.appendChild(btnCopy); box.appendChild(btnClose);
+    ov.appendChild(box); document.body.appendChild(ov);
+    // Генерация QR — после вставки оверлея, обёрнута в try (битая библиотека
+    // не должна ломать весь invite-флоу: ссылка уже скопирована в жесте).
+    try {
+        const q = typeof QRCode !== "undefined" ? QRCode : (typeof qrcode !== "undefined" ? qrcode : null);
+        if (!q) throw new Error("qrcode lib not loaded");
+        const qr = q(0, "M");
+        qr.addData(inviteLink);
+        qr.make();
+        const img = document.createElement("img");
+        img.alt = "QR инвайта";
+        // createDataURL даёт GIF — легче SVG, и pixelated-рендер чётче с камеры.
+        img.src = qr.createDataURL(6, 0);
+        img.style.cssText = "width:220px;height:220px;image-rendering:pixelated;display:block;";
+        qrHolder.appendChild(img);
+    } catch (e) {
+        console.warn("QR render failed:", e);
+        err.textContent = "QR не отрисовался — используй «Поделиться» или «Скопировать»";
+        err.style.display = "block";
+    }
 }
 
 function showInviteManualCopy(inviteLink) {
@@ -1694,10 +1808,79 @@ function showInviteManualCopy(inviteLink) {
     inp.select();
 }
 
+// ── Local chat-name editor (не зависит от нативного Safari prompt) ──
+function showChatNameEditor(peer) {
+    const old = document.getElementById("chat-name-editor");
+    if (old) old.remove();
+    const current = contactNameFor(peer);
+    const ov = document.createElement("div");
+    ov.id = "chat-name-editor";
+    ov.style.cssText = "position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.48);display:flex;align-items:center;justify-content:center;padding:20px;";
+    const box = document.createElement("div");
+    box.style.cssText = "width:min(360px,100%);background:var(--panel,#fff);color:var(--text,#111);border:1px solid var(--border,#ccc);border-radius:16px;padding:18px;box-shadow:0 12px 40px rgba(0,0,0,.28);";
+    const title = document.createElement("div");
+    title.textContent = "Название чата";
+    title.style.cssText = "font-weight:700;font-size:17px;margin-bottom:12px;";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.maxLength = 24;
+    input.value = current;
+    input.autocomplete = "off";
+    input.style.cssText = "box-sizing:border-box;width:100%;font:inherit;color:inherit;background:transparent;border:1px solid var(--border,#aaa);border-radius:10px;padding:10px 12px;outline:none;";
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:14px;";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Отмена";
+    const save = document.createElement("button");
+    save.type = "button";
+    save.textContent = "Сохранить";
+    save.style.cssText = "font-weight:600;";
+    const close = () => ov.remove();
+    cancel.onclick = close;
+    ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
+    const commit = () => {
+        const name = input.value.trim().slice(0, 24);
+        try {
+            saveContactName(peer, name);
+            // Verify the write before closing. This also catches Safari storage errors.
+            const saved = contactNameFor(peer);
+            if (name && saved !== name) throw new Error("имя не записалось в localStorage");
+            if (!name && saved) throw new Error("имя не удалилось из localStorage");
+        } catch (e) {
+            console.error("[murmur] chat name save failed:", e);
+            alert("Не удалось сохранить название чата. Попробуйте ещё раз.");
+            return;
+        }
+        close();
+        // Do not reopen the chat: that could reload a stale contact object and
+        // immediately overwrite the freshly saved local name on iOS.
+        const label = chatPeerName && chatPeerName.querySelector(".peer-name-main");
+        if (label) {
+            label.textContent = name || "Без имени";
+            label.classList.toggle("peer-name-unnamed", !name);
+        }
+        if (chatPeerName) chatPeerName.title = "Нажмите, чтобы задать имя";
+        renderChatList();
+    };
+    save.onclick = commit;
+    input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); commit(); }
+        if (e.key === "Escape") { e.preventDefault(); close(); }
+    });
+    actions.append(cancel, save);
+    box.append(title, input, actions);
+    ov.appendChild(box);
+    document.body.appendChild(ov);
+    requestAnimationFrame(() => { input.focus(); input.select(); });
+}
+
 // ── Open Chat ──
 function openChat(peer, opts) {
     peer = normalizePeer(peer);
     activePeer = peer;
+    if (btnCall) btnCall.hidden = !peer;
+    if (btnVideoCall) btnVideoCall.hidden = !peer;
     // v160h4: сброс currentGroup ТОЛЬКО при явном юзер-клике (opts.fromUser).
     // v160h3 сбрасывал безусловно — программные openChat (входящие/полл/инвайт)
     // выкидывали группу во время набора («полоска отскакивает на чат», Олег
@@ -1726,19 +1909,22 @@ function openChat(peer, opts) {
     // первого полного рендера; на тёплом — не ставится вовсе.
     // Холодный = messages[peer] пуст при openChat (кэш ещё не загружен).
     const coldOpen = !(messages[peer] && messages[peer].length);
+    // v160g4-kbd7 (Олег 12:05: «отжал и сразу собранная страница»): splash
+    // теперь на ЛЮБОЕ открытие. Тёплый заход без заглушки показывал сборку
+    // по частям (видео 11:58: шапка -> лента -> композер -> догон-серия).
+    // Тёплый скрывается раньше (350ms стабилизации), холодный держит 800ms
+    // (кэш+сервер+decrypt-батч) - логика v160z11 сохранена.
     const splash = document.getElementById("chat-splash");
-    if (coldOpen && splash) {
+    if (splash) {
         splash.hidden = false;
         splash.style.opacity = "1";
-    } else if (splash) {
-        splash.hidden = true;
     }
     noChat.style.display = "none"; // v160x3: чат открыт — панель не нужна
     noChat.hidden = true;
     inputArea.hidden = false;
     inputArea.classList.add("visible");
     const nameMap = loadContactNames();
-    const savedName = nameMap[peer];
+    const savedName = contactNameFor(peer, nameMap);
     // Privacy v157 (Олег 31.08 «npub явно лишний, убрать везде»): npub больше
     // не показываем в UI. Без заданного имени — «Без имени», клик открывает
     // диалог задания имени. Полный npub остаётся только в title-тултипе
@@ -1750,14 +1936,7 @@ function openChat(peer, opts) {
         chatPeerName.innerHTML = "<span class='peer-name-main peer-name-unnamed'>Без имени</span>";
     }
     chatPeerName.title = "Нажмите, чтобы задать имя";
-    chatPeerName.onclick = () => {
-        const current = loadContactNames()[peer] || "";
-        const v = prompt("Название чата:", current);
-        if (v === null) return;
-        const trimmed = v.trim().slice(0, 24);
-        saveContactName(peer, trimmed);
-        openChat(peer, {fromUser: true});
-    };
+    chatPeerName.onclick = () => showChatNameEditor(peer);
     // Lesson #325 (Олег 2026-08-28 12:05 MSK): НЕ ОЧИЩАЕМ messages[peer] перед loadHistory.
     // Раньше: messages[peer] = [] убивал локальный кэш (включая attachments_meta
     // с plaintext_b64) → на следующем tick loadHistory тянул всё с сервера и для
@@ -1781,15 +1960,8 @@ function openChat(peer, opts) {
     // (elementFromPoint проба paint, Lesson #v160x14) подтверждает дыру —
     // на маке/здоровом вьюпорте scrollCure не запускается вовсе = нет мигания.
     try { if (typeof window.scrollCure === "function") {
-        setTimeout(() => {
-            // gapDetector глобален (вешается в keyboard-init ниже) — если нет,
-            // фолбэк: запускаем scrollCure как раньше (безопаснее, чем дыра).
-            if (typeof window.__murmurGapDetector === "function") {
-                try { if (window.__murmurGapDetector()) window.scrollCure(); } catch (e) {}
-            } else {
-                try { window.scrollCure(); } catch (e) {}
-            }
-        }, 250);
+        // Automatic scrollCure disabled after physical-iPhone diagnostics:
+        // it creates visible 0→80→0 jumps. Keep manual export only.
         // v160y58 (Олег 25.09 18:00: «при открытии чата дыра под композером;
         // тап в поле ввода лечит»): дыра проявляется ПОСЛЕ 250ms — рендер батча
         // (attachments/decrypt) дёргает layout позже чека. Один gapDetector-чек
@@ -1815,7 +1987,7 @@ function openChat(peer, opts) {
                 // v160y62: scrollCure ПЕРВЫЙ (реальный скролл — ЕДИНСТВЕННОЕ,
                 // что репейнтит сталую зону), потом forceReflow/nudge/settle/setVvh
                 // как страховка.
-                if (typeof window.scrollCure === "function") window.scrollCure();
+                // scrollCure disabled: artificial 0→80→0 jump is visible on iPhone.
                 if (typeof window.__murmurForceReflow === "function") window.__murmurForceReflow();
                 if (typeof window.__murmurSettle === "function") window.__murmurSettle();
                 if (typeof window.__murmurNudgeComposer === "function") window.__murmurNudgeComposer();
@@ -1833,7 +2005,7 @@ function openChat(peer, opts) {
                 // — v160x15, nudge был для FIXED-композера — теперь в потоке).
                 // Порядок как в focusout-цепочке: scrollCure ПЕРВЫЙ, потом
                 // forceReflow/nudge/settle/setVvh как страховка.
-                if (typeof window.scrollCure === "function") window.scrollCure();
+                // scrollCure disabled: artificial 0→80→0 jump is visible on iPhone.
                 if (typeof window.__murmurForceReflow === "function") window.__murmurForceReflow();
                 if (typeof window.__murmurSettle === "function") window.__murmurSettle();
                 if (typeof window.__murmurNudgeComposer === "function") window.__murmurNudgeComposer();
@@ -1841,11 +2013,35 @@ function openChat(peer, opts) {
             } catch (e) {}
         }, t));
     } } catch (e) {}
+    // v160g4-kbd6 (порт w6m2/m5): открытие = гарантированный низ + pin-окно 3с.
+    window.__murmurWasAtBottom = true;
+    window.__murmurPinUntil = Date.now() + 3000;
+    window.__murmurLastDist = 0;
     loadHistory(peer).then(() => {
         if (contacts[peer]) contacts[peer].unreadCount = 0;
         renderChatList();
         renderMessages();
         scrollToBottom();
+        // v160g4-kbd6 (порт w6m2/m3/m5): догон-серия с гейтом - decrypt/attachments
+        // растят ленту после первого скролла. dist>140 -> smooth, иначе мгновенно.
+        [100, 300, 600, 1000, 1500, 2500].forEach(t => setTimeout(() => {
+            try {
+                if (window.__murmurWasAtBottom && activePeer === peer) {
+                    const ma = messagesArea;
+                    const dist = ma.scrollHeight - ma.scrollTop - ma.clientHeight;
+                    if (dist <= 0) { window.__murmurLastDist = 0; return; }
+                    const prev = window.__murmurLastDist;
+                    window.__murmurLastDist = dist;
+                    if (prev > dist + 10) return; // smooth уже едет - не стомпить
+                    // v160g4-kbd8: пока splash виден - мгновенно (движение под
+                    // заглушкой юзер не видит; smooth после = «по частям»).
+                    const sp = document.getElementById("chat-splash");
+                    const splashUp = sp && !sp.hidden;
+                    if (dist > 140 && !splashUp) ma.scrollTo({ top: ma.scrollHeight, behavior: "smooth" });
+                    else ma.scrollTop = ma.scrollHeight;
+                }
+            } catch (e) {}
+        }, t));
         // v160z11 (Олег 27.09 11:46 видео первого/второго захода «не сработало»):
         // видео показало — splash скрылся СЛИШКОМ РАНО (после кэш-рендера), а
         // сервер-рендер loadHistory + прыжок scrollToBottom идут ПОСЛЕ → сборка
@@ -1855,11 +2051,27 @@ function openChat(peer, opts) {
         // видимую реакцию (кадр 1-3 видео: 0.5с без отклика = «не работает»).
         const splash = document.getElementById("chat-splash");
         if (splash && !splash.hidden) {
-            setTimeout(() => {
-                splash.style.transition = "opacity 250ms ease-out";
-                splash.style.opacity = "0";
-                setTimeout(() => { splash.hidden = true; }, 260);
-            }, 800);
+            // v160g4-kbd8 (лог Олега 12:14: «лента двигается по частям»):
+            // держим заглушку пока лента НЕ стабилизируется у низа
+            // (2 подряд замера dist<=2), потом один фейд. Тёплый min 250ms,
+            // холодный min 800ms (decrypt-батч), кап 1500ms.
+            const minHold = coldOpen ? 800 : 250;
+            const t0 = Date.now();
+            let okStreak = 0;
+            const splashPoll = setInterval(() => {
+                try {
+                    const ma = document.querySelector(".messages-area");
+                    const dist = ma ? (ma.scrollHeight - ma.scrollTop - ma.clientHeight) : 999;
+                    okStreak = dist <= 2 ? okStreak + 1 : 0;
+                    const elapsed = Date.now() - t0;
+                    if ((okStreak >= 2 && elapsed >= minHold) || elapsed > 1500) {
+                        clearInterval(splashPoll);
+                        splash.style.transition = "opacity 250ms ease-out";
+                        splash.style.opacity = "0";
+                        setTimeout(() => { splash.hidden = true; }, 260);
+                    }
+                } catch (e) { clearInterval(splashPoll); }
+            }, 100);
         }
     }).catch((e) => {
         console.warn("[murmur] openChat loadHistory failed:", e);
@@ -2445,6 +2657,18 @@ function renderMessages() {
             if (isSystem) {
                 statusGlyph = "⏳";
             }
+            if (m.callEvent) {
+                        const label = m.callDirection === "out"
+                    ? (m.callStatus === "declined" ? "Исходящий отклонен" : "Исходящий")
+                    : (m.callStatus === "cancelled" ? "Входящий отменен" : "Входящий");
+                const dur = m.callDuration > 0 ? " - " + formatDurationForCall(m.callDuration) : "";
+                const text = label + " " + formatTime(m.ts) + dur;
+                div.className = "call-event-text";
+                div.textContent = text;
+                messagesArea.appendChild(div);
+                renderedSigs.add(sig);
+                continue;
+            }
             let bodyText = m.body || "";
             // v160y7: 🔒-заглушка в body + уже есть чипы attachments_meta
             // → не показываем текстовую «🔒 шифрованное сообщение» строку.
@@ -2738,8 +2962,14 @@ function scrollToBottom() {
 window.__murmurWasAtBottom = true;
 if (messagesArea) {
     messagesArea.addEventListener("scroll", () => {
-        window.__murmurWasAtBottom =
-            (messagesArea.scrollHeight - messagesArea.scrollTop - messagesArea.clientHeight) < 60;
+        // v160g4-kbd6 (порт w6m5): в pin-окне флаг не снимаем - smooth-доскролл
+        // проходит промежуточные позиции (dist>60) и обрывал догон-серию.
+        if (Date.now() < (window.__murmurPinUntil || 0)) {
+            window.__murmurWasAtBottom = true;
+        } else {
+            window.__murmurWasAtBottom =
+                (messagesArea.scrollHeight - messagesArea.scrollTop - messagesArea.clientHeight) < 60;
+        }
     }, { passive: true });
 }
 window.__murmurPinBottom = () => {
@@ -3551,6 +3781,8 @@ btnBack?.addEventListener("click", () => {
     const m = document.querySelector(".messenger");
     if (m) m.classList.remove("chat-open");
     activePeer = null;
+    if (btnCall) btnCall.hidden = true;
+    if (window.MurmurCall) window.MurmurCall.close();
     // v160z10: при выходе из чата splash тоже прячем (если юзер вышел до конца
     // холодной загрузки — иначе splash остаётся на панель до loadHistory).
     const splash = document.getElementById("chat-splash");
@@ -3621,6 +3853,7 @@ function connectWS() {
             // v160t: typing events приходят голым {type:"typing", from_npub, ts}
             // (не в push-payload — эфемерные, не хранятся).
             if (handleTypingEvent(msg) || handleTypingEvent(msg.payload || {})) return;
+            if (msg.type === "call_signal" && window.MurmurCall) { window.MurmurCall.onSignal(msg).catch(e => console.warn("[call] signal error", e)); return; }
             const envelope = msg.payload || msg;
             if (msg.type === "subscribed" || msg.type === "pong" || msg.type === "error") return;
             if (envelope && envelope.ts) handleIncomingEnvelope(envelope).catch((e) => { console.warn("[murmur] envelope error:", e && e.message); });
@@ -4754,7 +4987,7 @@ async function tryAutoRestore() {
         // v160i: invite ищем и в URL, и в cookie-мосте (Safari→PWA).
         const inv = extractInviteNpub() || readInviteCookie();
         // v160z14 (Олег 23:35): лендинг-инструкция показываем и без invite —
-        // новый пользователь на murmurchat.org тоже должен видеть инструкцию
+        // новый пользователь на murmur.senswifi.ru тоже должен видеть инструкцию
         // установки PWA (иначе аккаунт создастся в Safari-контейнере впустую).
         if (!isStandalonePWA()) showInviteLanding(inv);
         // v160w5e1 (Олег 28.09 21:49): секция «Создать» скрыта в HTML по
@@ -4832,7 +5065,7 @@ async function requestNotificationPermission() {
                 const rms = r(".messenger"), ria = r("#input-area"), rcv = r("#chat-view"), rb = document.body.getBoundingClientRect(), rd = document.documentElement.getBoundingClientRect();
                 const cs = getComputedStyle(document.documentElement);
                 box.textContent =
-                    "APP=v160g4-diag\n" +
+                    "APP=v160g4-kbd13\n" +
                     "kbClass=" + document.body.classList.contains("keyboard-visible") + "\n" +
                     "kb=" + (document.documentElement.style.getPropertyValue("--kb-inset") || "-").trim() + " composerH=" + (document.documentElement.style.getPropertyValue("--composer-h") || "-").trim() + "\n" +
                     "innerH=" + f(innerHeight) + " cliH=" + f(document.documentElement.clientHeight) + "\n" +
@@ -4865,7 +5098,7 @@ async function requestNotificationPermission() {
         // браузере — localStorage murmur_diag=1 остался с отладок и строил overlay
         // на ЛЮБОЙ странице, включая invite-landing (скрин Олега: лог над буллетами).
         // Фикс: HUD — только в standalone-PWA (там и дебажим), в браузере не строим.
-        if (localStorage.getItem("murmur_diag") === "1" && isStandalonePWA()) build();
+        if (localStorage.getItem("murmur_diag") === "1") build(); // call33: и в браузере (Android Chrome diag)
         let lpTimer = null, lpFired = false, sx = 0, sy = 0;
         document.addEventListener("contextmenu", (e) => {
             const h = document.querySelector("#chat-view .chat-header");
@@ -4898,6 +5131,27 @@ async function requestNotificationPermission() {
     } catch (e) { /* ignore */ }
 })();
 
+// v160w6j: prevent vertical gestures that begin in the composer from
+// scrolling the chat or iOS page. Delegated because #input-area is rebuilt.
+(function installComposerScrollGuard() {
+    let composerTouch = null;
+    document.addEventListener("touchstart", (e) => {
+        const el = e.target && e.target.closest ? e.target.closest("#input-area") : null;
+        const t = e.touches && e.touches[0];
+        composerTouch = el && t ? { x: t.clientX, y: t.clientY } : null;
+    }, { passive: true, capture: true });
+    document.addEventListener("touchmove", (e) => {
+        if (!composerTouch) return;
+        const t = e.touches && e.touches[0];
+        if (!t) return;
+        const dy = t.clientY - composerTouch.y;
+        const dx = t.clientX - composerTouch.x;
+        if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 2 && e.cancelable) e.preventDefault();
+    }, { passive: false, capture: true });
+    ["touchend", "touchcancel"].forEach(type =>
+        document.addEventListener(type, () => { composerTouch = null; }, { passive: true, capture: true }));
+})();
+
 // Повторный заход по ссылке в уже открытом приложении (PWA живёт в фоне).
 window.addEventListener("hashchange", () => {
     if (messenger && messenger.classList.contains("active")) handleInviteHash();
@@ -4914,6 +5168,11 @@ window.addEventListener("hashchange", () => {
     if (!vv) return;
     let typing = false;
     const isInput = (el) => !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+    // call33f: Android (resizes-content) — клавиатура УЖИМАЕТ layout, класс keyboard-visible
+    // (прятание шапки) на Android не нужен и вреден: vv.height==clientHeight ломает эвристику,
+    // слепые add при typing залипают после закрытия (лог 20:39: kbC=true при закрытой КВ).
+    const IS_ANDROID = /Android/.test(navigator.userAgent);
+    try { if (IS_ANDROID) document.documentElement.classList.add("android"); } catch (e) {}
     const reset = () => { if (window.scrollY || window.scrollX) window.scrollTo(0, 0); };
     // v160x4: --vvh = реальная видимая высота (вкл. safe-зону). На iOS standalone
     // 100dvh ИСКЛЮЧАЕТ нижний safe-inset → .messenger не доходит до физического
@@ -4945,7 +5204,63 @@ window.addEventListener("hashchange", () => {
             document.documentElement.style.setProperty("--vvh", Math.round(targetPx) + "px");
         } catch (e) {}
     };
-    const animateVvh = setVvhProperty; // w5m: имя сохранено для вызовов, анимации нет
+    // v160g4-kbd11 (лог Олега 12:34): сворачивание = анимация 250мс ease-out,
+    // СИНХРОННО со слайдом клавиатуры iOS (~250мс). Мгновенное расширение
+    // (kbd10) обгоняло клавиатуру: композер уходил за ещё видимую клавиатуру.
+    // 250мс ease-out = композер едет с верхним краем клавиатуры (монолит).
+    // Открытие (typing) мгновенное с kbd9 - не тронуто. Повторный вызов с той
+    // же целью не перезапускает анимацию (без заиканий от серии resize).
+    const animateVvh = (targetPx) => {
+        try {
+            const to = Math.round(targetPx);
+            if (collapseAnim) {
+                if (collapseAnim.to === to) return; // уже едем туда
+                cancelAnimationFrame(collapseAnim.raf); collapseAnim = null;
+            }
+            const el = document.documentElement;
+            const cur = parseFloat(getComputedStyle(el).getPropertyValue("--vvh")) || to;
+            const from = cur, dist = Math.abs(to - from);
+            if (dist < 2) { setVvhProperty(to); return; }
+            const t0 = performance.now(), dur = 250;
+            const tick = (now) => {
+                if (!collapseAnim) return;
+                const k = Math.min(1, (now - t0) / dur);
+                const e = 1 - Math.pow(1 - k, 3); // ease-out cubic
+                setVvhProperty(Math.round(from + (to - from) * e));
+                // v160g4-kbd12: лента едет С композером - прижата к низу на
+                // каждом кадре (scrollTop=новый максимум). Без этого iOS
+                // держит scrollTop и между лентой и композером возникает
+                // видимый сдвиг («скачок под строку ввода»). Гейт: юзер был
+                // у низа; читающего историю не дёргаем.
+                try {
+                    if (window.__murmurWasAtBottom) {
+                        var ma = document.querySelector(".messages-area");
+                        if (ma) ma.scrollTop = ma.scrollHeight;
+                    }
+                } catch (pinErr) {}
+                try { if (window.__murmurKbSnap) window.__murmurKbSnap("coll" + Math.round(k * 100)); } catch (lgErr) {}
+                if (k < 1) collapseAnim.raf = requestAnimationFrame(tick);
+                else {
+                    collapseAnim = null; setVvhProperty(to);
+                    // v160g4-kbd13: Paint-Cure im Finale - Layout stimmt framegenau,
+                    // aber der Compositor liefert den Feed einen Frame versetzt
+                    // (PAINT-Defekt, Log 12:47). Reflow+Layer-Nudge erzwingt den
+                    // sauberen Final-Frame, Pin sichert die Endposition.
+                    try {
+                        if (window.__murmurWasAtBottom) {
+                            var ma2 = document.querySelector(".messages-area");
+                            if (ma2) ma2.scrollTop = ma2.scrollHeight;
+                        }
+                    } catch (pinErr2) {}
+                    try {
+                        if (window.__murmurNudgeComposer) window.__murmurNudgeComposer();
+                        if (window.__murmurForceReflow) window.__murmurForceReflow();
+                    } catch (cureErr) {}
+                }
+            };
+            collapseAnim = { raf: requestAnimationFrame(tick), from, to };
+        } catch (e) { try { setVvhProperty(targetPx); } catch (e2) {} }
+    };
     // v160w5k (Олег 29.09 10:05, «после очередного нажатия галочки клавиатура
     // уходит и вместе с ней уходит и строка ввода + тряска и мигание»):
     // при коллапсе vv/pageTop возвращают ПРОМЕЖУТОЧНЫЕ/мусорные значения,
@@ -4954,6 +5269,10 @@ window.addEventListener("hashchange", () => {
     // (500мс) целиком доверяем ТОЛЬКО window.innerHeight (урок v160y59:
     // он не врёт в gap-состоянии) — vvFull/bodyH игнорируем.
     let collapseLockUntil = 0;
+    // v160g4-kbd6: интерполяция collapse (порт w6m6/m7, классика-совместима).
+    // focusout: vv врёт 844 при ещё видимой клавиатуре; мгновенный прыжок --vvh
+    // = лента уходит под KB и выпрыгивает после. rAF ease-in-out 360мс.
+    let collapseAnim = null;
     const setVvh = () => {
         try {
             if (vv.scale && Math.abs(vv.scale - 1) > 0.01) return; // pinch-zoom — не трогаем
@@ -4973,7 +5292,8 @@ window.addEventListener("hashchange", () => {
                 // v160w5k: во время коллапса (500мс после focusout) vv.height+pageTop
                 // врут (промежуточные высоты, stale pageTop) — только честный
                 // innerHeight. animateVvh делает это скольжением, а не скачком.
-                h = Math.max(window.innerHeight || 0, 0);
+                if (!collapseAnim) h = Math.max(window.innerHeight || 0, 0);
+                else h = collapseAnim.to; // kbd6: не ретаргетить в окне коллапса
             } else {
                 // v160w6c (Олег 30.09 09:33, формула Олега): высота страницы =
                 // высота видимой области + высота клавиатуры. Клавиатура ушла →
@@ -4994,14 +5314,39 @@ window.addEventListener("hashchange", () => {
             // НЕ может быть больше window.innerHeight.
             const phys = window.innerHeight || 0;
             if (phys && !window.scrollY && h > phys) h = phys;
-            if (h && h > 100) animateVvh(Math.round(h)); // v160w5j: плавная интерполяция вместо скачка
+            // call30e: после fs-звонка iOS держит innerHeight РАЗДУТЫМ до
+            // screenH (912) при честной видимой высоте docClientH (844).
+            // Лог call30d: --vvh=912, композер bottom=912 при 844 видимых —
+            // строка ввода уезжает на 68px (safe-top) под экран. Клэмп:
+            // при scrollY=0 физический потолок = clientHeight документа.
+            try {
+                const docH = document.documentElement.clientHeight || 0;
+                if (docH && !window.scrollY && h > docH) h = docH;
+            } catch (dErr) {}
+            if (h && h > 100) {
+                // v160g4-kbd9: асимметрия открытие/сворачивание (лог Олега 12:18).
+                // ОТКРЫТИЕ (typing): мгновенно - низ закрыт клавиатурой, скачок
+                // невидим, композер сразу в финальной позиции (без всплытия).
+                // СВОРАЧИВАНИЕ: интерполяция 360мс (vv врёт, лечит провал ленты).
+                if (typing) setVvhProperty(Math.round(h));
+                else animateVvh(Math.round(h));
+            }
             // v160x11: keyboard inset для fixed-композера. .input-area якорится
             // к физическому низу: bottom: var(--kb-inset). Клавиатура ↑ →
             // inset = innerHeight - vv.height → инпут над клавиатурой.
             // Клавиатура ↓ → inset = 0 → инпут в самом краю (НЕ зависит
             // от залипшего --vvh / layout viewport desync — iOS надёжно
             // позиционирует fixed bottom:0 композитором).
-            const kb = typing ? Math.max(0, (window.innerHeight || 0) - (vv.height || 0)) : 0;
+            // v160g4-kbd13: iOS staucht innerHeight EINEN Frame auf Tastaturhoehe
+            // -> kb=0 statt 347, kb-inset bleibt bei 0 haengen (Composer unterm
+            // Feld). Letzte ehrliche Hoehe (>=300px) statt des gestoerten Frames.
+            try {
+                const inh = window.innerHeight || 0;
+                if (inh >= 300) window.__murmurLastGoodInH = inh;
+            } catch (lgiErr) {}
+            const kb = typing
+                ? Math.max(0, (window.__murmurLastGoodInH || window.innerHeight || 0) - (vv.height || 0))
+                : 0;
             document.documentElement.style.setProperty("--kb-inset", Math.round(kb) + "px");
         } catch (e) { /* ignore */ }
     };
@@ -5035,7 +5380,27 @@ window.addEventListener("hashchange", () => {
     // контр-пан/scroll-restore iOS проходит без нашего вмешательства. Это
     // УБИРАЕТ контр-скролл против restore = главный источник дёрганья на
     // реальном устройстве (в сим no-op — сим этот механизм НЕ видит).
-    const onVv = () => { setVvh(); if (!window.__murmurQuiet) reset(); requestAnimationFrame(pinBottom); };
+    const onVv = () => {
+        setVvh();
+        // Keep the keyboard class authoritative during the opening animation;
+        // deriving it from an intermediate vv.height is one frame too late and
+        // is what lets the composer lag behind the keyboard.
+        if (typing && !IS_ANDROID) document.body.classList.add("keyboard-visible"); // call33f
+        if (!window.__murmurQuiet) reset();
+        requestAnimationFrame(pinBottom);
+        // v160g4-kbd8: при открытой клавиатуре лента прижата к низу МГНОВЕННО
+        // (монолит). Лог 12:14: iOS сам двигает страницу (scY 347<->0) и
+        // msB прыгает 447<->794 - мгновенный пин на каждое vv-событие убирает
+        // видимую борьбу. Гейт wasAtBottom: чтение истории не хайджекаем.
+        if (typing) requestAnimationFrame(() => {
+            try {
+                if (!window.__murmurWasAtBottom) return;
+                const ma = document.querySelector(".messages-area");
+                const d = ma.scrollHeight - ma.scrollTop - ma.clientHeight;
+                if (d > 80) ma.scrollTop = ma.scrollHeight;
+            } catch (e) {}
+        });
+    };
     // v160w5m (Telegram Web A windowSize.ts: WINDOW_RESIZE_THROTTLE_MS = 250):
     // vv resize с троттлингом — iOS шлёт resize серией во время анимации
     // клавиатуры, без троттлинга каждый вызов = потенциальный ретаргет/рывок.
@@ -5167,14 +5532,18 @@ window.addEventListener("hashchange", () => {
         // = один репейнт), повторы — только forceReflow+nudge (безвизуальные).
         forceReflow();
         nudgeComposerLayer();
-        if (!gapFixTimer) scrollCure(); // только первый вызов цепочки
+        // Диагностика 02.10: scrollCure давал видимые скачки scrollY 0→80→0
+        // на каждом закрытии клавиатуры. Оставляем безусловный reflow+nudge,
+        // но не запускаем искусственный scroll в автоматическом watchdog.
+        // scrollCure остаётся экспортированным для ручной диагностики.
         // v160w5v (Олег 29.09 15:22 «делай», видео IMG_5108: 2-й цикл клавиатуры —
         // дыра y=1125 стоит до конца видео, scrollCure 1-го захода НЕ лечит:
         // layout уже в стабильном stale-состоянии, скролл физически не проходит.
         // В проверенном v160x18 лечение было СЕРИЕЙ 80/300/600 — возвращаем
         // 2-й заход через 150мс: первый скролл расширяет body, второй проходит
         // через всю stale-зону. Прыжок незаметен (оба после оседания клавиатуры).
-        if (!gapFixTimer) setTimeout(scrollCure, 150);
+        // Второй автоматический scrollCure также отключён: он был вторым
+        // скачком 0→80→0 в присланном KB-логе.
         // повтор через 300мс — если iOS снова срезал, дёргаем ещё раз (макс 5 попыток)
         const n = (parseInt(gapFixTimer || "0", 10) || 0) + 1;
         gapFixTimer = null;
@@ -5244,6 +5613,9 @@ window.addEventListener("hashchange", () => {
             // обычных скроллов вверх — иначе лента прилипнет намертво).
             // v160w6c6: unmarkKb перенесён сюда (слит с window-focusout — двойной
             // слушатель = двойное лечение в случайных фазах, диагноз avito-deep-dive2).
+            if (IS_ANDROID) {
+                document.body.classList.remove("keyboard-visible"); // call33f: Android — шапка всегда видима
+            } else {
             const unmarkKb = () => {
                 try {
                     const active = (vv.height || 0) < (document.documentElement.clientHeight || 0) - 2;
@@ -5251,6 +5623,7 @@ window.addEventListener("hashchange", () => {
                 } catch (err) {}
             };
             [100, 250, 500, 750, 1000, 1500, 2000].forEach(t => setTimeout(unmarkKb, t));
+            } // call33f
             // kb-oob(f)+(b): мгновенный scrollBottomUnfocus УБРАН из клиники
             // закрытия — реальный ma.scrollTop в кадре, когда layout в полёте,
             // рвёт нативный scroll anchoring/restore. Поллинг 600+ остаётся
@@ -5261,6 +5634,18 @@ window.addEventListener("hashchange", () => {
     document.addEventListener("focusin", (e) => {
         if (!isInput(e.target)) return;
         typing = true;
+        // v160g4-kbd6: refocus во время collapse-анимации - отменить её.
+        try { if (collapseAnim) { cancelAnimationFrame(collapseAnim.raf); collapseAnim = null; } } catch (err) {}
+        // v160w6h: enter the keyboard layout immediately on focus, before the
+        // first visualViewport.resize arrives. Waiting for vv.height < clientHeight
+        // leaves the flex composer at the old layout-viewport bottom for one iOS
+        // frame while the keyboard is already moving, which is the visible gap
+        // in IMG_5154. The class is removed only on focusout after collapse.
+        if (e.target.id === "message-input") {
+            if (!IS_ANDROID) document.body.classList.add("keyboard-visible"); // call33f: Android — класс не ставим
+            setVvh();
+            syncComposerSpace();
+        }
         // v160x20 (Олег 11:11: «когда тапаешь в печать — выше появляется не последнее
         // сообщение, а предыдущие»): при открытии клавиатуры клавиатура сжимает
         // messages-area и iOS держит scrollTop — юзер видит предпоследние. Скроллим
@@ -5282,6 +5667,7 @@ window.addEventListener("hashchange", () => {
         // keyboard-visible на body: шапка чата скрыта, композер (flex-child)
         // прижимается к низу колонки без дыры. Ставим сразу + с поллингом:
         // изометрия = vv.height < documentElement.clientHeight.
+        if (!IS_ANDROID) { // call33f: Android — класс не управляется поллингами
         const markKb = () => {
             try {
                 const active = (vv.height || 0) < (document.documentElement.clientHeight || 0) - 2;
@@ -5290,6 +5676,7 @@ window.addEventListener("hashchange", () => {
         };
         markKb();
         [50, 150, 300, 500, 800].forEach(t => setTimeout(markKb, t));
+        } // call33f
         [50, 150, 300, 500, 800].forEach(t => setTimeout(reset, t));
     }, true);
     // kb-oob(f): reset заглушён на collapse (окно тишины из focusout).
@@ -5322,3 +5709,103 @@ window.addEventListener("hashchange", () => {
     // метрики честные при видимой дыре — PAINT устар, layout не врёт).
     try { window.__murmurSetVvh = setVvh; } catch (e) {}
 })();
+
+// v160g4-kbd1 (05.10.2026, diag-first по правилу Олега 30.09): KB ring-buffer
+// + кнопка копирования. Строится только при murmur_diag=1 в standalone-PWA.
+// События: focusin/focusout (capture), vv resize/scroll (троттлинг 40мс),
+// win-scroll + снапшот метрик на каждое событие. Кнопка KB копирует лог.
+(function () {
+    try {
+        var ok = false;
+        try { ok = (localStorage.getItem("murmur_diag") === "1"); } catch (e) {}
+        if (!ok) return;
+        // call33: гейт standalone снят — диагностика нужна в браузере (Android Chrome)
+        // (var standalone = ...; if (!standalone) return;)
+        var LOG = [];
+        var f = function (v) { return (v == null || isNaN(v)) ? "-" : Math.round(v); };
+        var snap = function (ev) {
+            var vv = window.visualViewport;
+            var cs = getComputedStyle(document.documentElement);
+            var ia = document.querySelector("#input-area");
+            var ma = document.querySelector(".messages-area");
+            var ria = ia ? ia.getBoundingClientRect() : null;
+            var rma = ma ? ma.getBoundingClientRect() : null;
+            return "t=" + Date.now() +
+                " ev=" + ev +
+                " vvH=" + (vv ? f(vv.height) : "none") +
+                " vvT=" + (vv ? f(vv.offsetTop) : "-") +
+                " pgT=" + (vv ? f(vv.pageTop) : "-") +
+                " inH=" + f(window.innerHeight) +
+                " cliH=" + f(document.documentElement.clientHeight) +
+                " scY=" + f(window.scrollY) +
+                " vvh=" + (cs.getPropertyValue("--vvh") || "-").trim() +
+                " kb=" + (cs.getPropertyValue("--kb-inset") || "-").trim() +
+                " cH=" + (cs.getPropertyValue("--composer-h") || "-").trim() +
+                " kbC=" + document.body.classList.contains("keyboard-visible") +
+                " iaB=" + (ria ? f(ria.bottom) : "-") +
+                " msB=" + (rma ? f(rma.bottom) : "-");
+        };
+        var log = function (ev) {
+            try {
+                LOG.push(snap(String(ev)));
+                if (LOG.length > 120) LOG.shift();
+            } catch (e) {}
+        };
+        // v160g4-kbd12: экспорт снапшота - animateVvh пишет кадры collapse
+        // в KB-лог (diag-first: факты по каждому кадру, не догадки).
+        try { window.__murmurKbSnap = log; } catch (e) {}
+        var lastVV = 0;
+        var vvLog = function () {
+            var n = Date.now();
+            if (n - lastVV < 40) return;
+            lastVV = n;
+            log("vv-resize");
+        };
+        window.addEventListener("focusin", function (e) {
+            var tg = (e.target && e.target.tagName) ? e.target.tagName : "?";
+            log("focusin:" + tg);
+        }, true);
+        window.addEventListener("focusout", function (e) {
+            var tg = (e.target && e.target.tagName) ? e.target.tagName : "?";
+            log("focusout:" + tg);
+        }, true);
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener("resize", vvLog);
+            window.visualViewport.addEventListener("scroll", function () { log("vv-scroll"); });
+        }
+        window.addEventListener("scroll", function () { log("win-scroll"); }, { passive: true });
+        window.__murmurKbDump = function () { return LOG.join("\\n") || "(empty)"; };
+        var btn = document.createElement("button");
+        btn.textContent = "KB";
+        btn.setAttribute("aria-label", "copy keyboard log");
+        btn.style.cssText = "position:fixed;right:6px;bottom:120px;z-index:99999;background:rgba(0,0,0,.85);color:#4f4;border:1px solid #4f4;border-radius:6px;font:bold 12px monospace;padding:8px 10px;";
+        btn.addEventListener("click", function () {
+            var txt = "KB-LOG " + new Date().toISOString() + "\\n" + window.__murmurKbDump();
+            var done = function () {
+                btn.textContent = "OK";
+                setTimeout(function () { btn.textContent = "KB"; }, 1200);
+            };
+            var fallback = function () {
+                var ta = document.createElement("textarea");
+                ta.value = txt;
+                ta.style.cssText = "position:fixed;left:-9999px;top:0;";
+                document.body.appendChild(ta);
+                ta.focus(); ta.select();
+                try { document.execCommand("copy"); done(); } catch (e2) {}
+                document.body.removeChild(ta);
+            };
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(txt).then(done, fallback);
+                } else { fallback(); }
+            } catch (e) { fallback(); }
+        });
+        var mount = function () {
+            if (document.body) document.body.appendChild(btn);
+            else setTimeout(mount, 300);
+        };
+        mount();
+        log("init");
+    } catch (e) {}
+})();
+
