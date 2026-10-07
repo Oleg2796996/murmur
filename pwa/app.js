@@ -2622,6 +2622,9 @@ function renderMessages() {
                     console.log("[murmur] rerendering attachments for sig", sig.slice(0, 12), "dir=", m.direction);
                     // Reuse existing bubble — переиспользуем DOM, только дорисуем attachments.
                     div = existingBubble;
+                    // v160w6n: если bubble отрендерился до того, как attachments_meta
+                    // доехал (repair-путь), класс мог не выставиться — дожимаем тут.
+                    if (!String(m.body || "").trim()) div.classList.add("bubble-media");
                     _rerenderAttachments = true;
                 } else {
                     continue;
@@ -2645,6 +2648,13 @@ function renderMessages() {
                 div.className = "bubble bubble-system";
             } else {
                 div.className = "bubble " + m.direction;
+                // v160w6n (Олег 07.10 «безрамочный формат для фото и видео»):
+                // медиа--only сообщение (есть attachments, текста нет) → бабл без
+                // фона/паддинга/тени — медиа встаёт вплотную, время поверх
+                // плашкой (Telegram-style). Сообщения с текстом остаются в рамке.
+                const mediaOnly = Array.isArray(m.attachments_meta) && m.attachments_meta.length > 0 &&
+                    !String(m.body || "").trim();
+                if (mediaOnly) div.classList.add("bubble-media");
             }
             div.setAttribute("data-sig", sig);
             let statusGlyph = "";

@@ -859,6 +859,38 @@ button.small { padding: 8px 12px; font-size: 13px; }
 }
 .bubble.out .bubble-time { color: rgba(225,233,240,0.6); }
 
+/* ═══ v160w6n (Олег 07.10 20:51 «безрамочный формат для фото и видео»): ═══
+   Медиа-only бабл (фото/видео без текста) — без фона/паддинга/тени, как в
+   Telegram: медиа вплотную, время — полупрозрачной плашкой на самом медиа.
+   Сообщения «медиа + текст» остаются обычными баблами (рамка вокруг всего). */
+.bubble.bubble-media {
+    background: transparent;
+    padding: 0;
+    box-shadow: none;
+    max-width: min(78%, 300px); /* чуть шире текстовых: медиа должно дышать */
+    border-radius: 12px; /* скругление для overflow плашки времени по углам медиа */
+}
+.bubble.bubble-media.out { border-bottom-right-radius: 12px; }
+.bubble.bubble-media.in { border-bottom-left-radius: 12px; }
+/* Время/галочки поверх медиа — полупрозрачная плашка в углу (внутри бабла,
+   поверх attach-списка). Показывается ТОЛЬКО когда текста нет: если текст
+   есть — бабл обычный, штатная .bubble-time под текстом остаётся. */
+.bubble.bubble-media .bubble-time {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    background: rgba(0, 0, 0, 0.45);
+    color: rgba(255, 255, 255, 0.92);
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-size: 11px;
+    line-height: 1.2;
+    z-index: 3;
+    pointer-events: none;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+}
+.bubble.bubble-media .msg-attach-list { margin: 0; } /* был 0 0 4px — лишний зазор снизу */
+
 .day-divider {
     align-self: center;
     background: rgba(0,0,0,0.3);
