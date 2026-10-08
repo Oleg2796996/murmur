@@ -13,7 +13,7 @@
     background-image: radial-gradient(ellipse 60% 35% at 20% 0%, rgba(34,158,217,.13), transparent),
       radial-gradient(ellipse 50% 45% at 85% 100%, rgba(94,234,212,.08), transparent); }
   .wrap { max-width:680px; margin:0 auto; }
-  header { text-align:center; margin-bottom:26px; }
+  header { text-align:center; margin-bottom:26px; position:relative; }
   h1 { font-size:30px; font-weight:800; letter-spacing:-.5px;
     background:linear-gradient(90deg,var(--accent),var(--accent2));
     -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
@@ -32,80 +32,235 @@
   td { font-size:13.5px; line-height:1.5; color:var(--muted); padding:8px 10px; border-top:1px solid rgba(255,255,255,.07); }
   td:first-child { color:var(--text); font-weight:600; white-space:nowrap; }
   .foot { text-align:center; margin-top:22px; font-size:12px; color:#5a6b80; }
+  .lang-btn { position:absolute; top:-6px; right:0; background:none; border:1px solid rgba(255,255,255,.12);
+    border-radius:10px; cursor:pointer; font-size:16px; padding:5px 10px; opacity:.85; line-height:1; color:var(--text); }
+  .lang-btn:hover { opacity:1; border-color:var(--accent); }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
     <a class="back" href="/">← murmurchat.org</a>
-    <h1>Privacy Policy</h1>
-    <div class="sub">Last updated: 2026-09-28</div>
+    <button class="lang-btn" id="lang-btn" title="Language / Язык / Langue / Idioma / Sprache">🌐 en</button>
+    <h1 data-i="h1">Privacy Policy</h1>
+    <div class="sub" data-i="updated">Last updated: 2026-09-28</div>
   </header>
 
   <div class="panel">
-    <p>MurMur is a private messenger. This page is short because there is almost
+    <p data-i="intro">MurMur is a private messenger. This page is short because there is almost
     nothing to describe: <b>we hold no personal data about you.</b></p>
   </div>
 
   <div class="panel">
-    <h2>What we do NOT collect</h2>
+    <h2 data-i="h_notcollect">What we do NOT collect</h2>
     <ul>
-      <li><span class="ic">🚫</span><div><b>No account.</b> No email, no phone number, no name is ever registered.</div></li>
-      <li><span class="ic">🔐</span><div><b>No message content.</b> Messages are end-to-end encrypted on your device. The server only relays encrypted envelopes it cannot read.</div></li>
-      <li><span class="ic">🧹</span><div><b>No message history.</b> An undelivered envelope stays on the server for at most <b>24 hours</b>, then is deleted permanently. We cannot recover a message we no longer have.</div></li>
-      <li><span class="ic">📇</span><div><b>No contact book.</b> Your contacts live on your device. We do not know who you talk to.</div></li>
-      <li><span class="ic">🕶️</span><div><b>No tracking.</b> No advertising SDKs, no fingerprinting, no analytics cookies.</div></li>
-      <li><span class="ic">🛡️</span><div><b>Nothing to hand over.</b> If someone demands your data, there is nothing to give.</div></li>
+      <li><span class="ic">🚫</span><div data-i="li_account"><b>No account.</b> No email, no phone number, no name is ever registered.</div></li>
+      <li><span class="ic">🔐</span><div data-i="li_content"><b>No message content.</b> Messages are end-to-end encrypted on your device. The server only relays encrypted envelopes it cannot read.</div></li>
+      <li><span class="ic">🧹</span><div data-i="li_history"><b>No message history.</b> An undelivered envelope stays on the server for at most <b>24 hours</b>, then is deleted permanently. We cannot recover a message we no longer have.</div></li>
+      <li><span class="ic">📇</span><div data-i="li_contacts"><b>No contact book.</b> Your contacts live on your device. We do not know who you talk to.</div></li>
+      <li><span class="ic">🕶️</span><div data-i="li_tracking"><b>No tracking.</b> No advertising SDKs, no fingerprinting, no analytics cookies.</div></li>
+      <li><span class="ic">🛡️</span><div data-i="li_nothing"><b>Nothing to hand over.</b> If someone demands your data, there is nothing to give.</div></li>
     </ul>
   </div>
 
   <div class="panel">
-    <h2>What is technically visible to the server</h2>
-    <p>Running a relay inevitably exposes some information to the operator, even when
+    <h2 data-i="h_visible">What is technically visible to the server</h2>
+    <p data-i="p_visible">Running a relay inevitably exposes some information to the operator, even when
     the content is encrypted:</p>
     <ul>
-      <li><span class="ic">📦</span><div><b>Delivery metadata</b> — which encrypted envelope goes to which public key — exists only while the envelope is queued for delivery, then is deleted together with it.</div></li>
-      <li><span class="ic">📊</span><div><b>Traffic volume</b> is visible at the network layer, as it is for any internet service.</div></li>
+      <li><span class="ic">📦</span><div data-i="li_meta"><b>Delivery metadata</b> — which encrypted envelope goes to which public key — exists only while the envelope is queued for delivery, then is deleted together with it.</div></li>
+      <li><span class="ic">📊</span><div data-i="li_traffic"><b>Traffic volume</b> is visible at the network layer, as it is for any internet service.</div></li>
     </ul>
-    <p><b>We do not sell, share, or monetize this data.</b> There is no business model that depends on it.</p>
+    <p data-i="p_nosell"><b>We do not sell, share, or monetize this data.</b> There is no business model that depends on it.</p>
   </div>
 
   <div class="panel">
-    <h2>Data retention</h2>
+    <h2 data-i="h_retention">Data retention</h2>
     <table>
-      <tr><td>Undelivered message</td><td>max 24 hours on the server, then deleted permanently</td></tr>
-      <tr><td>Delivered message content</td><td>never stored on the server; kept only on the devices of the chat participants</td></tr>
-      <tr><td>Identity keys</td><td>generated on your device, never sent to us</td></tr>
-      <tr><td>Operational logs</td><td>minimal, rotated, not used for profiling</td></tr>
+      <tr><td data-i="t_r1a">Undelivered message</td><td data-i="t_r1b">max 24 hours on the server, then deleted permanently</td></tr>
+      <tr><td data-i="t_r2a">Delivered message content</td><td data-i="t_r2b">never stored on the server; kept only on the devices of the chat participants</td></tr>
+      <tr><td data-i="t_r3a">Identity keys</td><td data-i="t_r3b">generated on your device, never sent to us</td></tr>
+      <tr><td data-i="t_r4a">Operational logs</td><td data-i="t_r4b">minimal, rotated, not used for profiling</td></tr>
     </table>
   </div>
 
   <div class="panel">
-    <h2>Your rights</h2>
-    <p>Because we do not hold personal data about you, there is usually nothing for us
+    <h2 data-i="h_rights">Your rights</h2>
+    <p data-i="p_rights">Because we do not hold personal data about you, there is usually nothing for us
     to export or delete on request. If you believe we hold data about you, contact us
     and we will verify.</p>
   </div>
 
   <div class="panel">
-    <h2>Donations</h2>
-    <p>If you choose to support MurMur, the payment processor may collect the information
+    <h2 data-i="h_donations">Donations</h2>
+    <p data-i="p_don1">If you choose to support MurMur, the payment processor may collect the information
     required by law to process a payment. <b>We do not receive your card details</b>, and we
     do not connect a donation to any chat identity.</p>
-    <p>You can also support the project with Monero — a privacy-preserving payment
+    <p data-i="p_don2">You can also support the project with Monero — a privacy-preserving payment
     that reveals nothing about you to us. <b>Tap the address to copy it:</b></p>
     <div id="xmr-box" role="button" onclick="copyXmr()" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(94,234,212,.35);background:rgba(94,234,212,.06);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.6;color:#7eead4;word-break:break-all;cursor:pointer;text-align:center;">83mpQoMkdo1bcLPgqzY2ukbgr3nKb8JKhTJLtRxnNCCqCgsb6GkYDz6YRxm63jUHh3QjhiLKbmWbdQBFwMPjJKfLG8gVG6n</div>
-    <div id="xmr-hint" style="display:none;color:#3fd07a;font-size:12.5px;text-align:center;margin-top:6px;">✓ Copied</div>
+    <div id="xmr-hint" data-i="copied" style="display:none;color:#3fd07a;font-size:12.5px;text-align:center;margin-top:6px;">✓ Copied</div>
   </div>
 
   <div class="panel">
-    <h2>Contact</h2>
+    <h2 data-i="h_contact">Contact</h2>
     <p>Website: <b>murmurchat.org</b> · Email: <b>murmurchat@outlook.com</b></p>
   </div>
 
-  <div class="foot">MurMur — private messenger · murmurchat.org</div>
+  <div class="foot" data-i="foot">MurMur — private messenger · murmurchat.org</div>
 </div>
 <script>
+// ── i18n (v160z16): 5 языков, тот же ключ murmur_lang что и в PWA (i18n.js).
+var T = {
+  h1: { en:"Privacy Policy", ru:"Политика конфиденциальности", fr:"Politique de confidentialité", es:"Política de privacidad", de:"Datenschutzerklärung" },
+  updated: { en:"Last updated: 2026-09-28", ru:"Обновлено: 2026-09-28", fr:"Dernière mise à jour : 2026-09-28", es:"Última actualización: 2026-09-28", de:"Zuletzt aktualisiert: 2026-09-28" },
+  intro: {
+    en:"MurMur is a private messenger. This page is short because there is almost nothing to describe: <b>we hold no personal data about you.</b>",
+    ru:"MurMur — приватный мессенджер. Эта страница короткая, потому что описывать почти нечего: <b>у нас нет о тебе никаких персональных данных.</b>",
+    fr:"MurMur est un messager privé. Cette page est courte car il n'y a presque rien à décrire : <b>nous ne détenons aucune donnée personnelle vous concernant.</b>",
+    es:"MurMur es un mensajero privado. Esta página es corta porque casi no hay nada que describir: <b>no tenemos ningún dato personal sobre ti.</b>",
+    de:"MurMur ist ein privater Messenger. Diese Seite ist kurz, weil es fast nichts zu beschreiben gibt: <b>wir besitzen keine persönlichen Daten über dich.</b>"
+  },
+  h_notcollect: { en:"What we do NOT collect", ru:"Что мы НЕ собираем", fr:"Ce que nous ne collectons pas", es:"Lo que NO recogemos", de:"Was wir NICHT sammeln" },
+  li_account: {
+    en:"<b>No account.</b> No email, no phone number, no name is ever registered.",
+    ru:"<b>Никакого аккаунта.</b> Ни email, ни номера телефона, ни имени — ничего не регистрируется.",
+    fr:"<b>Aucun compte.</b> Aucun e-mail, aucun numéro de téléphone, aucun nom ne sont enregistrés.",
+    es:"<b>Sin cuenta.</b> No se registra ningún correo, ni número de teléfono, ni nombre.",
+    de:"<b>Kein Konto.</b> Keine E-Mail, keine Telefonnummer, kein Name wird je registriert."
+  },
+  li_content: {
+    en:"<b>No message content.</b> Messages are end-to-end encrypted on your device. The server only relays encrypted envelopes it cannot read.",
+    ru:"<b>Никакого содержимого сообщений.</b> Сообщения шифруются сквозным шифрованием на твоём устройстве. Сервер лишь передаёт зашифрованные конверты, которые не может прочитать.",
+    fr:"<b>Aucun contenu de message.</b> Les messages sont chiffrés de bout en bout sur votre appareil. Le serveur ne fait que relayer des enveloppes chiffrées qu'il ne peut pas lire.",
+    es:"<b>Sin contenido de mensajes.</b> Los mensajes se cifran de extremo a extremo en tu dispositivo. El servidor solo retransmite sobres cifrados que no puede leer.",
+    de:"<b>Kein Nachrichteninhalt.</b> Nachrichten werden auf deinem Gerät Ende-zu-Ende verschlüsselt. Der Server leitet nur verschlüsselte Umschläge weiter, die er nicht lesen kann."
+  },
+  li_history: {
+    en:"<b>No message history.</b> An undelivered envelope stays on the server for at most <b>24 hours</b>, then is deleted permanently. We cannot recover a message we no longer have.",
+    ru:"<b>Никакой истории сообщений.</b> Недоставленный конверт хранится на сервере не дольше <b>24 часов</b>, затем удаляется безвозвратно. Мы не можем восстановить сообщение, которого у нас больше нет.",
+    fr:"<b>Aucun historique des messages.</b> Une enveloppe non livrée reste sur le serveur au maximum <b>24 heures</b>, puis est supprimée définitivement. Nous ne pouvons pas récupérer un message que nous n'avons plus.",
+    es:"<b>Sin historial de mensajes.</b> Un sobre no entregado permanece en el servidor como máximo <b>24 horas</b> y luego se elimina permanentemente. No podemos recuperar un mensaje que ya no tenemos.",
+    de:"<b>Kein Nachrichtenverlauf.</b> Ein unzustellbarer Umschlag bleibt höchstens <b>24 Stunden</b> auf dem Server und wird dann dauerhaft gelöscht. Wir können eine Nachricht nicht wiederherstellen, die wir nicht mehr haben."
+  },
+  li_contacts: {
+    en:"<b>No contact book.</b> Your contacts live on your device. We do not know who you talk to.",
+    ru:"<b>Никакой книги контактов.</b> Твои контакты живут на твоём устройстве. Мы не знаем, с кем ты общаешься.",
+    fr:"<b>Aucun carnet d'adresses.</b> Vos contacts restent sur votre appareil. Nous ne savons pas avec qui vous parlez.",
+    es:"<b>Sin libreta de contactos.</b> Tus contactos viven en tu dispositivo. No sabemos con quién hablas.",
+    de:"<b>Kein Adressbuch.</b> Deine Kontakte bleiben auf deinem Gerät. Wir wissen nicht, mit wem du sprichst."
+  },
+  li_tracking: {
+    en:"<b>No tracking.</b> No advertising SDKs, no fingerprinting, no analytics cookies.",
+    ru:"<b>Никакого трекинга.</b> Ни рекламных SDK, ни фингерпринтинга, ни аналитических cookie.",
+    fr:"<b>Aucun suivi.</b> Pas de SDK publicitaires, pas de fingerprinting, pas de cookies analytiques.",
+    es:"<b>Sin rastreo.</b> Sin SDKs publicitarios, sin fingerprinting, sin cookies analíticas.",
+    de:"<b>Kein Tracking.</b> Keine Werbe-SDKs, kein Fingerprinting, keine Analyse-Cookies."
+  },
+  li_nothing: {
+    en:"<b>Nothing to hand over.</b> If someone demands your data, there is nothing to give.",
+    ru:"<b>Нечего выдавать.</b> Если кто-то потребует твои данные — выдавать нечего.",
+    fr:"<b>Rien à remettre.</b> Si quelqu'un exige vos données, il n'y a rien à donner.",
+    es:"<b>Nada que entregar.</b> Si alguien exige tus datos, no hay nada que dar.",
+    de:"<b>Nichts herauszugeben.</b> Wenn jemand deine Daten fordert, gibt es nichts zu übergeben."
+  },
+  h_visible: { en:"What is technically visible to the server", ru:"Что технически видно серверу", fr:"Ce qui est techniquement visible par le serveur", es:"Lo que técnicamente ve el servidor", de:"Was für den Server technisch sichtbar ist" },
+  p_visible: {
+    en:"Running a relay inevitably exposes some information to the operator, even when the content is encrypted:",
+    ru:"Работа релея неизбежно раскрывает оператору некоторую информацию, даже когда содержимое зашифровано:",
+    fr:"Exploiter un relais expose inévitablement certaines informations à l'opérateur, même lorsque le contenu est chiffré :",
+    es:"Operar un relé expone inevitablemente cierta información al operador, incluso cuando el contenido está cifrado:",
+    de:"Der Betrieb eines Relays legt dem Betreiber zwangsläufig einige Informationen offen, selbst wenn der Inhalt verschlüsselt ist:"
+  },
+  li_meta: {
+    en:"<b>Delivery metadata</b> — which encrypted envelope goes to which public key — exists only while the envelope is queued for delivery, then is deleted together with it.",
+    ru:"<b>Метаданные доставки</b> — какой зашифрованный конверт какому публичному ключу предназначен — существуют лишь пока конверт в очереди на доставку, затем удаляются вместе с ним.",
+    fr:"<b>Métadonnées de livraison</b> — quelle enveloppe chiffrée va à quelle clé publique — n'existent que tant que l'enveloppe est en attente de livraison, puis sont supprimées avec elle.",
+    es:"<b>Metadatos de entrega</b> — qué sobre cifrado va a qué clave pública — existen solo mientras el sobre está en cola de entrega y luego se eliminan junto con él.",
+    de:"<b>Zustellmetadaten</b> — welcher verschlüsselte Umschlag zu welchem öffentlichen Schlüssel gehört — existieren nur, solange der Umschlag auf Zustellung wartet, und werden dann mit ihm gelöscht."
+  },
+  li_traffic: {
+    en:"<b>Traffic volume</b> is visible at the network layer, as it is for any internet service.",
+    ru:"<b>Объём трафика</b> виден на сетевом уровне — как у любого интернет-сервиса.",
+    fr:"<b>Le volume de trafic</b> est visible au niveau du réseau, comme pour tout service Internet.",
+    es:"<b>El volumen de tráfico</b> es visible a nivel de red, como en cualquier servicio de internet.",
+    de:"<b>Das Traffic-Volumen</b> ist auf Netzwerkebene sichtbar, wie bei jedem Internetdienst."
+  },
+  p_nosell: {
+    en:"<b>We do not sell, share, or monetize this data.</b> There is no business model that depends on it.",
+    ru:"<b>Мы не продаём, не передаём и не монетизируем эти данные.</b> У нас нет бизнес-модели, которая от них зависит.",
+    fr:"<b>Nous ne vendons, ne partageons et ne monétisons pas ces données.</b> Aucun modèle économique n'en dépend.",
+    es:"<b>No vendemos, compartimos ni monetizamos estos datos.</b> No existe ningún modelo de negocio que dependa de ellos.",
+    de:"<b>Wir verkaufen, teilen oder monetarisieren diese Daten nicht.</b> Es gibt kein Geschäftsmodell, das davon abhängt."
+  },
+  h_retention: { en:"Data retention", ru:"Хранение данных", fr:"Conservation des données", es:"Conservación de datos", de:"Datenspeicherung" },
+  t_r1a: { en:"Undelivered message", ru:"Недоставленное сообщение", fr:"Message non livré", es:"Mensaje no entregado", de:"Unzustellbare Nachricht" },
+  t_r1b: { en:"max 24 hours on the server, then deleted permanently", ru:"максимум 24 часа на сервере, затем удаляется безвозвратно", fr:"max. 24 heures sur le serveur, puis supprimé définitivement", es:"máx. 24 horas en el servidor y luego se elimina permanentemente", de:"max. 24 Stunden auf dem Server, dann dauerhaft gelöscht" },
+  t_r2a: { en:"Delivered message content", ru:"Содержимое доставленных сообщений", fr:"Contenu des messages livrés", es:"Contenido de los mensajes entregados", de:"Inhalt zugestellter Nachrichten" },
+  t_r2b: { en:"never stored on the server; kept only on the devices of the chat participants", ru:"никогда не хранится на сервере; остаётся только на устройствах участников чата", fr:"jamais stocké sur le serveur ; conservé uniquement sur les appareils des participants", es:"nunca se almacena en el servidor; solo permanece en los dispositivos de los participantes", de:"wird nie auf dem Server gespeichert; bleibt nur auf den Geräten der Chat-Teilnehmer" },
+  t_r3a: { en:"Identity keys", ru:"Ключи идентичности", fr:"Clés d'identité", es:"Claves de identidad", de:"Identitätsschlüssel" },
+  t_r3b: { en:"generated on your device, never sent to us", ru:"генерируются на твоём устройстве, нам не отправляются", fr:"générées sur votre appareil, jamais envoyées", es:"se generan en tu dispositivo, nunca se nos envían", de:"werden auf deinem Gerät erzeugt, nie an uns gesendet" },
+  t_r4a: { en:"Operational logs", ru:"Операционные логи", fr:"Journaux d'exploitation", es:"Registros operativos", de:"Betriebsprotokolle" },
+  t_r4b: { en:"minimal, rotated, not used for profiling", ru:"минимальные, ротируются, не используются для профилирования", fr:"minimaux, rotatifs, non utilisés pour le profilage", es:"mínimos, rotativos, no se usan para perfilado", de:"minimal, rotierend, nicht zur Profilierung genutzt" },
+  h_rights: { en:"Your rights", ru:"Твои права", fr:"Vos droits", es:"Tus derechos", de:"Deine Rechte" },
+  p_rights: {
+    en:"Because we do not hold personal data about you, there is usually nothing for us to export or delete on request. If you believe we hold data about you, contact us and we will verify.",
+    ru:"Поскольку у нас нет о тебе персональных данных, обычно нам нечего экспортировать или удалять по запросу. Если считаешь, что у нас есть данные о тебе — напиши нам, мы проверим.",
+    fr:"Comme nous ne détenons pas de données personnelles vous concernant, nous n'avons généralement rien à exporter ou à supprimer sur demande. Si vous pensez que nous détenons des données vous concernant, contactez-nous et nous vérifierons.",
+    es:"Como no tenemos datos personales sobre ti, normalmente no hay nada que exportar o eliminar a petición. Si crees que tenemos datos sobre ti, contáctanos y lo verificaremos.",
+    de:"Da wir keine persönlichen Daten über dich besitzen, gibt es üblicherweise nichts zu exportieren oder auf Anfrage zu löschen. Glaubst du, dass wir Daten über dich haben, kontaktiere uns und wir prüfen es."
+  },
+  h_donations: { en:"Donations", ru:"Донаты", fr:"Dons", es:"Donaciones", de:"Spenden" },
+  p_don1: {
+    en:"If you choose to support MurMur, the payment processor may collect the information required by law to process a payment. <b>We do not receive your card details</b>, and we do not connect a donation to any chat identity.",
+    ru:"Если решишь поддержать MurMur, платёжный процессор может собрать информацию, необходимую по закону для проведения платежа. <b>Мы не получаем данные твоей карты</b> и не связываем донат с какой-либо идентичностью в чате.",
+    fr:"Si vous choisissez de soutenir MurMur, le processeur de paiement peut collecter les informations exigées par la loi pour traiter un paiement. <b>Nous ne recevons pas les détails de votre carte</b> et nous ne relions aucun don à une identité de chat.",
+    es:"Si decides apoyar a MurMur, el procesador de pagos puede recopilar la información que la ley exige para procesar un pago. <b>No recibimos los datos de tu tarjeta</b> y no vinculamos ninguna donación a una identidad de chat.",
+    de:"Wenn du MurMur unterstützen möchtest, kann der Zahlungsdienstleister die gesetzlich erforderlichen Informationen zur Zahlungsabwicklung erfassen. <b>Wir erhalten deine Kartendaten nicht</b> und verknüpfen keine Spende mit einer Chat-Identität."
+  },
+  p_don2: {
+    en:"You can also support the project with Monero — a privacy-preserving payment that reveals nothing about you to us. <b>Tap the address to copy it:</b>",
+    ru:"Также можно поддержать проект Monero — приватной валютой, которая ничего о тебе нам не раскрывает. <b>Нажми на адрес, чтобы скопировать:</b>",
+    fr:"Vous pouvez aussi soutenir le projet en Monero — un paiement respectueux de la vie privée qui ne révèle rien de vous. <b>Touchez l'adresse pour la copier :</b>",
+    es:"También puedes apoyar el proyecto con Monero — un pago que preserva la privacidad y no revela nada sobre ti. <b>Toca la dirección para copiarla:</b>",
+    de:"Du kannst das Projekt auch mit Monero unterstützen — eine privatsphärefreundliche Zahlung, die uns nichts über dich verrät. <b>Tippe auf die Adresse, um sie zu kopieren:</b>"
+  },
+  copied: { en:"✓ Copied", ru:"✓ Скопировано", fr:"✓ Copié", es:"✓ Copiado", de:"✓ Kopiert" },
+  h_contact: { en:"Contact", ru:"Контакты", fr:"Contact", es:"Contacto", de:"Kontakt" },
+  foot: { en:"MurMur — private messenger · murmurchat.org", ru:"MurMur — приватный мессенджер · murmurchat.org", fr:"MurMur — messagerie privée · murmurchat.org", es:"MurMur — mensajería privada · murmurchat.org", de:"MurMur — privater Messenger · murmurchat.org" }
+};
+var LANGS = ["en", "ru", "fr", "es", "de"];
+var LS_KEY = "murmur_lang"; // тот же ключ, что в PWA i18n.js
+
+function savedLang() {
+  try {
+    var v = localStorage.getItem(LS_KEY);
+    if (v && LANGS.indexOf(v) >= 0) return v;
+  } catch (e) {}
+  var nl = (navigator.language || "en").toLowerCase();
+  for (var i = 0; i < LANGS.length; i++) if (nl.indexOf(LANGS[i]) === 0) return LANGS[i];
+  return "en";
+}
+
+var lang = savedLang();
+
+function apply(l) {
+  lang = l;
+  document.documentElement.lang = l;
+  document.title = l === "ru" ? "MurMur — Политика конфиденциальности"
+    : l === "fr" ? "MurMur — Politique de confidentialité"
+    : l === "es" ? "MurMur — Política de privacidad"
+    : l === "de" ? "MurMur — Datenschutzerklärung"
+    : "MurMur — Privacy Policy";
+  var els = document.querySelectorAll("[data-i]");
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i], key = el.getAttribute("data-i");
+    if (T[key] && T[key][l]) el.innerHTML = T[key][l];
+  }
+  var btn = document.getElementById("lang-btn");
+  if (btn) btn.textContent = "🌐 " + l;
+}
+
 function copyXmr() {
   var t = document.getElementById("xmr-box").textContent.trim();
   var ok = function () {
@@ -124,6 +279,14 @@ function copyXmr() {
     navigator.clipboard.writeText(t).then(ok).catch(function () { fallback(); ok(); });
   } else { fallback(); ok(); }
 }
+
+document.getElementById("lang-btn").addEventListener("click", function () {
+  var next = LANGS[(LANGS.indexOf(lang) + 1) % LANGS.length];
+  try { localStorage.setItem(LS_KEY, next); } catch (e) {}
+  apply(next);
+});
+
+apply(lang);
 </script>
 </body>
 </html>
