@@ -409,7 +409,7 @@
     };
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: callMode === "video" });
     const localVideo = $("call-local-video");
-    if (localVideo) { localVideo.srcObject = localStream; localVideo.play().catch(() => {}); }
+    if (localVideo) { localVideo.srcObject = localStream; localVideo.play().catch(() => {}); setTimeout(() => { try { nudgeVideoLayers(); } catch (_) {} }, 400); }
     localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
   }
   async function startCallTo(to, options) {
@@ -444,6 +444,21 @@
     const cs = getComputedStyle(fsEnvProbe);
     return { bottom: parseFloat(cs.paddingBottom) || 0, top: parseFloat(cs.paddingTop) || 0 };
   }
+  function nudgeVideoLayers() {
+    // call42 (Олег 08.10 21:56): iOS WebKit после ресайза контейнера иногда
+    // не перестраивает композитный слой <video> (srcObject): слой остаётся в
+    // старой геометрии, вокруг виден чёрный фон элемента («чёрная рамка» у
+    // PiP). Поворот экрана лечил, т.к. форсирует полную перекомпоновку.
+    // Форсируем программно: микро-тоггл композитного свойства на обоих видео.
+    if (!callOverlay) return;
+    callOverlay.querySelectorAll(".call-video-stage video").forEach(v => {
+      try {
+        v.style.transform = "translateZ(0)";
+        void v.offsetWidth; // flush style/layout
+        requestAnimationFrame(() => { v.style.transform = ""; });
+      } catch (_) {}
+    });
+  }
   function fsFitStage() {
     // call26: iOS standalone resolves % heights against a viewport that ends
     // above the physical bottom edge (safe-area zone), so calc(100%+env())
@@ -459,12 +474,20 @@
       // sized to the full physical screen in px.
       const env = envSafeBottom();
       stage.style.height = (window.innerHeight + env.bottom + env.top) + "px";
+      // call42: после изменения размера stage перестраиваем видео-слои,
+      // иначе iOS оставляет PiP/remote в старой геометрии (чёрная рамка).
+      requestAnimationFrame(nudgeVideoLayers);
     };
     fit();
     if (!fsFitHandler) {
       fsFitHandler = fit;
       window.addEventListener("resize", fit);
       if (window.visualViewport) window.visualViewport.addEventListener("resize", fit);
+      // call42: поворот — fit по таймерам (innerHeight в момент события
+      // ещё старый) + nudge слоёв на каждом догоне.
+      window.addEventListener("orientationchange", () => {
+        [60, 250, 600].forEach(ms => setTimeout(() => { fit(); }, ms));
+      });
     }
   }
   function enterFs() {
