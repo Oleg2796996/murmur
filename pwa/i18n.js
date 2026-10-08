@@ -297,12 +297,17 @@
 
     // ── Кнопка 🌐: (a) в sidebar-header для messenger; (b) на identity-card
     // для identity-экрана (messenger[hidden] — header внутри скрытого дерева).
+    // call43/i18n-v2 (Олег 08.10 22:26, просьба пользователей): голый 🌐 не
+    // считывается как «смена языка» — показываем код текущего языка
+    // (🌐 RU/EN/FR/ES/DE), кнопка крупнее для удобного нажатия.
+    const LANG_LABEL = { ru: "RU", en: "EN", fr: "FR", es: "ES", de: "DE" };
     function makeLangBtn() {
         const btn = document.createElement("button");
         btn.className = "i18n-btn";
         btn.title = "Language / Язык";
-        btn.style.cssText = "background:none;border:none;cursor:pointer;font-size:1.1em;padding:4px 6px;margin-left:2px;opacity:.85;line-height:1;";
-        btn.textContent = "🌐";
+        btn.style.cssText = "background:none;border:1px solid rgba(142,197,255,.25);border-radius:10px;cursor:pointer;font-size:1.05em;padding:6px 10px;margin-left:2px;opacity:.9;line-height:1;color:inherit;min-height:36px;min-width:52px;";
+        const cur = window.MurmurI18N ? window.MurmurI18N.currentLang() : null;
+        btn.textContent = "🌐 " + (LANG_LABEL[cur] || "RU");
         btn.addEventListener("click", function () {
             const cur = window.MurmurI18N.currentLang();
             // v160y33: цикл ru → en → fr → es → de → ru
@@ -333,7 +338,7 @@
         if (scr && (landingVisible || screenActive) && !document.getElementById("btn-lang-identity")) {
             const btn = makeLangBtn();
             btn.id = "btn-lang-identity";
-            btn.style.cssText += "position:fixed;top:10px;right:10px;font-size:1.4em;z-index:9999;";
+            btn.style.cssText += "position:fixed;top:10px;right:10px;font-size:1.25em;padding:8px 14px;min-height:44px;z-index:9999;";
             scr.appendChild(btn);
         }
     }
