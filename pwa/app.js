@@ -5022,7 +5022,7 @@ async function tryAutoRestore() {
         // v160i: invite ищем и в URL, и в cookie-мосте (Safari→PWA).
         const inv = extractInviteNpub() || readInviteCookie();
         // v160z14 (Олег 23:35): лендинг-инструкция показываем и без invite —
-        // новый пользователь на murmur.senswifi.ru тоже должен видеть инструкцию
+        // новый пользователь на murmurchat.org тоже должен видеть инструкцию
         // установки PWA (иначе аккаунт создастся в Safari-контейнере впустую).
         if (!isStandalonePWA()) showInviteLanding(inv);
         // v160w5e1 (Олег 28.09 21:49): секция «Создать» скрыта в HTML по
