@@ -351,6 +351,35 @@ pub struct PushPayload {
     pub ws_envelope_b64: Option<String>,
     #[serde(default)]
     pub badge: u32,
+    /// Semantic notification kind. Kept generic and never contains a display name.
+    #[serde(default)]
+    pub kind: String,
+    /// call18: "audio"|"video" for incoming_call pushes; empty for messages.
+    #[serde(default)]
+    pub call_mode: String,
+}
+
+impl PushPayload {
+    /// Build a privacy-preserving push for an ephemeral incoming call.
+    /// No display name, SDP, or call contents are included; the caller npub is
+    /// only used by the local app after it is opened.
+    /// call18: `call_mode` ("audio"|"video") lets the callee UI render the
+    /// correct call card straight from the push tap (before SDP arrives).
+    pub fn incoming_call(to_npub: &str, from_npub: &str, call_mode: &str) -> Self {
+        Self {
+            kind: "incoming_call".to_string(),
+            alias: to_npub.to_string(),
+            from_npub: from_npub.to_string(),
+            ts: chrono::Utc::now().timestamp_millis().max(0) as u64,
+            envelope_hash_hex: String::new(),
+            title: String::new(),
+            subtitle: String::new(),
+            body: "Incoming call — open MurMur to answer".to_string(),
+            ws_envelope_b64: None,
+            badge: 0,
+            call_mode: call_mode.to_string(),
+        }
+    }
 }
 
 impl PushPayload {
@@ -421,6 +450,8 @@ impl PushPayload {
             body: "New message — open the app to read it".to_string(), // v160y29: НЕ менялся — клиентский contentless-фильтр завязан на "open the app"; фантом от receipt-broadcast ловится клиентским system:relay-фильтром
             ws_envelope_b64,
             badge,
+            kind: "message".to_string(),
+            call_mode: String::new(),
         }
     }
 
@@ -1922,6 +1953,8 @@ mod tests {
             body: "new encrypted message (210 bytes)".into(),
             ws_envelope_b64: None,
             badge: 3,
+            kind: "message".into(),
+            call_mode: String::new(),
         };
         let s = p.to_json();
         let back: PushPayload = serde_json::from_str(&s).unwrap();

@@ -215,7 +215,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Spawn WS server (this runs forever)
-    let ws_server = WsServer::new(cfg.clone(), hub.clone(), pending.clone(), store_db.clone());
+    let ws_server = WsServer::new(cfg.clone(), hub.clone(), pending.clone(), store_db.clone(), push_server.clone());
     ws_server.serve().await?;
     Ok(())
 }

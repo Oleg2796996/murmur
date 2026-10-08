@@ -2,6 +2,7 @@
 
 use crate::config::RelayConfig;
 use crate::pending::PendingStore;
+use crate::push::PushServer;
 use crate::storage::MessageStore;
 use crate::subscriber::SubscriberHub;
 use futures::{SinkExt, StreamExt};
@@ -18,16 +19,18 @@ pub struct WsServer {
     hub: SubscriberHub,
     pending: PendingStore,
     store_db: MessageStore,
+    push: Arc<PushServer>,
     pub conn_id: Arc<AtomicUsize>,
 }
 
 impl WsServer {
-    pub fn new(cfg: RelayConfig, hub: SubscriberHub, pending: PendingStore, store_db: MessageStore) -> Self {
+    pub fn new(cfg: RelayConfig, hub: SubscriberHub, pending: PendingStore, store_db: MessageStore, push: Arc<PushServer>) -> Self {
         Self {
             cfg,
             hub,
             pending,
             store_db,
+            push,
             conn_id: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -124,6 +127,46 @@ impl WsServer {
                                         self.hub.broadcast_typing(&to.to_string(), ev.to_string());
                                     }
                                 }
+                                // Ephemeral WebRTC signaling for the test 1:1 audio MVP.
+                                // SDP/ICE is routed only to the subscribed peer; it is not
+                                // persisted, put in history, or sent through web push.
+                                "call_signal" => {
+                                    let from = parsed.get("npub").and_then(|v| v.as_str()).unwrap_or("");
+                                    let to = parsed.get("to").and_then(|v| v.as_str()).unwrap_or("");
+                                    let signal = parsed.get("signal").cloned().unwrap_or(serde_json::Value::Null);
+                                    let allow_push = parsed.get("push").and_then(|v| v.as_bool()).unwrap_or(true);
+                                    if !from.is_empty() && !to.is_empty() && from != to && !signal.is_null() {
+                                        let ev = serde_json::json!({
+                                            "type": "call_signal",
+                                            "from_npub": from,
+                                            "signal": signal,
+                                        });
+                                        self.hub.broadcast_ephemeral(to, ev.to_string());
+                                        // Only the initial offer wakes an offline recipient.
+                                        // SDP/ICE remains WS-only and is never persisted/pushed.
+                                        // Always wake the recipient for the initial offer.
+                                        // The push is intentionally separate from WS delivery:
+                                        // it contains only a neutral incoming-call event, never
+                                        // SDP/ICE, names, or media. This also covers a minimized
+                                        // app whose WebSocket is still technically connected.
+                                        if allow_push && signal.get("kind").and_then(|v| v.as_str()) == Some("offer")
+                                        {
+                                            // call18: передаём mode звонка (audio|video), чтобы
+                                            // карточка у получателя сразу была правильной.
+                                            let call_mode = signal.get("mode").and_then(|v| v.as_str()).unwrap_or("");
+                                            let push = Arc::clone(&self.push);
+                                            let to = to.to_string();
+                                            let from = from.to_string();
+                                            let call_mode = call_mode.to_string();
+                                            tokio::spawn(async move {
+                                                let payload = crate::push::PushPayload::incoming_call(&to, &from, &call_mode);
+                                                if let Err(e) = push.deliver(&payload).await {
+                                                    tracing::warn!(err=%e, "incoming call push failed");
+                                                }
+                                            });
+                                        }
+                                    }
+                                }
                                 _ => {
                                     send_err(&mut ws_tx, "unknown type").await?;
                                 }
@@ -158,7 +201,7 @@ impl WsServer {
                         // contains, не starts_with: serde_json Map сортирует
                         // ключи алфавитно (from_npub < type), поэтому typing
                         // JSON начинается с {"from_npub"...
-                        if payload.body.contains("\"type\":\"typing\"") {
+                        if payload.body.contains("\"type\":\"typing\"") || payload.body.contains("\"type\":\"call_signal\"") {
                             ws_tx.send(Message::Text(payload.body.clone())).await?;
                         } else {
                             let msg = serde_json::json!({
@@ -242,7 +285,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let s = WsServer::new(cfg, hub.clone(), pending.clone(), store_db);
+        let s = WsServer::new(cfg, hub.clone(), pending.clone(), store_db, std::sync::Arc::new(crate::push::PushServer::new(&dir, "127.0.0.1:0".into(), crate::push::VapidKeys::load_or_generate(&dir, "mailto:test@murmur.local".into()).unwrap()).unwrap()));
         let conn_id_a = s.conn_id.clone();
         tokio::spawn(async move {
             loop {

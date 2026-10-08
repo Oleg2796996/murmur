@@ -141,12 +141,21 @@ impl SubscriberHub {
     /// payload-подписчикам npub. Эфемерно: без PushPayload-контента, без DB,
     /// без persist. Drop closed senders.
     pub fn broadcast_typing(&self, npub: &str, json_text: String) {
+        let _ = self.broadcast_ephemeral(npub, json_text);
+    }
+
+    /// Ephemeral signaling for test-only WebRTC calls. Never persisted or pushed.
+    /// Returns how many live subscribers received the frame.
+    pub fn broadcast_ephemeral(&self, npub: &str, json_text: String) -> usize {
         let mut inner = self.inner.lock();
+        let mut delivered = 0usize;
         if let Some(list) = inner.payload_subs.get_mut(npub) {
             list.retain(|h| {
                 // TypingPing reuses the payload channel with a marker variant;
                 // ws_server unwraps it as a raw Text frame.
-                h.tx.try_send(PushPayload {
+                let ok = h.tx.try_send(PushPayload {
+                    kind: "ephemeral".to_string(),
+                    call_mode: String::new(),
                     alias: String::new(),
                     from_npub: String::new(),
                     ts: 0,
@@ -156,9 +165,30 @@ impl SubscriberHub {
                     body: json_text.clone(),
                     ws_envelope_b64: None,
                     badge: 0,
-                }).is_ok()
+                }).is_ok();
+                if ok { delivered += 1; }
+                ok
             });
         }
+        delivered
+    }
+
+    /// Whether at least one live WS client is subscribed to this npub.
+    pub fn has_subscriber(&self, npub: &str) -> bool {
+        let inner = self.inner.lock();
+        inner.subs.get(npub).map_or(false, |v| !v.is_empty())
+            || inner.payload_subs.get(npub).map_or(false, |v| !v.is_empty())
+    }
+
+    /// Broadcast a call ring to the recipient's live WebSocket clients.
+    /// The event is ephemeral and carries only the caller npub.
+    pub fn broadcast_call(&self, npub: &str, from_npub: &str) {
+        let ev = serde_json::json!({
+            "type": "call_signal",
+            "from_npub": from_npub,
+            "signal": { "kind": "ring" },
+        });
+        self.broadcast_ephemeral(npub, ev.to_string());
     }
 
     /// Number of unique subscribers across all npubs.
