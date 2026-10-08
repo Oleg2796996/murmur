@@ -242,19 +242,12 @@ pub fn accept_envelope(
             // v149: серверный unread удалён (клиент считает сам, lesson #125).
         } else {
             // Duplicate envelope — re-broadcast (peer мог подключиться между
-            // попытками отправителя) + shorten при live-доставке, как выше.
+            // попытками отправителя) — БЕЗ сокращения TTL.
+            // v160z17 (Олег 2026-10-08): dup-путь тоже больше не режет TTL до
+            // 5 минут — повторный POST того же конверта не должен убивать
+            // оригинал (тот же класс бага, что и основной WS-путь).
             let n = hub.broadcast(&entry, Some(store));
-            if n > 0 {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                // v160w4c: WS live-доставка НЕ читает сообщение — не ставим read_at=1,
-                // иначе наклейка не растёт (badge всегда 1 при живом WS у получателя).
-                if let Err(e) = store.shorten_expires_at_keep_unread(&hash_hex, now + 300) {
-                    warn!(err=%e, "shorten_expires_at_keep_unread failed (dup)");
-                }
-            }
+            let _ = n; // WS-доставка не читает сообщение и не режет TTL (v160z17)
             return Ok((hash_hex, n));
         }
     }
@@ -275,28 +268,18 @@ pub fn accept_envelope(
     let n = hub.broadcast(&entry, store);
     info!(to=%recipient_npub, hash=%hash_hex, subs=n, "envelope accepted + fanout");
 
-    // v160m (решение Олега 2026-09-02): honest relay v2 — TTL 24h держится,
-    // пока получатель НЕ забрал сообщение. Сокращаем до 5 минут только при
-    // реальной доставке: (а) WS-подписчик получил live (n > 0), либо
-    // (б) получатель забрал через /api/history (см. push.rs). Раньше
-    // сокращение было безусловным сразу после broadcast — offline-получатель
-    // терял сообщение через 5–13 мин (TTL-cron): видео Олега 06:35 удалено
-    // в 06:48, пока Mac спал.
-    if n > 0 {
-        if let Some(store) = store {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            let short_ttl = now + 300; // 5 minutes после live-доставки
-
-            // v160w4c (Олег 2026-09-19): keep_unread — live-WS доставка НЕ
-            // помечает прочитанным. Раньше read_at=1 здесь обнулял unread между
-            // пушами → iPhone-наклейка застревала на 1 (badge=1,1,1 в логах).
-            if let Err(e) = store.shorten_expires_at_keep_unread(&hash_hex, short_ttl) {
-                warn!(err=%e, "shorten_expires_at_keep_unread failed");
-            }
-        }
+    // v160z17 (Олег 2026-10-08, «Да, делай»): WS live-доставка НЕ сокращает TTL.
+    // Пуш — только «звонок в дверь». Реальная доставка = клиент забрал историю
+    // через /api/history (visible=1) — там shorten_expires_at остаётся:
+    // expires_at=now+300 И read_at=1 (реальное прочтение).
+    // Баг 18:18→18:25 08.10: Ирина была онлайн по WS (subs=1), relay сократил
+    // TTL «Мцу»/«🚀» до 5 минут, её клиент в фоне не забрал историю, TTL-cron
+    // удалил конверты через 7 минут после отправки, а read_at=0 (keep_unread)
+    // заставил его создать ФЕЙК «Адресат не забрал за 24 часа» Олегу.
+    // Сообщение терялось навсегда — офлайн-получатель в лучшем положении (24ч).
+    // badge_at_accept выше не тронут: unread_badge_count не зависит от TTL.
+    if n > 0 && store.is_some() {
+        // WS-метрик на этом пути больше нет — store не нужен (v160z17).
     }
 
     // 7. Push delivery.
