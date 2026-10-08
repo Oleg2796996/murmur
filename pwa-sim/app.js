@@ -6409,7 +6409,7 @@ function showInviteLanding(inviteNpub) {
     // инструкция. Тап-копия ссылки сохранена (invite-url-box + hint).
     ov.innerHTML =
         '<div style="text-align:center;margin-bottom:16px;">' +
-        '<img src="/i192-2026c.png" alt="" style="width:72px;height:72px;border-radius:16px;box-shadow:0 8px 24px rgba(34,158,217,0.3);" onerror="this.style.display=\'none\'">' +
+        '<img src="/i192-2026b.png" alt="" style="width:72px;height:72px;border-radius:16px;box-shadow:0 8px 24px rgba(34,158,217,0.3);" onerror="this.style.display=\'none\'">' +
         '<div style="font-size:26px;font-weight:800;letter-spacing:-.5px;margin-top:10px;background:linear-gradient(90deg,#229ED9,#5eead4);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;display:inline-block;">MurMur</div>' +
         '<div style="font-size:14px;color:#9fb0c3;margin-top:2px;">приватный мессенджер</div>' +
         '</div>' +
