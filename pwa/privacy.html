@@ -93,11 +93,10 @@
 
   <div class="panel">
     <h2 data-i="h_donations">Donations</h2>
-    <p data-i="p_don1">If you choose to support MurMur, the payment processor may collect the information
-    required by law to process a payment. <b>We do not receive your card details</b>, and we
-    do not connect a donation to any chat identity.</p>
-    <p data-i="p_don2">You can also support the project with Monero — a privacy-preserving payment
-    that reveals nothing about you to us. <b>Tap the address to copy it:</b></p>
+    <p data-i="p_don1">MurMur accepts donations only in Monero. We have no payment processor, no
+    bank details, and nothing to link a donation to a chat identity — a Monero transaction simply
+    reveals nothing about you to us.</p>
+    <p data-i="p_don2"><b>Tap the address to copy it:</b></p>
     <div id="xmr-box" role="button" onclick="copyXmr()" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(94,234,212,.35);background:rgba(94,234,212,.06);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.6;color:#7eead4;word-break:break-all;cursor:pointer;text-align:center;">83mpQoMkdo1bcLPgqzY2ukbgr3nKb8JKhTJLtRxnNCCqCgsb6GkYDz6YRxm63jUHh3QjhiLKbmWbdQBFwMPjJKfLG8gVG6n</div>
     <div id="xmr-hint" data-i="copied" style="display:none;color:#3fd07a;font-size:12.5px;text-align:center;margin-top:6px;">✓ Copied</div>
   </div>
@@ -212,18 +211,18 @@ var T = {
   },
   h_donations: { en:"Donations", ru:"Донаты", fr:"Dons", es:"Donaciones", de:"Spenden" },
   p_don1: {
-    en:"If you choose to support MurMur, the payment processor may collect the information required by law to process a payment. <b>We do not receive your card details</b>, and we do not connect a donation to any chat identity.",
-    ru:"Если решишь поддержать MurMur, платёжный процессор может собрать информацию, необходимую по закону для проведения платежа. <b>Мы не получаем данные твоей карты</b> и не связываем донат с какой-либо идентичностью в чате.",
-    fr:"Si vous choisissez de soutenir MurMur, le processeur de paiement peut collecter les informations exigées par la loi pour traiter un paiement. <b>Nous ne recevons pas les détails de votre carte</b> et nous ne relions aucun don à une identité de chat.",
-    es:"Si decides apoyar a MurMur, el procesador de pagos puede recopilar la información que la ley exige para procesar un pago. <b>No recibimos los datos de tu tarjeta</b> y no vinculamos ninguna donación a una identidad de chat.",
-    de:"Wenn du MurMur unterstützen möchtest, kann der Zahlungsdienstleister die gesetzlich erforderlichen Informationen zur Zahlungsabwicklung erfassen. <b>Wir erhalten deine Kartendaten nicht</b> und verknüpfen keine Spende mit einer Chat-Identität."
+    en:"MurMur accepts donations only in Monero. We have no payment processor, no bank details, and nothing to link a donation to a chat identity — a Monero transaction simply reveals nothing about you to us.",
+    ru:"MurMur принимает донаты только в Monero. У нас нет платёжного процессора и банковских реквизитов, и нам не с чем связывать донат с идентичностью в чате — Monero-транзакция просто не раскрывает ничего о тебе.",
+    fr:"MurMur accepte les dons uniquement en Monero. Nous n'avons ni processeur de paiement ni coordonnées bancaires, et rien ne permet de lier un don à une identité de chat — une transaction Monero ne révèle tout simplement rien de vous.",
+    es:"MurMur acepta donaciones solo en Monero. No tenemos procesador de pagos ni datos bancarios, y no hay nada que vincule una donación con una identidad de chat — una transacción Monero simplemente no revela nada sobre ti.",
+    de:"MurMur akzeptiert Spenden nur in Monero. Wir haben keinen Zahlungsdienstleister und keine Bankdaten, und es gibt nichts, woran eine Spende mit einer Chat-Identität verknüpft werden könnte — eine Monero-Transaktion verrät uns einfach nichts über dich."
   },
   p_don2: {
-    en:"You can also support the project with Monero — a privacy-preserving payment that reveals nothing about you to us. <b>Tap the address to copy it:</b>",
-    ru:"Также можно поддержать проект Monero — приватной валютой, которая ничего о тебе нам не раскрывает. <b>Нажми на адрес, чтобы скопировать:</b>",
-    fr:"Vous pouvez aussi soutenir le projet en Monero — un paiement respectueux de la vie privée qui ne révèle rien de vous. <b>Touchez l'adresse pour la copier :</b>",
-    es:"También puedes apoyar el proyecto con Monero — un pago que preserva la privacidad y no revela nada sobre ti. <b>Toca la dirección para copiarla:</b>",
-    de:"Du kannst das Projekt auch mit Monero unterstützen — eine privatsphärefreundliche Zahlung, die uns nichts über dich verrät. <b>Tippe auf die Adresse, um sie zu kopieren:</b>"
+    en:"<b>Tap the address to copy it:</b>",
+    ru:"<b>Нажми на адрес, чтобы скопировать:</b>",
+    fr:"<b>Touchez l'adresse pour la copier :</b>",
+    es:"<b>Toca la dirección para copiarla:</b>",
+    de:"<b>Tippe auf die Adresse, um sie zu kopieren:</b>"
   },
   copied: { en:"✓ Copied", ru:"✓ Скопировано", fr:"✓ Copié", es:"✓ Copiado", de:"✓ Kopiert" },
   h_contact: { en:"Contact", ru:"Контакты", fr:"Contact", es:"Contacto", de:"Kontakt" },
