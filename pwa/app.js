@@ -2981,6 +2981,17 @@ function scrollToBottom() {
 // были на нём. Ручной скролл вверх > 60px от низа снимает флаг — не хайджекаем.
 window.__murmurWasAtBottom = true;
 if (messagesArea) {
+    // v160z14: первое ручное касание отменяет openChat pin-window.
+    // Раньше первый iOS-скролл в течение 3 секунд считался служебным
+    // scrollToBottom и следующая догонка возвращала ленту вниз. После окна
+    // всё работало, поэтому баг проявлялся только на первом скролле.
+    const cancelBottomPinOnUserScroll = () => {
+        window.__murmurPinUntil = 0;
+        window.__murmurWasAtBottom = false;
+    };
+    messagesArea.addEventListener("touchstart", cancelBottomPinOnUserScroll, { passive: true });
+    messagesArea.addEventListener("pointerdown", cancelBottomPinOnUserScroll, { passive: true });
+    messagesArea.addEventListener("wheel", cancelBottomPinOnUserScroll, { passive: true });
     messagesArea.addEventListener("scroll", () => {
         // v160g4-kbd6 (порт w6m5): в pin-окне флаг не снимаем - smooth-доскролл
         // проходит промежуточные позиции (dist>60) и обрывал догон-серию.
@@ -3280,7 +3291,11 @@ async function sendMessage() {
         // превью survives reload'ы и слияние кэша с серверной строкой.
         for (const a of metaSnapshot) savePosterToCache(a.blob_id, a.poster_data_url);
         // Lesson #350: _sig стабилен (локальный ts не меняем) — outbox сразу под финальным ключом.
-        saveToOutbox(renderedMsg, text, attachmentsWithPlaintext);
+        // Важно: дождаться записи локального plaintext до POST/poll.
+        // Иначе echo с релея может попасть в history раньше outbox и
+        // перезаписать фото метаданными без локальной копии.
+        await saveToOutbox(renderedMsg, text, attachmentsWithPlaintext);
+        await saveMessagesCacheForPeer(activePeer);
         renderMessages();
         scrollToBottom();
         renderMessages();
