@@ -2432,8 +2432,45 @@ async function loadHistory(peer, beforeTs) {
                 // might have been stripped or partially loaded.
                 // We ensure messages[peer] is the source of truth and newMsgs are merged.
                 const combined = newMsgs.concat(messages[peer]);
+                // v160z18 (Олег 2026-10-08 20:42 «почему задваиваются сообщения с фото»):
+                // дедуп merged-набора. Сценарий: отправили фото → saveMessagesCacheForPeer
+                // записал optimistic-копию (_hash=null, client-ts) в IDB ДО получения
+                // respJson.hash; после POST _hash обновился только in-memory/outbox.
+                // Перезаход в чат: messages[peer] пуст → existingHashSet пуст → IDB
+                // backfill (2417) поднимает optimistic (_hash:null), echo из history
+                // (_hash=d520…) не матчится → обе копии попадают в combined, а
+                // keepNewestByTs дедупом НЕ является (только limit-резка).
+                // Дедуп: (1) одинаковый ненулевой _hash — серверный echo побеждает;
+                // (2) outgoing _hash:null против копии с hash при |Δts|<=120s и одинаковой
+                // direction — optimистичная копия побеждается echo (п dropped).
+                const seenHashes = new Map(); // hash -> msg (первый, префиксный — серверный)
+                const droppedOptimistic = new Set();
+                for (const m of combined) {
+                    if (m._hash) {
+                        if (!seenHashes.has(m._hash)) seenHashes.set(m._hash, m);
+                    }
+                }
+                const deduped = [];
+                for (const m of combined) {
+                    if (m._hash) {
+                        // дубликат по hash — оставляем только первый (echo из newMsgs идёт раньше)
+                        if (seenHashes.get(m._hash) !== m) continue;
+                        deduped.push(m);
+                        continue;
+                    }
+                    if (m.direction === "out") {
+                        // optimistic (_hash:null) vs серверная копия с hash: |Δts|<=120s → dup
+                        const twin = combined.find(x => x._hash && x !== m &&
+                            x.direction === "out" && Math.abs((x.ts || 0) - (m.ts || 0)) <= 120);
+                        if (twin) { droppedOptimistic.add(m); continue; }
+                    }
+                    deduped.push(m);
+                }
+                if (droppedOptimistic.size > 0) {
+                    console.log("[murmur] loadHistory: dedup dropped optimistic copies:", droppedOptimistic.size, "peer", peer.slice(0, 12));
+                }
                 // Keep newest 500 strictly by TS to avoid order-based dropping.
-                const finalSet = keepNewestByTs(combined, MESSAGES_CACHE_MAX_PER_PEER);
+                const finalSet = keepNewestByTs(deduped, MESSAGES_CACHE_MAX_PER_PEER);
                 messages[peer] = finalSet;
 
                 // Lesson #339 (Олег 2026-08-28 16:18 MSK): safety net.
@@ -3340,6 +3377,11 @@ async function sendMessage() {
                             localStorage.setItem(LS_OUTBOX, JSON.stringify(outbox));
                         }
                     } catch (e) { /* LS quota — non-fatal */ }
+                    // v160z18 (Олег 2026-10-08 «задваиваются фото»): перезаписать IDB-кэш
+                    // С НОВЫМ _hash. Раньше optimistic (_hash:null) оставался в IDB до
+                    // случайного pollHist-save; если пользователь выходил/входил в чат
+                    // раньше — IDB backfill поднимал optimistic, echo не матчился → дубль.
+                    try { saveMessagesCacheForPeer(activePeer); } catch (_) {}
                 } else {
                     // Lesson #350: редкий ответ без hash — не держим echo в deferred
                     // вечно; через 15s отпускаем (худший случай — dup, но не пропуск).
