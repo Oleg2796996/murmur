@@ -19,7 +19,7 @@
 //   ❌ WASM hang without timeout (Lesson #157) — Promise.race with timeout
 
 // v160y24: НЕ хардкод — RELAY из app.js (single source of truth), см. attachments.js.
-const ATTACH_API_BASE = (typeof RELAY !== "undefined" && RELAY) ? RELAY : "https://murmur.senswifi.ru";
+const ATTACH_API_BASE = (typeof RELAY !== "undefined" && RELAY) ? RELAY : "https://murmurchat.org";
 
 function b64decode(b64) {
     const bin = atob(b64);

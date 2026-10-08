@@ -21,7 +21,7 @@
 // v160y24: НЕ хардкод — RELAY из app.js (single source of truth).
 // 23.09 инцидент: три независимых хардкода (RELAY в app.js + ATTACH_API_BASE в 2 файлах)
 // рассинхронились при деплое — фото с прода уходило на тест-релей.
-const ATTACH_API_BASE = (typeof RELAY !== "undefined" && RELAY) ? RELAY : "https://murmur.senswifi.ru";
+const ATTACH_API_BASE = (typeof RELAY !== "undefined" && RELAY) ? RELAY : "https://murmurchat.org";
 
 function b64encode(bytes) {
     let s = "";
