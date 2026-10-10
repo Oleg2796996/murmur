@@ -39,12 +39,12 @@
     })();
     </script>
     <link rel="apple-touch-icon" href="/ati-2026b.png">
-    <link rel="icon" type="image/png" sizes="192x192" href="/i192-2026b.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/i192-2026c.png">
     <link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
     <link rel="shortcut icon" href="/favicon-2026b.ico">
     <link rel="mask-icon" href="/mask-icon.svg" color="#229ED9">
     <meta name="app-version" content="v160w6q-glare-20261007-2210">
-    <link rel="stylesheet" href="styles.css?v=w6p-cap">
+    <link rel="stylesheet" href="styles.css?v=v160z21-kbback">
     <script>
     // v160z13 (Олег 22:52): анти-i18n-flash. Пользователь без ручного выбора языка
     // видит русский HTML до загрузки defer-скриптов (WASM и пр.), потом i18n.js
@@ -153,6 +153,7 @@
                 <button id="btn-delete-chat" class="icon-btn delete-btn" title="Удалить чат" aria-label="удалить чат" hidden>🗑</button>
             </header>
             <section id="chat-panel" class="chat-panel">
+                <button id="btn-back-kb" class="kb-back-btn" title="Назад" aria-label="назад к списку" hidden><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
                 <div id="messages-area" class="messages-area"></div>
                 <div id="chat-splash" class="chat-splash" hidden></div>
             </section>
@@ -237,13 +238,13 @@
     <script src="render-attachments.js?v=160y52&i18n=1" defer></script>
     <script src="receipts.js?v=160z1&i18n=2" defer></script>
     <script src="chat-state.js?v=160z2&i18n=2" defer></script>
-    <script src="contacts.js?v=160w5g2&i18n=2" defer></script>
+    <script src="contacts.js?v=160w5g4&i18n=2" defer></script>
     <script src="decrypt-groups.js?v=160z4&i18n=2" defer></script>
     <script src="groups.js?v=160z5&i18n=2" defer></script>
     <script src="call-audio.js?v=call42-pipfix" defer></script>
     <script src="message-cache.js?v=160z3&i18n=2" defer></script>
     <script src="qrcode.js?v=160w6g1" defer></script>
-    <script src="app.js?v=photo-dedup-v160z18-20261008" defer></script>
+    <script src="app.js?v=guard-v160z28-20261009" defer></script>
     <script>
       if ("serviceWorker" in navigator) {
         // v160y20: чистый UI — только 🔔, без 💾📊, hover без нажатого эффекта

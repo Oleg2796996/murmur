@@ -644,6 +644,47 @@ button.small { padding: 8px 12px; font-size: 13px; }
     padding-bottom: 0;
 }
 
+/* v160z21 (Олег 09.10.2026 11:01: «когда открыта клавиатура, нет возможности
+   выйти из чата. Кнопка назад появляется только когда клавиатура закрыта»):
+   v160x17 скрывает ВСЮ шапку при открытой клавиатуре (лечит дыру под
+   композером) — btn-back живёт в шапке и исчезает. Решение: плавающая
+   кнопка «назад» ВНУТРИ .chat-panel (position:absolute — layout ленты не
+   трогает, дыру v160x17 не возвращает), видима ТОЛЬКО при открытой
+   клавиатуре. Клик программно жмёт btnBack (blur input → клавиатура
+   закрывается → вся логика выхода в одном месте). */
+.kb-back-btn {
+    /* v160z22b (Олег 11:16: «кнопка улетает вверх за границу экрана, видно
+       в анимации»): absolute внутри .chat-panel двигался вместе с панелью
+       при анимации клавиатуры (панель transform'ится) → кнопка уезжала за
+       экран. position:fixed — координаты от вьюпорта, не зависит от
+       transform предков. top учитывает высоту статус-бара iOS
+       (env(safe-area-inset-top)). */
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 10px);
+    left: 10px;
+    z-index: 30;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    opacity: 0.92;
+    -webkit-tap-highlight-color: transparent;
+}
+.kb-back-btn:active { opacity: 1; transform: scale(0.94); }
+.kb-back-btn[hidden] { display: none; }
+/* видимая только когда клавиатура открыта (шапка скрыта) И чат открыт */
+body.keyboard-visible .kb-back-btn { display: flex; }
+body:not(.keyboard-visible) .kb-back-btn { display: none !important; }
+/* десктоп: клавиатуры/кнопки нет */
+@media (min-width: 720px) { .kb-back-btn { display: none !important; } }
+
 /* v160g4-kbd5 (Олег 11:40 «стабильная сборка без дерганий, классическое
    решение»): легаси w6h-блок (fixed-композер на --kb-inset + padding
    --composer-h) УДАЛЕН — он конфликтовал с классической механикой v160x17
@@ -801,7 +842,11 @@ button.small { padding: 8px 12px; font-size: 13px; }
     background: var(--bubble-out);
     color: var(--text);
     border-bottom-right-radius: 4px;
-    text-align: right;
+    /* v160z24 (Олег 13:14 «Да»): text-align:left как в Telegram. Раньше
+       right: бабл шириной max-content длинной строки + перенос текста
+       прижимал строки вправо → пустая «половина пузыря» слева.
+       bubble-time остаётся справа (свой text-align:right). */
+    text-align: left;
 }
 .bubble.in {
     align-self: flex-start;

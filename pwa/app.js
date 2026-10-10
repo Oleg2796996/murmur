@@ -170,7 +170,7 @@ async function ensureWasm() {
     await loadWasmModule();
 }
 
-const RELAY = "https://murmurchat.org";
+const RELAY = "https://murmur.senswifi.ru";
 const LS_NPUB = "murmur.npub";
 const LS_KEY = "murmur.sk";
 const LS_NAME = "murmur.name";
@@ -1953,6 +1953,10 @@ function openChat(peer, opts) {
     // Если первый раз открываем чат (нет кэша) — loadHistory работает как раньше.
     loadMessagesCacheForPeer(peer);
     clearUnread(peer);
+    // v160z21: при открытии чата кнопка «назад» перещитывается (клавиатура
+    // обычно не активна — кнопка скрыта; если чат открыт тапом при активной
+    // kb — появится).
+    try { if (typeof window.__murmurSyncKbBackBtn === "function") window.__murmurSyncKbBackBtn(); } catch (err) {}
     // v160x19 (Олег 11:00): stale-вьюпорт лечится scrollCure. v160y34 (Олег
     // 2026-09-24 «проваливаешься в чат — сначала все мигает»): 3 вызова
     // scrollCure (100/400/900) на документе = 3 вспышки layout (body +80px →
@@ -2459,9 +2463,11 @@ async function loadHistory(peer, beforeTs) {
                         continue;
                     }
                     if (m.direction === "out") {
-                        // optimistic (_hash:null) vs серверная копия с hash: |Δts|<=120s → dup
-                        const twin = combined.find(x => x._hash && x !== m &&
-                            x.direction === "out" && Math.abs((x.ts || 0) - (m.ts || 0)) <= 120);
+                        // v160z20: точный матч по sig/blob_id (без окна) ПЛЮС
+                        // старый ts±120s как fallback для legacy-копий без sig.
+                        const twin = combined.find(x => x._hash && x !== m && x.direction === "out" &&
+                            (murmurEchoTwinMatch(m, x.sig || "", x._hash, x.attachments_meta || x.attachments) ||
+                             Math.abs((x.ts || 0) - (m.ts || 0)) <= 120));
                         if (twin) { droppedOptimistic.add(m); continue; }
                     }
                     deduped.push(m);
@@ -2472,6 +2478,9 @@ async function loadHistory(peer, beforeTs) {
                 // Keep newest 500 strictly by TS to avoid order-based dropping.
                 const finalSet = keepNewestByTs(deduped, MESSAGES_CACHE_MAX_PER_PEER);
                 messages[peer] = finalSet;
+                // v160z20: пассивный дуп-сканер после merge (диагностика вместо
+                // слепых сборок, правило Олега 30.09).
+                murmurDupScan(peer, "loadHistory");
 
                 // Lesson #339 (Олег 2026-08-28 16:18 MSK): safety net.
                 // Для каждого существующего кэш-сообщения сверяем direction с API.
@@ -2541,10 +2550,64 @@ async function loadHistory(peer, beforeTs) {
 }
 
 // ── Render Messages ──
+// v160z28-render-guard (Олег 16:28: «есть ли более изящное решение?»):
+// дубли НЕ склеиваем и НЕ мутируем данные — просто НЕ РИСУЕМ вторые копии.
+// В renderMessages из списка исключается всё, что дублирует более раннюю
+// out-копию: совпадение sig, ИЛИ общий blob_id вложения, ИЛИ ts<=5s при
+// равном числе вложений. Побеждает копия с МЕНЬШИМ ts (optimistic старше
+// эха на ~1с во всех наблюдавшихся парах). IDB/сообщения не трогаем —
+// откат гварда = убрать один вызов.
+function murmurAttCount(m) {
+    const am = (Array.isArray(m.attachments_meta) && m.attachments_meta.length) ? m.attachments_meta : (Array.isArray(m.attachments) ? m.attachments : []);
+    return am.length;
+}
+function murmurBlobIds(m) {
+    const am = (Array.isArray(m.attachments_meta) && m.attachments_meta.length) ? m.attachments_meta : (Array.isArray(m.attachments) ? m.attachments : []);
+    return am.map(a => a && a.blob_id).filter(Boolean);
+}
+function murmurRenderGuardOut(msgs) {
+    try {
+        const outs = msgs.filter(m => m && m.direction === "out");
+        if (outs.length < 2) return msgs;
+        const skip = new Set();
+        for (let i = 0; i < outs.length; i++) {
+            const a = outs[i];
+            if (skip.has(a)) continue;
+            for (let j = i + 1; j < outs.length; j++) {
+                const b = outs[j];
+                if (skip.has(b)) continue;
+                let match = null;
+                if (a.sig && a.sig === b.sig) match = "sig";
+                else {
+                    const bb = murmurBlobIds(b);
+                    if (bb.length && murmurBlobIds(a).some(x => bb.includes(x))) match = "blob";
+                    // ts+att только если одна копия без hash (бездомная оптимистка):
+                    // у подряд отправленных РАЗНЫХ сообщений hash есть у обоих → не трогаем.
+                    else if ((!a._hash || !b._hash) && Math.abs((a.ts || 0) - (b.ts || 0)) <= 5 && murmurAttCount(a) === murmurAttCount(b)) match = "ts+att";
+                }
+                if (!match) continue;
+                // Одинаковый _hash → точный дубликат; разные _hash → тоже допускаем
+                // (сервер переназначал ts/hash на недоставленных), ts-приоритет разрулит.
+                const keep = (a.ts || 0) <= (b.ts || 0) ? a : b;
+                const drop = keep === a ? b : a;
+                skip.add(drop);
+                try {
+                    if (!window.__murmurDupLog) window.__murmurDupLog = [];
+                    window.__murmurDupLog.push({ t: new Date().toISOString(), kind: "Z28-GUARD", how: match, keepTs: keep.ts, dropTs: drop.ts, keepHash: (keep._hash || "").slice(0, 8), dropHash: (drop._hash || "").slice(0, 8) });
+                    if (window.__murmurDupLog.length > 200) window.__murmurDupLog.splice(0, window.__murmurDupLog.length - 200);
+                } catch (e) {}
+            }
+        }
+        if (skip.size === 0) return msgs;
+        console.log("[murmur] z28 render-guard: hiding", skip.size, "duplicate out copies");
+        return msgs.filter(m => !skip.has(m));
+    } catch (e) { return msgs; }
+}
+
 function renderMessages() {
     if (!activePeer) return;
     const all = messages[activePeer] || [];
-    const msgs = [...all].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    const msgs = murmurRenderGuardOut([...all].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
     // Lesson #227 (Олег 2026-08-26 16:25): DIAGNOSTIC instrumentation —
     // record every renderMessages call with stack + DOM diff.
     if (typeof window.__MURMUR_DIAG__ === "undefined") {
@@ -2594,11 +2657,22 @@ function renderMessages() {
         window.__murmurRenderedSigs = new Set();
     }
 
-    let lastDay = null;
         // Lesson #230 (Олег 2026-08-26 16:55): track rendered sigs.
     // Пропускаем bubbles для уже отрисованных messages.
     if (!window.__murmurRenderedSigs) window.__murmurRenderedSigs = new Set();
     const renderedSigs = window.__murmurRenderedSigs;
+    let lastDay = null;
+    // v160z22 (Олег 09.10 11:08 «“Сегодня” повторяется между сообщениями»):
+    // при инкрементальном рендере (новый бабл по poll/WS) все старые баблы
+    // skip по renderedSigs → divider-ветка не выполняется, lastDay оставался
+    // null → перед первым НОВЫМ баблом вставлялся ВТОРОЙ «Сегодня». Фикс:
+    // инициализируем lastDay днём последнего УЖЕ отрисованного сообщения
+    // (msg идут по возрастанию ts — сканируем с начала до первого
+    // неотрисованного; при чистом рендере renderedSigs пуст → null, как раньше).
+    for (const _rm of msgs) {
+        if (!renderedSigs.has(_rm._sig || (_rm.from_npub || _rm.from) + _rm.ts)) break;
+        lastDay = formatDayDivider(_rm.ts);
+    }
     // v160y55c (Олег 25.09 13:51: «когда открываешь чат, всё плавно появлялось,
     // а то сейчас загружается рывками»): счётчик НОВЫХ баблов за этот render.
     // После append: если >0 — batch-анимация fadeInUp на всех новых (один
@@ -3852,7 +3926,36 @@ window.attachUnfurlPreview = async function (bubbleDiv, bodyText, sig) {
     bubbleDiv.appendChild(card);
 };
 
+// v160z21 (Олег 09.10.2026 11:01): при открытой клавиатуре шапка скрыта
+// (v160x17) — кнопки «назад» нет, из чата не выйти. Плавающая кнопка
+// #btn-back-kb в углу ленты видна только при body.keyboard-visible.
+// Клик: blur input (закрывает клавиатуру) → программный btnBack.click()
+// (вся логика выхода в одном месте).
+const btnBackKb = $("btn-back-kb");
+function syncKbBackBtn() {
+    if (!btnBackKb) return;
+    const kbVisible = document.body.classList.contains("keyboard-visible");
+    const chatOpen = !!(activePeer || currentGroup) && chatView && chatView.style.display !== "none" && !chatView.hidden;
+    btnBackKb.hidden = !(kbVisible && chatOpen);
+}
+btnBackKb?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (err) {}
+    document.body.classList.remove("keyboard-visible");
+    btnBackKb.hidden = true;
+    if (typeof btnBack !== "undefined" && btnBack) btnBack.click();
+});
+// синхронизация видимости: класс keyboard-visible ставится/снимается в
+// markKb/unmarkKb (focusin/focusout) — дергаем из MutationObserver + resize.
+try {
+    new MutationObserver(syncKbBackBtn).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+} catch (err) { /* старые WebView — sync вызовется из других точек */ }
+window.addEventListener("resize", syncKbBackBtn);
+window.__murmurSyncKbBackBtn = syncKbBackBtn;
+
 btnBack?.addEventListener("click", () => {
+    if (btnBackKb) btnBackKb.hidden = true;
     sidebar.classList.remove("hidden");
     chatPanel.classList.remove("active");
     const m = document.querySelector(".messenger");
@@ -4069,12 +4172,24 @@ async function handleIncomingEnvelope(env) {
     // echo до прихода hash из POST-ответа — тот же контракт, что в pollHist.
     // v160g9: держим echo пока у любой исходящей копии не присвоен _hash
     // (та же защита что в pollHist v160g9) — гонка exists-проверка × POST-ответ.
-    if (fromNpub === myNpub &&
-        (messages[peer].some(m => m._pendingServerAssign) ||
-         messages[peer].some(m => m.direction === "out" && !m._hash && !m.isUndelivered &&
-             Math.abs((m.ts || 0) - (env.ts || 0)) <= 120))) {
-        console.log("[WS] outgoing echo deferred (hash unresolved), hash=", (hash || "").slice(0, 12));
-        return;
+    // v160z20: точный twin-merge ПЕРЕД defer (как в pollHist). Раньше WS-путь
+    // вообще не имел twin/orphan-merge: echo, провалившийся мимо defer
+    // (например через минуты, когда окно ±120s истекло), уходил сразу в рендер
+    // ВТОРЫМ баблом — основной источник дублей «пока не доставлено».
+    if (fromNpub === myNpub) {
+        let twin = null;
+        for (const m of messages[peer]) {
+            if (murmurEchoTwinMatch(m, env.sig || "", hash, env.attachments_meta || env.attachments)) { twin = m; break; }
+        }
+        if (twin) {
+            await murmurEchoTwinMerge(twin, hash, env);
+            console.log("[WS] v160z20 echo twin-merged, hash=", (hash || "").slice(0, 12));
+            return;
+        }
+        if (messages[peer].some(m => m._pendingServerAssign)) {
+            console.log("[WS] outgoing echo deferred (hash unresolved), hash=", (hash || "").slice(0, 12));
+            return;
+        }
     }
 
     // E2E: если есть `ct` — расшифровываем async, иначе plaintext fallback.
@@ -4155,6 +4270,79 @@ async function pollInbox() {
             await pollHistoryForPeer(peer);
         }
     } catch (e) { console.warn("pollInbox failed:", e); }
+}
+
+// v160z20 (Олег 2026-10-09 09:36 «дубли возникают только пока сообщение не доставлено»):
+// точный матч optimistic-копии и серверного echo БЕЗ временного окна ±120s.
+// sig покрывает (from|to|ts|ct) и ОДИНАКОВ у optimistic-копии и echo (сервер не
+// пересоздаёт подпись); blob_id вложения одинаков у фото/видео/файлов. Часы
+// клиента и сервера расходятся → ts-окна ненадёжны (grunt причины затяжных
+// дублей «пока не доставлено»); sig/blob — криптографически/контентно точны.
+function murmurEchoTwinMatch(localMsg, serverSig, serverHash, serverAttachMeta) {
+    if (!localMsg || localMsg.direction !== "out" || localMsg.isUndelivered) return false;
+    if (serverHash && localMsg._hash === serverHash) return true;
+    if (serverSig && localMsg.sig && localMsg.sig === serverSig) return true;
+    try {
+        const lm = Array.isArray(localMsg.attachments_meta) ? localMsg.attachments_meta : [];
+        const sm = Array.isArray(serverAttachMeta) ? serverAttachMeta : [];
+        if (lm.length && sm.length) {
+            const lset = new Set(lm.map(a => a && a.blob_id).filter(Boolean));
+            for (const a of sm) { if (a && a.blob_id && lset.has(a.blob_id)) return true; }
+        }
+    } catch (_e) {}
+    return false;
+}
+
+// v160z20: пассивный дуп-сканер (правило Олега 30.09 — диагностика вместо
+// слепых сборок). Сканирует исходящие копии по hash/sig/blob_id; если одна
+// сущность представлена >1 копией — пишет в кольцевой лог window.__murmurDupLog
+// (50 записей) + console.warn. Дешёвый (массивы ≤500), вызывается из loadHistory
+// и pollHist. Если дубль всё же вылезет — лог покажет ключ и момент.
+function murmurDupScan(peer, cause) {
+    try {
+        const arr = messages[peer] || [];
+        const groups = new Map();
+        for (const m of arr) {
+            if (!m || m.direction !== "out" || m.isUndelivered) continue;
+            const keys = [];
+            if (m._hash) keys.push("h:" + m._hash);
+            if (m.sig) keys.push("s:" + m.sig);
+            const am = Array.isArray(m.attachments_meta) ? m.attachments_meta : [];
+            for (const a of am) if (a && a.blob_id) keys.push("b:" + a.blob_id);
+            for (const k of keys) groups.set(k, (groups.get(k) || 0) + 1);
+        }
+        const dups = [];
+        for (const [k, c] of groups.entries()) if (c > 1) dups.push(k.slice(0, 12) + "x" + c);
+        if (dups.length > 0) {
+            const entry = { t: new Date().toISOString(), peer: String(peer).slice(0, 12), cause: cause || "?", dups: dups };
+            if (!window.__murmurDupLog) window.__murmurDupLog = [];
+            window.__murmurDupLog.push(entry);
+            if (window.__murmurDupLog.length > 50) window.__murmurDupLog.shift();
+            console.warn("[murmur] DUP-SCAN:", JSON.stringify(entry));
+        }
+    } catch (_e) {}
+}
+
+// v160z20: общий merge echo-двойника в optimistic-копию: присвоить hash,
+// _server_msg, статус; бэкфилл hash в outbox (оба хранилища). Возвращает true
+// если копия изменилась.
+async function murmurEchoTwinMerge(twin, serverHash, serverRow) {
+    if (!twin) return false;
+    let changed = false;
+    if (serverHash && !twin._hash) { twin._hash = serverHash; changed = true; }
+    if (serverRow && !twin._server_msg) { twin._server_msg = serverRow; changed = true; }
+    if (twin.status === "failed") { twin.status = "sent"; changed = true; }
+    if (serverHash && changed) {
+        try {
+            const obKey = twin._sig;
+            const upd = (ob) => { if (ob && obKey && ob[obKey] && !ob[obKey]._hash) { ob[obKey]._hash = serverHash; return true; } return false; };
+            const obIdb = (window.appStore ? await window.appStore.kv.get(LS_OUTBOX) : null);
+            if (obIdb && upd(obIdb)) { await window.appStore.kv.set(LS_OUTBOX, obIdb); if (typeof _outboxKVCache !== "undefined" && _outboxKVCache) _outboxKVCache = obIdb; }
+            const obLs = JSON.parse(localStorage.getItem(LS_OUTBOX) || "{}");
+            if (upd(obLs)) localStorage.setItem(LS_OUTBOX, JSON.stringify(obLs));
+        } catch (e) { console.warn("[v160z20] outbox hash backfill failed:", e); }
+    }
+    return changed;
 }
 
 async function pollHistoryForPeer(peer) {
@@ -4268,12 +4456,32 @@ async function pollHistoryForPeer(peer) {
             // POST-ответа» → echo не сматчился ни по hash, ни по orphan → дубль.
             // После присвоения hash exists-дедуп срабатывает; если POST не вернул
             // hash — 15s-таймер отпускает, дальше ловит v160w orphan-merge.
-            if (fromNpub === myNpub &&
-                (messages[peer].some(m => m._pendingServerAssign) ||
-                 messages[peer].some(m => m.direction === "out" && !m._hash && !m.isUndelivered &&
-                     Math.abs((m.ts || 0) - (msg.ts || 0)) <= 120))) {
-                console.log("[pollHist] outgoing echo deferred (hash unresolved), hash=", (hash || "").slice(0, 12));
-                continue;
+            // v160z20 (Олег 09:36 «дубли возникают только пока сообщение не
+            // доставлено»): точный twin-merge ПЕРЕД defer. sig покрывает
+            // (from|to|ts|ct) и ОДИНАКОВ у optimistic-копии и echo (сервер не
+            // пересоздаёт подпись); blob_id матчит фото/видео. Работает БЕЗ
+            // временного окна — часы клиента/сервера расходятся, старый ±120s
+            // не покрывал «echo пришёл через минуты на плохой сети» (как раз
+            // «пока не доставлено»). После merge существует ОДНА копия
+            // (optimistic с присвоенным hash) — и в памяти, и в IDB.
+            if (fromNpub === myNpub) {
+                let twin = null;
+                for (const m of messages[peer]) {
+                    if (murmurEchoTwinMatch(m, msg.sig || "", hash, msg.attachments)) { twin = m; break; }
+                }
+                if (twin) {
+                    await murmurEchoTwinMerge(twin, hash, msg);
+                    console.log("[pollHist] v160z20 echo twin-merged, hash=", (hash || "").slice(0, 12));
+                    continue;
+                }
+                // defer остаётся только как страховка на POST в полёте
+                // (копия без hash/sig-совпадений); окно ±120s убрано — оно
+                // маскировало orphan-merge ниже (мёртвый код) и не держало
+                // echo дольше 2 минут.
+                if (messages[peer].some(m => m._pendingServerAssign)) {
+                    console.log("[pollHist] outgoing echo deferred (hash unresolved), hash=", (hash || "").slice(0, 12));
+                    continue;
+                }
             }
 
             // v160w: fallback-дедуп «потерянный POST-ответ». Если исходящее
@@ -4485,6 +4693,8 @@ async function pollHistoryForPeer(peer) {
             updateMaxTs(peer, msg.ts);
         }
         console.log("[pollHist] after loop: added=", added, "msgs in array=", msgs.length, "first _sig=", msgs[0] ? (msgs[0].from_npub || msgs[0].from) + msgs[0].ts : "none");
+        // v160z20: пассивный дуп-сканер после цикла poll.
+        murmurDupScan(peer, "pollHist");
         if (added) {
             renderChatList();
             if (activePeer === peer) {
@@ -5754,6 +5964,10 @@ window.addEventListener("hashchange", () => {
             if (!IS_ANDROID) document.body.classList.add("keyboard-visible"); // call33f: Android — класс не ставим
             setVvh();
             syncComposerSpace();
+            // v160z21b: страховка — sync кнопки «назад» сразу при фокусе в поле
+            // (MutationObserver может не доехать в старых WebView; класс ставится
+            // здесь синхронно, кнопка обязана появиться в том же кадре).
+            try { if (typeof window.__murmurSyncKbBackBtn === "function") window.__murmurSyncKbBackBtn(); } catch (err) {}
         }
         // v160x20 (Олег 11:11: «когда тапаешь в печать — выше появляется не последнее
         // сообщение, а предыдущие»): при открытии клавиатуры клавиатура сжимает

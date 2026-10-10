@@ -224,7 +224,65 @@ function setChatPreview(peer, ts, preview) {
     return true;
 }
 
+// Cold-start UX: браузер/PWA может восстановить #chat-list уже у нижней
+// границы. Первый рендер должен всегда начинаться с недавно активных чатов
+// сверху; после этого пользовательскую позицию сохраняем как раньше.
+let chatListHasRendered = false;
+
+// v160w5g4-coldfix: WebKit восстанавливает сохранённый scroll offset
+// overflow-контейнеров (и window) НЕ мгновенно при загрузке, а ПОСЛЕ
+// нашего первого рендера — поэтому однократный scrollTop=0 на cold-start
+// не сработал (проверено Олегом 09.10: «скролл не сработал»). Guard:
+// первые ~3с после холодного рендера удерживаем список наверху, пока
+// пользователь не тронул список. Каждое принудительное действие пишем в
+// window.__murmurListDiag (диагностика вместо слепых сборок, правило
+// Олега от 30.09): t, scrollTop/scrollHeight/clientHeight, window.scrollY.
+let __chatListTopGuardUntil = 0;
+let __chatListTopGuardTimer = null;
+function startChatListTopGuard() {
+    try {
+        __chatListTopGuardUntil = Date.now() + 3000;
+        if (__chatListTopGuardTimer) { clearInterval(__chatListTopGuardTimer); __chatListTopGuardTimer = null; }
+        if (!window.__murmurListDiag) window.__murmurListDiag = [];
+        const snap = (why) => {
+            try {
+                window.__murmurListDiag.push({ t: Date.now() - __chatListTopGuardUntil + 3000, why,
+                    st: chatList.scrollTop, sh: chatList.scrollHeight, ch: chatList.clientHeight, wsy: window.scrollY });
+                if (window.__murmurListDiag.length > 200) window.__murmurListDiag.shift();
+            } catch (e) {}
+        };
+        snap("guard-start");
+        __chatListTopGuardTimer = setInterval(() => {
+            try {
+                if (Date.now() >= __chatListTopGuardUntil) {
+                    clearInterval(__chatListTopGuardTimer);
+                    __chatListTopGuardTimer = null;
+                    snap("guard-end");
+                    return;
+                }
+                if (chatList.scrollTop !== 0) {
+                    chatList.scrollTop = 0;
+                    snap("guard-correct");
+                }
+            } catch (e) {}
+        }, 120);
+        // Пользователь тронул список — guard снимается немедленно.
+        const cancel = () => {
+            try {
+                if (__chatListTopGuardTimer) { clearInterval(__chatListTopGuardTimer); __chatListTopGuardTimer = null; }
+                __chatListTopGuardUntil = 0;
+                snap("guard-user-cancel");
+                chatList.removeEventListener("touchstart", cancel);
+                chatList.removeEventListener("wheel", cancel);
+            } catch (e) {}
+        };
+        chatList.addEventListener("touchstart", cancel, { passive: true });
+        chatList.addEventListener("wheel", cancel, { passive: true });
+    } catch (e) {}
+}
+
 function renderChatList() {
+    const isColdStartRender = !chatListHasRendered;
     const filter = chatSearch.value.toLowerCase().trim();
     // v160x (Олег 2026-09-20): полный rebuild (innerHTML="") сбрасывал скролл
     // списка на КАЖДОЕ входящее сообщение/typing-пинг (20 вызовов) — юзер
@@ -262,6 +320,9 @@ function renderChatList() {
                 "Нажмите «Пригласить друга», чтобы отправить ссылку-приглашение." +
             "</div>"; // v157b: «+» убран (кнопки нет с v153), только «Пригласить друга»
         chatList.appendChild(empty);
+        chatList.scrollTop = 0;
+        startChatListTopGuard();
+        chatListHasRendered = true;
         return;
     }
 
@@ -321,7 +382,10 @@ function renderChatList() {
     // если изменилась (новый чат/фильтр) — держим у низа, если был у низа,
     // иначе клампим в допустимый диапазон (не дальше конца списка).
     try {
-        if (chatList.scrollHeight === prevHeight) {
+        if (isColdStartRender) {
+            chatList.scrollTop = 0;
+            startChatListTopGuard();
+        } else if (chatList.scrollHeight === prevHeight) {
             chatList.scrollTop = prevScrollTop;
         } else {
             const wasAtBottom = prevScrollTop + chatList.clientHeight >= prevHeight - 2;
@@ -332,6 +396,7 @@ function renderChatList() {
             }
         }
     } catch (e) { /* ignore */ }
+    chatListHasRendered = true;
     // v160g3: секция «Группы» под личными чатами — локальные группы из
     // groups store, отсортированы по created_ts. Групповые ленты (messages
     // по member_npub с group_id в payload) пока не merge'им — в G4.
