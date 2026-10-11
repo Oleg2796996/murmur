@@ -27,6 +27,8 @@
   const FS = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H4v5"/><path d="M15 20h5v-5"/><path d="M4 20l6-6"/><path d="M20 4l-6 6"/></svg>';
   const FSEX = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h5V4"/><path d="M20 15h-5v5"/><path d="M9 9l-5-5"/><path d="M15 15l5 5"/></svg>';
   let pendingOffer = null;
+  let reofferTimer = null; // call53: повтор оффера для холодного пира (WS эфемерен, оффер теряется)
+  let sentIce = []; // call53: кандидаты, отправленные до answer (дозируем повторно)
   let pendingRemoteCandidates = [];
   let remoteDescriptionReady = false;
   let ring = null;
@@ -348,6 +350,9 @@
     }
     if (pc) pc.close();
     pc = null; remotePeer = null; pendingOffer = null;
+    if (reofferTimer) { clearInterval(reofferTimer); reofferTimer = null; } // call53
+    sentIce.length = 0; // call53
+
     pendingRemoteCandidates = [];
     remoteDescriptionReady = false;
     stopCallTimer();
@@ -359,7 +364,9 @@
     // iOS: полностью освобождаем медиа-элементы, иначе локскрин-плеер (AirPlay) висит после звонка
     const audio = $("call-remote-audio");
     if (audio) { try { audio.pause(); } catch (_) {} audio.srcObject = null; try { audio.load(); } catch (_) {} audio.remove(); }
-    const localVideo = $("call-local-video"); if (localVideo) { try { localVideo.pause(); } catch (_) {} localVideo.srcObject = null; try { localVideo.load(); } catch (_) {} }
+    // call52: PiP-видео удаляем из DOM полностью (не просто srcObject=null):
+    // следующий звонок вставит свежий элемент в стабильной геометрии.
+    const localVideo = $("call-local-video"); if (localVideo) { try { localVideo.pause(); } catch (_) {} localVideo.srcObject = null; localVideo.remove(); }
     const remoteVideo = $("call-remote-video"); if (remoteVideo) { try { remoteVideo.pause(); } catch (_) {} remoteVideo.srcObject = null; try { remoteVideo.load(); } catch (_) {} }
     try { if (navigator.mediaSession) { navigator.mediaSession.metadata = null; navigator.mediaSession.playbackState = "none"; } } catch (_) {}
     hideOverlay();
@@ -377,7 +384,11 @@
     pc.onicecandidate = e => {
       if (e.candidate) {
         diagLog("candidate", e.candidate.candidate);
-        try { send(remotePeer, { kind: "ice", candidate: e.candidate }); } catch (err) { diagLog("error", "send ICE: " + err.message); }
+        try {
+          sentIce.push(e.candidate.toJSON ? e.candidate.toJSON() : e.candidate);
+          if (sentIce.length > 50) sentIce.shift();
+          send(remotePeer, { kind: "ice", candidate: e.candidate });
+        } catch (err) { diagLog("error", "send ICE: " + err.message); }
       } else diagLog("gathering", "complete");
       if (callState === "connecting") setCallState("connecting", remotePeer);
     };
@@ -408,8 +419,12 @@
       if (["failed", "disconnected", "closed"].includes(pc.connectionState)) closeCall();
     };
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: callMode === "video" });
-    const localVideo = $("call-local-video");
-    if (localVideo) { localVideo.srcObject = localStream; localVideo.play().catch(() => {}); setTimeout(() => { try { nudgeVideoLayers(); } catch (_) {} }, 400); }
+    // call52 (settle-then-show): PiP-<video> НЕ рендерим в DOM в момент
+    // getUserMedia — enterFs()+fsFitStage() уже отработали (setCallState
+    // идёт раньше setup), stage в финальной геометрии. Слой нативного
+    // видео создаётся сразу в правильных координатах, stale-рамке не из
+    // чего возникнуть. Показ — по первому кадру (rVFC), fade-in.
+    if (callMode === "video") armPiPWhenSettled(localStream);
     localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
   }
   async function startCallTo(to, options) {
@@ -425,6 +440,20 @@
     await setup(to);
     const offer = await pc.createOffer(); await pc.setLocalDescription(offer);
     send(to, { kind: "offer", mode: callMode, sdp: pc.localDescription }, options);
+    // call53: холодный пир мог не получить первичный оффер (WS ещё не был
+    // подключён, релей эфемерные сигналы не хранит, пуш несёт только
+    // нейтральное incoming_call без SDP). Повторяем оффер каждые 4с, пока
+    // не придёт answer; push:false — пуш уже был отправлен первичным оффером.
+    if (reofferTimer) { clearInterval(reofferTimer); reofferTimer = null; }
+    reofferTimer = setInterval(() => {
+      if (callState !== "connecting" || callDirection !== "out" || !pc || remoteDescriptionReady) {
+        clearInterval(reofferTimer); reofferTimer = null; return;
+      }
+      const socket = ws();
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      try { send(to, { kind: "offer", mode: callMode, sdp: pc.localDescription }, { push: false }); }
+      catch (err) { diagLog("error", "reoffer: " + err.message); }
+    }, 4000);
     const activeBtn = callMode === "video" ? videoBtn() : btn();
     if (activeBtn) { activeBtn.innerHTML = "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><g transform=\"rotate(180 12 12)\"><path d=\"M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z\"/></g></svg>"; activeBtn.title = "Завершить звонок"; }
     // This timeout is only for an unanswered outgoing call. It must not run
@@ -444,18 +473,41 @@
     const cs = getComputedStyle(fsEnvProbe);
     return { bottom: parseFloat(cs.paddingBottom) || 0, top: parseFloat(cs.paddingTop) || 0 };
   }
-  function nudgeVideoLayers() {
-    // call42 (Олег 08.10 21:56): iOS WebKit после ресайза контейнера иногда
-    // не перестраивает композитный слой <video> (srcObject): слой остаётся в
-    // старой геометрии, вокруг виден чёрный фон элемента («чёрная рамка» у
-    // PiP). Поворот экрана лечил, т.к. форсирует полную перекомпоновку.
-    // Форсируем программно: микро-тоггл композитного свойства на обоих видео.
-    if (!callOverlay) return;
-    callOverlay.querySelectorAll(".call-video-stage video").forEach(v => {
+  function armPiPWhenSettled(localStream) {
+    // call52: создать PiP-видео в УЖЕ стабильной геометрии. Двойной rAF —
+    // дождаться отрисовки fs-stage в финальных px. Поток (srcObject)
+    // назначается ровно один раз, никакого пингпонга (урок call48).
+    const stage = callOverlay && callOverlay.querySelector(".call-video-stage");
+    if (!stage) return;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (callState !== "connected" && callState !== "connecting") return; // звонок уже кончился
+      let v = $("call-local-video");
+      if (!v) {
+        v = document.createElement("video");
+        v.id = "call-local-video";
+        v.autoplay = true; v.muted = true; v.playsInline = true;
+        stage.appendChild(v);
+      }
+      v.classList.remove("is-live");
+      if (v.srcObject !== localStream) v.srcObject = localStream;
+      v.play().catch(() => {});
+      // Показ только когда кадр реально ушёл в композитор (iOS 15.4+).
+      const show = () => { try { v.classList.add("is-live"); } catch (_) {} };
+      if ("requestVideoFrameCallback" in v) { try { v.requestVideoFrameCallback(show); } catch (_) { v.addEventListener("playing", show, { once: true }); } }
+      else v.addEventListener("playing", show, { once: true });
+    }));
+  }
+  function tickleNativeLayer() {
+    // call52: однократный tickle всех видео stage (webkit bug 275210:
+    // object-fit cover->fill->cover переключает videoGravity нативного
+    // слоя и сбрасывает неверную начальную отрисовку). Не цикл (урок call48).
+    const stage = callOverlay && callOverlay.querySelector(".call-video-stage");
+    if (!stage) return;
+    stage.querySelectorAll("video").forEach(v => {
       try {
-        v.style.transform = "translateZ(0)";
-        void v.offsetWidth; // flush style/layout
-        requestAnimationFrame(() => { v.style.transform = ""; });
+        v.style.objectFit = "fill";
+        void v.offsetWidth;
+        requestAnimationFrame(() => { try { v.style.objectFit = ""; } catch (_) {} });
       } catch (_) {}
     });
   }
@@ -474,9 +526,10 @@
       // sized to the full physical screen in px.
       const env = envSafeBottom();
       stage.style.height = (window.innerHeight + env.bottom + env.top) + "px";
-      // call42: после изменения размера stage перестраиваем видео-слои,
-      // иначе iOS оставляет PiP/remote в старой геометрии (чёрная рамка).
-      requestAnimationFrame(nudgeVideoLayers);
+      // call52: одноразовый tickle нативного слоя после settle (webkit bug
+      // 275210 workaround: переключение videoGravity cover->fill->cover),
+      // заменяет ненадёжный translateZ-nudge call42.
+      requestAnimationFrame(() => { try { tickleNativeLayer(); } catch (_) {} });
     };
     fit();
     if (!fsFitHandler) {
@@ -580,6 +633,19 @@
         }
         return;
       }
+      // call53: повторный оффер (re-offer от звонящего, холодный старт):
+      // обновляем SDP/60s-окно, карточку и состояние НЕ дёргаем.
+      if (pendingOffer && pendingOffer.from === from && pendingOffer.signal) {
+        pendingOffer.signal = s;
+        pendingOffer.mode = s.mode === "video" ? "video" : "audio";
+        callMode = pendingOffer.mode;
+        callModeKnown = true;
+        if (ring) {
+          clearTimeout(ring);
+          ring = setTimeout(() => { if (pendingOffer && !pc) { try { send(from, { kind: "bye" }); } catch (_) {} closeCall(); } }, 60000);
+        }
+        return;
+      }
       if (pendingOffer && pendingOffer.from === from && !pendingOffer.signal) {
         // push-путь: UI уже показан нейтральным, теперь знаем реальный mode из offer
         pendingOffer.signal = s;
@@ -610,6 +676,13 @@
     if (s.kind === "answer") {
       await pc.setRemoteDescription(s.sdp);
       remoteDescriptionReady = true;
+      // call53: answer получен — re-offer цикл больше не нужен, а кандидаты,
+      // отправленные в офлайн-окно пира, дозируем повторно. Дубликаты
+      // на принимающей стороне безвредны.
+      if (reofferTimer) { clearInterval(reofferTimer); reofferTimer = null; }
+      for (const cand of sentIce.splice(0)) {
+        try { send(remotePeer, { kind: "ice", candidate: cand }); } catch (err) { diagLog("error", "resend ICE: " + err.message); }
+      }
       for (const candidate of pendingRemoteCandidates.splice(0)) {
         try { await pc.addIceCandidate(candidate); } catch (err) { diagLog("error", "queued ICE: " + err.message); }
       }
