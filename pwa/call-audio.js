@@ -29,6 +29,8 @@
   let pendingOffer = null;
   let reofferTimer = null; // call53: повтор оффера для холодного пира (WS эфемерен, оффер теряется)
   let sentIce = []; // call53: кандидаты, отправленные до answer (дозируем повторно)
+  let camFacing = "user"; // call54: текущая камера PiP (user=фронтальная, environment=тыловая)
+  let camFlipBusy = false; // call54: защита от двойного тапа во время переключения
   let pendingRemoteCandidates = [];
   let remoteDescriptionReady = false;
   let ring = null;
@@ -352,6 +354,7 @@
     pc = null; remotePeer = null; pendingOffer = null;
     if (reofferTimer) { clearInterval(reofferTimer); reofferTimer = null; } // call53
     sentIce.length = 0; // call53
+    camFacing = "user"; camFlipBusy = false; // call54
 
     pendingRemoteCandidates = [];
     remoteDescriptionReady = false;
@@ -418,6 +421,7 @@
       }
       if (["failed", "disconnected", "closed"].includes(pc.connectionState)) closeCall();
     };
+    camFacing = "user"; camFlipBusy = false; // call54: новый звонок стартует с фронтальной
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: callMode === "video" });
     // call52 (settle-then-show): PiP-<video> НЕ рендерим в DOM в момент
     // getUserMedia — enterFs()+fsFitStage() уже отработали (setCallState
@@ -453,7 +457,7 @@
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       try { send(to, { kind: "offer", mode: callMode, sdp: pc.localDescription }, { push: false }); }
       catch (err) { diagLog("error", "reoffer: " + err.message); }
-    }, 4000);
+    }, 2000); // call54b: Олег — 2с вместо 4с (быстрее карточка на холодной PWA)
     const activeBtn = callMode === "video" ? videoBtn() : btn();
     if (activeBtn) { activeBtn.innerHTML = "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><g transform=\"rotate(180 12 12)\"><path d=\"M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z\"/></g></svg>"; activeBtn.title = "Завершить звонок"; }
     // This timeout is only for an unanswered outgoing call. It must not run
@@ -493,9 +497,63 @@
       v.play().catch(() => {});
       // Показ только когда кадр реально ушёл в композитор (iOS 15.4+).
       const show = () => { try { v.classList.add("is-live"); } catch (_) {} };
+      // call54: тап по PiP переключает фронтальную/тыловую камеру.
+      if (!v.__camflipBound) { v.__camflipBound = true; v.addEventListener("click", () => { flipCamera().catch(e => diagLog("error", "camflip click: " + e.message)); }); }
       if ("requestVideoFrameCallback" in v) { try { v.requestVideoFrameCallback(show); } catch (_) { v.addEventListener("playing", show, { once: true }); } }
       else v.addEventListener("playing", show, { once: true });
     }));
+  }
+  async function flipCamera() {
+    // call54: тап по PiP — переключение фронтальная/тыловая. replaceTrack
+    // меняет трек внутри существующего sender'а (переnegotiation не нужна,
+    // скорость переключения ~0.3-1с), локальный <video> продолжает
+    // рисовать тот же localStream с заменённым видеотреком.
+    if (camFlipBusy || callState !== "connected" || callMode !== "video" || !localStream || !pc) return;
+    camFlipBusy = true;
+    let cur = null;
+    try {
+      const newFacing = camFacing === "user" ? "environment" : "user";
+      cur = localStream.getVideoTracks()[0];
+      const settings = cur ? cur.getSettings() : {};
+      const constraints = { audio: false, video: { facingMode: { ideal: newFacing }, width: settings.width || { ideal: 1280 }, height: settings.height || { ideal: 720 } } };
+      // Android/Chrome держит device-lock, пока жив текущий видео-трек:
+      // без stop() getUserMedia вернёт ТУ ЖЕ камеру. Останавливаем трек
+      // ДО запроса (iOS Safari так тоже корректно). PiP на это время
+      // пустой — after-success fade-in не нужен, кадр приходит сразу.
+      if (cur) {
+        localStream.removeTrack(cur);
+        try { cur.stop(); } catch (_) {}
+        cur = null;
+      }
+      let newStream;
+      try { newStream = await navigator.mediaDevices.getUserMedia(constraints); }
+      catch (err) {
+        // Возврат фронтальной, если новую получить не удалось (звонок не молчит).
+        try {
+          const back = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+          const bt = back.getVideoTracks()[0];
+          localStream.addTrack(bt);
+          const snd = pc && pc.getSenders().find(x => x.track && x.track.kind === "video");
+          if (snd) await snd.replaceTrack(bt);
+        } catch (_) {}
+        diagLog("error", "camflip get: " + err.message);
+        camFlipBusy = false; return;
+      }
+      const newTrack = newStream.getVideoTracks()[0];
+      if (!newTrack) { newStream.getTracks().forEach(t => t.stop()); camFlipBusy = false; return; }
+      localStream.addTrack(newTrack);
+      const sender = pc.getSenders().find(x => x.track && x.track.kind === "video");
+      if (!sender) { newTrack.stop(); localStream.removeTrack(newTrack); camFlipBusy = false; return; }
+      await sender.replaceTrack(newTrack);
+      camFacing = newFacing;
+      diagLog("camflip", newFacing);
+      // Лёгкий tickle PiP после смены трека (нативный слой перестраивается).
+      try { tickleNativeLayer(); } catch (_) {}
+    } catch (err) {
+      diagLog("error", "camflip: " + err.message);
+    } finally {
+      camFlipBusy = false;
+    }
   }
   function tickleNativeLayer() {
     // call52: однократный tickle всех видео stage (webkit bug 275210:
