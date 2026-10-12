@@ -33,6 +33,9 @@
   let camFlipBusy = false; // call54: защита от двойного тапа во время переключения
   let pendingRemoteCandidates = [];
   let remoteDescriptionReady = false;
+  // Cold iOS accept: keep the PeerConnection stable while getUserMedia and SDP
+  // setup are awaiting; duplicate re-offers must not replace it mid-answer.
+  let acceptInProgress = false;
   let ring = null;
   let callState = "idle";
   let callOverlay = null;
@@ -358,6 +361,7 @@
 
     pendingRemoteCandidates = [];
     remoteDescriptionReady = false;
+    acceptInProgress = false;
     stopCallTimer();
     stopRingback();
     stopStream();
@@ -613,26 +617,33 @@
 
   }
   async function acceptCall() {
-    if (!pendingOffer) return;
+    if (!pendingOffer || acceptInProgress) return;
+    acceptInProgress = true;
     // call28: fullscreen now driven from setCallState (single source).
     const call = pendingOffer; pendingOffer = null;
     if (call.mode) { callMode = call.mode; callModeKnown = true; }
     callDirection = "in"; callRecorded = false;
-    // Push can wake the app without SDP. In that case Accept starts a fresh
-    // offer, but this is the already-notified caller's response path: never
-    // send a second push back to the initiator, even when it is offline.
-    if (!call.signal) return startCallTo(call.from, { push: false, responseToIncoming: true });
-    setCallState("connecting", call.from);
-    await setup(call.from);
-    await pc.setRemoteDescription(call.signal.sdp);
-    remoteDescriptionReady = true;
-    for (const candidate of pendingRemoteCandidates.splice(0)) {
-      try { await pc.addIceCandidate(candidate); } catch (err) { diagLog("error", "queued ICE: " + err.message); }
+    try {
+      // Push can wake the app without SDP. In that case Accept starts a fresh offer.
+      if (!call.signal) return await startCallTo(call.from, { push: false, responseToIncoming: true });
+      setCallState("connecting", call.from);
+      await setup(call.from);
+      await pc.setRemoteDescription(call.signal.sdp);
+      remoteDescriptionReady = true;
+      for (const candidate of pendingRemoteCandidates.splice(0)) {
+        try { await pc.addIceCandidate(candidate); } catch (err) { diagLog("error", "queued ICE: " + err.message); }
+      }
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      send(call.from, { kind: "answer", sdp: pc.localDescription });
+      const activeBtn = callMode === "video" ? videoBtn() : btn();
+      if (activeBtn) { activeBtn.innerHTML = ENDX; activeBtn.title = "Завершить звонок"; }
+    } catch (err) {
+      showCallError(err);
+      closeCall();
+    } finally {
+      acceptInProgress = false;
     }
-    const answer = await pc.createAnswer(); await pc.setLocalDescription(answer);
-    send(call.from, { kind: "answer", sdp: pc.localDescription });
-    const activeBtn = callMode === "video" ? videoBtn() : btn();
-    if (activeBtn) { activeBtn.innerHTML = "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><g transform=\"rotate(180 12 12)\"><path d=\"M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z\"/></g></svg>"; activeBtn.title = "Завершить звонок"; }
   }
   async function onSignal(msg) {
     const from = msg.from_npub; const s = msg.signal;
@@ -650,6 +661,10 @@
       return;
     }
     if (s.kind === "offer") {
+      // Cold iOS may still be inside getUserMedia/setRemoteDescription after
+      // Accept. Ignore duplicate caller re-offers until the answer is sent;
+      // replacing pc here causes "no pending remote description".
+      if (acceptInProgress) return;
       // v160w6q (Олег 07.10 22:01 «исходящий отображается как входящий без минут»):
       // glare-разрешение холодного ответа: МЫ звоним (out, connecting), пир
       // проснулся от пуша, принял и выслал СВОЙ fresh offer. Это НЕ входящий:

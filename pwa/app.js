@@ -1396,12 +1396,22 @@ function getTotalUnread() {
     return total;
 }
 
+function clearBadgeBothContexts() {
+    try {
+        if (navigator.clearAppBadge) navigator.clearAppBadge().catch(() => {});
+        if (navigator.setAppBadge) navigator.setAppBadge(0).catch(() => {});
+        if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({ type: "CLEAR_BADGE" });
+        }
+    } catch (e) { console.debug("[badge] clear failed:", e && e.message); }
+}
+
 async function updateBadge() {
     const total = getTotalUnread();
     try {
         if ("setAppBadge" in navigator) {
             if (total > 0) await navigator.setAppBadge(total);
-            else if ("clearAppBadge" in navigator) await navigator.clearAppBadge();
+            else clearBadgeBothContexts();
         }
     } catch (e) {
         console.debug("[badge] failed:", e && e.message);
@@ -4983,7 +4993,17 @@ function startPolling() {
         document.addEventListener(evt, () => forceTick(evt), { passive: true, capture: true });
     }
     document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") forceTick("visibility");
+        if (document.visibilityState === "visible") {
+            // Badge-only fix: read the active chat on resume, but do not
+            // navigate or close the chat/call state.
+            if (activePeer && typeof clearUnread === "function") {
+                clearUnread(activePeer);
+                if (contacts && contacts[activePeer]) contacts[activePeer].unreadCount = 0;
+                updateBadge();
+                renderChatList();
+            }
+            forceTick("visibility");
+        }
     });
     window.addEventListener("pageshow", () => forceTick("pageshow"));
     window.addEventListener("focus", () => forceTick("focus"));

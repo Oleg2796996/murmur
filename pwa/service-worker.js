@@ -44,6 +44,13 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") {
     self.skipWaiting();
+    return;
+  }
+  if (event.data && event.data.type === "CLEAR_BADGE") {
+    event.waitUntil((async () => {
+      try { if (self.navigator.clearAppBadge) await self.navigator.clearAppBadge(); } catch (_) {}
+      try { if (self.navigator.setAppBadge) await self.navigator.setAppBadge(0); } catch (_) {}
+    })());
   }
 });
 
@@ -51,6 +58,8 @@ self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const data = event.notification.data || {};
   event.waitUntil((async () => {
+    try { if (self.navigator.clearAppBadge) await self.navigator.clearAppBadge(); } catch (_) {}
+    try { if (self.navigator.setAppBadge) await self.navigator.setAppBadge(0); } catch (_) {}
     const list = await clients.matchAll({ type: "window", includeUncontrolled: true });
     for (const client of list) {
       if ("focus" in client) {

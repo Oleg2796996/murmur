@@ -241,14 +241,14 @@
     <script src="contacts.js?v=160w5g4&i18n=2" defer></script>
     <script src="decrypt-groups.js?v=160z4&i18n=2" defer></script>
     <script src="groups.js?v=160z5&i18n=2" defer></script>
-    <script src="call-audio.js?v=call42-pipfix" defer></script>
+    <script src="call-audio.js?v=call55-cold-accept-race-20261012" defer></script>
     <script src="message-cache.js?v=160z3&i18n=2" defer></script>
     <script src="qrcode.js?v=160w6g1" defer></script>
-    <script src="app.js?v=guard-v160z28-20261009" defer></script>
+    <script src="app.js?v=call54b-badge-min-20261012" defer></script>
     <script>
       if ("serviceWorker" in navigator) {
         // v160y20: чистый UI — только 🔔, без 💾📊, hover без нажатого эффекта
-        navigator.serviceWorker.register("/service-worker.js?v=sw32-call20&t=" + Date.now(), { updateViaCache: "none" }).then((reg) => {
+        navigator.serviceWorker.register("/service-worker.js?v=sw-call54b-badge-min-20261012&t=" + Date.now(), { updateViaCache: "none" }).then((reg) => {
           if (reg.waiting) {
             reg.waiting.postMessage({ type: "SKIP_WAITING" });
           }
