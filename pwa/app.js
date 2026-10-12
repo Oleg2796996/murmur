@@ -170,7 +170,7 @@ async function ensureWasm() {
     await loadWasmModule();
 }
 
-const RELAY = "https://murmur.senswifi.ru";
+const RELAY = "https://murmurchat.org";
 const LS_NPUB = "murmur.npub";
 const LS_KEY = "murmur.sk";
 const LS_NAME = "murmur.name";
