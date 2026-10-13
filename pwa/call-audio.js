@@ -37,6 +37,7 @@
   // setup are awaiting; duplicate re-offers must not replace it mid-answer.
   let acceptInProgress = false;
   let ring = null;
+  let pushRingTimer = null; // call56: таймаут push-карточки без SDP (звонящий мог уже сбросить)
   let callState = "idle";
   let callOverlay = null;
   let callStartedAt = 0;
@@ -143,6 +144,25 @@
     // hint из push — надёжный источник (отправитель знал mode), карточку красим сразу
     callModeKnown = !!hint;
     setCallState("incoming", from);
+    armPushRingTimeout(from);
+  }
+  // call56 (Олег 13.10: «открывается меню приёма, хотя звонящий уже не звонит»):
+  // push-карточка без SDP не имела таймаута и висела вечно, если звонящий
+  // сбросил до того, как получатель открыл приложение (оффер эфемерен по WS,
+  // повторные офферы прекращаются с его 60с-таймаутом). Теперь ждём оффер
+  // столько же, сколько звонящий держит звонок (60с от НАЧАЛА его звонка).
+  // Истёкшие пропущенные фиксируем в истории как «Пропущенный» + bye (вежливый
+  // сигнал звонящему, что мы «видели» звонок), карточка молча закрывается.
+  function armPushRingTimeout(from) {
+    if (pushRingTimer) clearTimeout(pushRingTimer);
+    pushRingTimer = setTimeout(() => {
+      pushRingTimer = null;
+      if (pendingOffer && pendingOffer.from === from && !pc) {
+        recordCall("missed");
+        try { send(from, { kind: "bye" }); } catch (_) {}
+        closeCall("missed");
+      }
+    }, 60000);
   }
   function ensureOverlay() {
     if (callOverlay) return callOverlay;
@@ -356,6 +376,7 @@
     if (pc) pc.close();
     pc = null; remotePeer = null; pendingOffer = null;
     if (reofferTimer) { clearInterval(reofferTimer); reofferTimer = null; } // call53
+    if (pushRingTimer) { clearTimeout(pushRingTimer); pushRingTimer = null; } // call56
     sentIce.length = 0; // call53
     camFacing = "user"; camFlipBusy = false; // call54
 
@@ -649,6 +670,14 @@
     const from = msg.from_npub; const s = msg.signal;
     if (!from || !s) return;
     if (s.kind === "bye") {
+      // call56: bye от звонящего (его 60с истёк / отмена до соединения) должен
+      // гасить и «призрачную» входящую карточку без SDP — раньше она висела,
+      // пока её не закроешь руками, хотя звонить уже некому.
+      if (pendingOffer && !pc && pendingOffer.from === from && !pendingOffer.signal) {
+        recordCall("missed");
+        closeCall("missed");
+        return;
+      }
       // v160w6o (Олег 07.10 21:15): продолжительность важнее того, кто положил
       // трубку. Если соединение состоялось (таймер тикал) — у ОБЕИХ сторон в
       // истории завершённый звонок с длительностью, независимо от того,
@@ -657,7 +686,7 @@
       return;
     }
     if (s.kind === "ring") {
-      if (!pc && !pendingOffer) { pendingOffer = { from, signal: null, mode: null }; callModeKnown = false; setCallState("incoming", from); }
+      if (!pc && !pendingOffer) { pendingOffer = { from, signal: null, mode: null }; callModeKnown = false; setCallState("incoming", from); armPushRingTimeout(from); } // call56
       return;
     }
     if (s.kind === "offer") {
@@ -717,6 +746,8 @@
           clearTimeout(ring);
           ring = setTimeout(() => { if (pendingOffer && !pc) { try { send(from, { kind: "bye" }); } catch (_) {} closeCall(); } }, 60000);
         }
+        // call56: push-путь не ставит ring — arm наш таймаут от этого момента
+        if (!ring) armPushRingTimeout(from);
         return;
       }
       if (pendingOffer && pendingOffer.from === from && !pendingOffer.signal) {
@@ -726,11 +757,17 @@
         callMode = pendingOffer.mode;
         callModeKnown = true;
         setCallState("incoming", from);
+        // call56: у push-карточки таймаута не было вовсе (висела вечно даже
+        // после реального оффера) — arm с этого момента, как живой путь.
+        if (pushRingTimer) { clearTimeout(pushRingTimer); pushRingTimer = null; }
+        if (ring) clearTimeout(ring);
+        ring = setTimeout(() => { if (pendingOffer && !pc) { try { send(from, { kind: "bye" }); } catch (_) {} closeCall(); } }, 60000);
         return;
       }
       pendingOffer = { from, signal: s, mode: s.mode === "video" ? "video" : "audio" };
       callModeKnown = true;
       setCallState("incoming", from);
+      if (pushRingTimer) { clearTimeout(pushRingTimer); pushRingTimer = null; } // call56
       if (ring) clearTimeout(ring);
       ring = setTimeout(() => { if (pendingOffer && !pc) { try { send(from, { kind: "bye" }); } catch (_) {} closeCall(); } }, 60000);
       return;

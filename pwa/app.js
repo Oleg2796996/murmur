@@ -282,7 +282,7 @@ window.recordCallEvent = function (peer, event) {
     if (activePeer === peer && messagesArea) {
         const label = item.callDirection === "out"
             ? (item.callStatus === "declined" ? "Исходящий отклонен" : "Исходящий")
-            : (item.callStatus === "cancelled" ? "Входящий отменен" : "Входящий");
+            : (item.callStatus === "cancelled" ? "Входящий отменен" : (item.callStatus === "missed" ? "Пропущенный" : "Входящий"));
         const duration = item.callDuration > 0 ? " - " + formatDurationForCall(item.callDuration) : "";
         const node = document.createElement("div");
         node.className = "call-event-text";
@@ -2801,7 +2801,7 @@ function renderMessages() {
             if (m.callEvent) {
                         const label = m.callDirection === "out"
                     ? (m.callStatus === "declined" ? "Исходящий отклонен" : "Исходящий")
-                    : (m.callStatus === "cancelled" ? "Входящий отменен" : "Входящий");
+                    : (m.callStatus === "cancelled" ? "Входящий отменен" : (m.callStatus === "missed" ? "Пропущенный" : "Входящий"));
                 const dur = m.callDuration > 0 ? " - " + formatDurationForCall(m.callDuration) : "";
                 const text = label + " " + formatTime(m.ts) + dur;
                 div.className = "call-event-text";
