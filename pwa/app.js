@@ -3602,12 +3602,10 @@ messageInput?.addEventListener("input", () => {
     sendTypingPing();
 });
 
-messageInput?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-    }
-});
+// call56b (Олег 13.10): Enter = перенос строки, отправка только кнопкой
+// (стрелка справа). Раньше Enter без Shift отправлял сообщение — переносы
+// строк в сообщениях были невозможны с клавиатуры. Нативное поведение
+// textarea не трогаем: Enter вставляет \n, autogrow (выше) растит поле.
 
 // v160w5e3 (Олег 29.09 07:09, скрин+уточнение «галочка — норм, стрелка — дергается»
 // при w5e2): w5e2 (touchend preventDefault) НЕ сработал — на iOS blur инпута
