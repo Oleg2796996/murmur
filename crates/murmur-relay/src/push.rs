@@ -766,16 +766,26 @@ fn serve_static(path: &str, static_dir: &Option<PathBuf>, head_only: bool) -> Op
     // Strip query string if any (hyper already separated, but be safe).
     let clean = path.split('?').next().unwrap_or(path);
     // Resolve to a relative path under dir, no leading slash.
-    let rel = clean.trim_start_matches('/');
+    let mut rel = clean.trim_start_matches('/').to_string();
     if rel.is_empty() {
         // "/" -> index.html
+        return try_file(dir, "index.html", head_only);
+    }
+    // PWA is requested under the /pwa/ URL prefix but lives at the ROOT of
+    // static_dir. Strip the prefix so deploys only update static_dir itself
+    // (previously this resolved into a stale nested pwa/pwa/ copy).
+    if let Some(stripped) = rel.strip_prefix("pwa/") {
+        rel = stripped.to_string();
+    }
+    if rel.is_empty() {
+        // "/pwa/" -> index.html
         return try_file(dir, "index.html", head_only);
     }
     // Reject path traversal attempts.
     if rel.contains("..") {
         return None;
     }
-    let candidate = dir.join(rel);
+    let candidate = dir.join(&rel);
     if candidate.is_file() {
         return serve_file(&candidate, head_only);
     }
