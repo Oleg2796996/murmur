@@ -2206,8 +2206,15 @@ async function loadHistory(peer, beforeTs) {
                     // Также cached outgoing с "шифрованное" body — это нерасшифрованный
                     // legacy outbox без attachments_meta. Нужно либо обновить body,
                     // либо подтянуть attachments_meta с plaintext_b64 из outbox.
+                    // call57 (Олег 15.10.2026: «заглушки расползаются с каждым рестартом»):
+                    // isStaleBody расширяем на «[исходящее сообщение]» — запечённый
+                    // fallback (первый poll после рестарта обогнал async
+                    // warmOutboxCache → outbox пуст → placeholder попал в кэш).
+                    // Раньше чинились только «🔒 шифрованное…» body, заглушка
+                    // оставалась навсегда и расползалась через превью.
                     const isStaleBody = cachedMsg && cachedMsg.body &&
-                        (cachedMsg.body.includes("шифрованное") || cachedMsg.body.startsWith("🔒"));
+                        (cachedMsg.body.includes("шифрованное") || cachedMsg.body.startsWith("🔒") ||
+                         cachedMsg.body === "[исходящее сообщение]");
                     if (cachedMsg && isStaleBody) {
                         const apiDir = m.direction || (fromNpub === myNpub ? "out" : "in");
                         cachedMsg.direction = apiDir; // fix stale direction
@@ -2235,7 +2242,15 @@ async function loadHistory(peer, beforeTs) {
                                 }
                             } catch (e) {}
                             const outboxKey = cachedMsg._sig || sigKey;
-                            const outboxEntry = outbox[outboxKey] || outbox[(fromNpub || "") + ":" + m.ts];
+                            let outboxEntry = outbox[outboxKey] || outbox[(fromNpub || "") + ":" + m.ts];
+                            // call57: ключ-промах (например, _sig у запечённой копии
+                            // отличается) — добиваем матч по _hash и ts±60, как в
+                            // основном pollHist outbox-пути (~4591).
+                            if (!outboxEntry) {
+                                const obArr = Object.values(outbox);
+                                outboxEntry = obArr.find(o => hash && o._hash === hash) ||
+                                    obArr.find(o => Math.abs((o.ts || 0) - (m.ts || 0)) <= 60);
+                            }
                             if (outboxEntry) {
                                 if (outboxEntry.body !== undefined) cachedMsg.body = outboxEntry.body;
                                 if (outboxEntry.attachments_meta && outboxEntry.attachments_meta.length) {
@@ -4588,7 +4603,17 @@ async function pollHistoryForPeer(peer) {
             let resolvedAttachmentsMeta = msg.attachments || [];
                 let resolvedReplyTo = null; // v160y52: reply_to из outbox (цитата)
                 if (fromNpub === myNpub) {
-                const outbox = loadOutboxForPeer(peer);
+                let outbox = loadOutboxForPeer(peer);
+                // call57 (Олег 15.10.2026 «новые тоже стали заглушками после рестарта»):
+                // первый pollHist после холодного старта может обогнать async
+                // warmOutboxCache (_outboxKVCache ещё null) → outbox пуст →
+                // fallback «[исходящее сообщение]» запекается навсегда.
+                // Если кэш не прогрет — прогреваем синхронно-await и повторяем.
+                if (outbox.length === 0 && window.appStore && window._outboxCacheWarm !== true) {
+                    try { await warmOutboxCache(); } catch (_) {}
+                    window._outboxCacheWarm = true;
+                    outbox = loadOutboxForPeer(peer);
+                }
                 let localOut = outbox.find(o => {
                     if (hash && o._hash === hash) return true;
                     if (o._sig === sigKey) return true;
@@ -4936,7 +4961,7 @@ function resyncSidebarPreviews() {
         // НО: resync видит только последний msg; если у него нет ни текста, ни
         // attachments_meta (старый кэш), а в contacts уже стоит 📎 или текст из
         // более раннего рендера — НЕ откатывать на 🔒-плейсхолдер (мерцание).
-        const fallbackish = (preview === "🔒 зашифрованное сообщение");
+        const fallbackish = (preview === "🔒 зашифрованное сообщение" || preview === "[исходящее сообщение]");
         const cur = contacts[peer] ? contacts[peer].lastMessagePreview : "";
         if (fallbackish && cur && cur !== "🔒 зашифрованное сообщение") continue;
         if (!contacts[peer]) contacts[peer] = { peer, lastMessagePreview: "", lastTs: 0, unreadCount: 0 };

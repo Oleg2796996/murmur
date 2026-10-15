@@ -215,8 +215,13 @@ function setChatPreview(peer, ts, preview) {
     // а реальное превью из IDB-кэша/decrypt несёт ts самого сообщения (< last_ts).
     // v160x-guard «непустое не трогать при более старом ts» держал 🔒 вечно →
     // «Нет сообщений» после reload (v160x лечил только ПУСТОЕ превью).
+    // call57 (Олег 15.10.2026): «[исходящее сообщение]» — запечённый fallback
+    // (первый poll обогнал warmOutboxCache), НЕ реальный текст. Заменяемый
+    // независимо от ts — иначе реальное превью старее не пробьёт guard и
+    // заглушка расползается по списку чатов с каждым рестартом.
     const curIsPlaceholder = !cur.lastMessagePreview ||
         cur.lastMessagePreview === "🔒 зашифрованное сообщение" ||
+        cur.lastMessagePreview === "[исходящее сообщение]" ||
         cur.lastMessagePreview.startsWith("{");
     if (!curIsPlaceholder && cur.lastTs && nts && nts < cur.lastTs) return false;
     cur.lastMessagePreview = preview;
