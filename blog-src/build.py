@@ -22,6 +22,21 @@ ARTICLES = [
       "MurMur is an E2EE messenger that runs as a PWA. No app store needed — install it from the browser, add contacts by npub, chat and call."),
      ("zashchishchyonnyy-messendzher-v-brauzere-pwa", "Защищённый мессенджер в браузере: как пользоваться PWA",
       "MurMur — E2EE мессенджер в формате PWA. Без магазинов приложений: устанавливается из браузера, контакты по npub, звонки и пуши.")),
+    ("draft-04-e2ee-explained.md",
+     ("e2ee-explained-what-it-protects", "End-to-End Encryption, Explained Honestly",
+      "What end-to-end encryption protects — and what it doesn't: metadata, backups, lost keys, compromised devices. Plus an honest note on MurMur's audit status."),
+     ("skvoznoe-shifrovanie-prosto", "Сквозное шифрование: честно и без пафоса",
+      "Что защищает сквозное шифрование, а что нет: метаданные, бэкапы, потерянный ключ, заражённый телефон. И честное слово про аудит MurMur.")),
+    ("draft-05-pwa-vs-native.md",
+     ("pwa-messenger-vs-native-app", "MurMur is a PWA messenger: what that means in practice",
+      "What a PWA messenger can and cannot do compared to a native app — push, calls, offline, and why skipping the app stores is a feature, not a bug."),
+     ("pwa-messendzher-ili-nativnoe-prilozhenie", "MurMur — PWA-мессенджер: что это значит на практике",
+      "Чем PWA-мессенджер отличается от обычного приложения: пуш-уведомления, звонки, офлайн — и почему отсутствие в сторах это плюс, а не минус.")),
+    ("draft-06-why-no-accounts.md",
+     ("why-no-accounts", "A messenger with no accounts, no phone numbers, no emails",
+      "Why MurMur replaces phone-number identity with a cryptographic key, what that solves, what it costs, and how a relay that can't read your messages works."),
+     ("pochemu-bez-akkauntov", "Мессенджер без аккаунтов: почему так и что это значит",
+      "Почему MurMur заменяет номер телефона криптографическим ключом, что это даёт и чего лишает. Как работает релей, который не может прочитать переписку.")),
 ]
 
 PAGE_TMPL = """<!DOCTYPE html>

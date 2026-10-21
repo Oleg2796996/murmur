@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Сквозное шифрование: честно и без пафоса</title>
+<meta name="description" content="Что защищает сквозное шифрование, а что нет: метаданные, бэкапы, потерянный ключ, заражённый телефон. И честное слово про аудит MurMur.">
+<link rel="canonical" href="https://murmurchat.org/blog/skvoznoe-shifrovanie-prosto/">
+<meta property="og:title" content="Сквозное шифрование: честно и без пафоса">
+<meta property="og:description" content="Что защищает сквозное шифрование, а что нет: метаданные, бэкапы, потерянный ключ, заражённый телефон. И честное слово про аудит MurMur.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://murmurchat.org/blog/skvoznoe-shifrovanie-prosto/">
+<link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
+<style>
+  :root { --bg:#0f1620; --card:rgba(255,255,255,.045); --accent:#229ED9; --accent2:#5eead4; --text:#e8eef5; --muted:#9fb0c3; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { min-height:100vh; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:28px 20px 60px;
+    background-image: radial-gradient(ellipse 60% 35% at 20% 0%, rgba(34,158,217,.13), transparent),
+      radial-gradient(ellipse 50% 45% at 85% 100%, rgba(94,234,212,.08), transparent); }
+  .wrap { max-width:720px; margin:0 auto; }
+  .back { display:inline-block; color:var(--accent); text-decoration:none; font-size:14px; margin-bottom:18px; }
+  h1 { font-size:30px; font-weight:800; letter-spacing:-.5px; line-height:1.2; margin-bottom:8px;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  h2 { font-size:20px; font-weight:700; margin:28px 0 10px; color:var(--text); }
+  h3 { font-size:16px; font-weight:700; margin:18px 0 6px; color:var(--text); }
+  p { font-size:15px; line-height:1.7; color:var(--muted); margin-bottom:12px; }
+  ul, ol { margin:0 0 14px 22px; }
+  li { font-size:15px; line-height:1.7; color:var(--muted); margin-bottom:6px; }
+  a { color:var(--accent); }
+  strong { color:var(--text); }
+  table { border-collapse:collapse; width:100%; margin:14px 0 18px; font-size:13.5px; }
+  th, td { border:1px solid rgba(255,255,255,.12); padding:8px 10px; text-align:left; vertical-align:top; color:var(--muted); line-height:1.5; }
+  th { background:rgba(34,158,217,.12); color:var(--text); font-weight:700; }
+  td:first-child { color:var(--text); font-weight:600; white-space:nowrap; }
+  .cta { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:18px 20px; margin:26px 0; text-align:center; }
+  .cta a { display:inline-block; background:linear-gradient(90deg,var(--accent),#1d8ac4); color:#fff; text-decoration:none; font-weight:700; font-size:15px; padding:12px 26px; border-radius:12px; }
+  .meta-line { color:var(--muted); font-size:13px; margin-bottom:22px; }
+  .faq { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:18px; padding:20px 18px; margin-top:26px; }
+  .faq h2 { margin-top:0; }
+  .footer { text-align:center; margin-top:40px; color:var(--muted); font-size:13px; }
+  .footer a { color:var(--accent); text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<a class="back" href="/blog/">← Blog</a>
+<h1>Сквозное шифрование: честно и без пафоса</h1>
+<div class="meta-line">2026-10-21 · MurMur team</div>
+<h2>Что такое сквозное шифрование на самом деле</h2>
+
+<p>Про сквозное шифрование (E2EE) слышали многие, а представляют его немногие. Смысл простой: сообщение шифруется на вашем устройстве и расшифровывается только на устройстве собеседника. Все, кто находится посередине — сервер, передающий сообщение, сеть, по которой оно идёт, компания, владеющая инфраструктурой, — видят только зашифрованный набор байтов и не могут его прочитать.</p>
+
+<p>MurMur устроен так с самого начала. Здесь нет регистрации по номеру телефона или почте: ваша личность — это криптографический ключ, который выглядит как npub. Сообщения и звонки шифруются между двумя устройствами. Релей — небольшой сервер на Rust в Европе — передаёт зашифрованные данные и хранит их только в зашифрованном виде ограниченное время. Открытый текст на сервере не появляется никогда.</p>
+
+<h2>Что защищает E2EE</h2>
+
+<ul>
+  <li><strong>Содержание переписки от сервера.</strong> Релей физически не может прочитать ваши сообщения, хотя именно он их хранит и пересылает.</li>
+  <li><strong>Содержание от перехвата в сети.</strong> Сосед по Wi-Fi, провайдер, любой промежуточный узел видят шифротекст, а не диалог.</li>
+  <li><strong>Звонки.</strong> Шифруется и аудио/видео разговоров, не только текст.</li>
+  <li><strong>Сообщения при утечке с сервера.</strong> Если диск релея скопирован, утекут зашифрованные данные без ключа, да ещё и хранившиеся ограниченное время.</li>
+</ul>
+
+<h2>Что E2EE не защищает</h2>
+
+<p>Это самая важная часть, о которой обычно говорят меньше всего.</p>
+
+<ul>
+  <li><strong>Метаданные.</strong> Шифрование прячет <em>что</em> вы сказали, но не <em>факт</em> разговора. Релей видит, какие ключи соединяются, когда, как часто и в каком примерно объёме идёт трафик. Открытый текст он не читает, но картина общения по служебным данным восстанавливается.</li>
+  <li><strong>Собеседника.</strong> Человек, с которым вы говорите, может сделать скриншот, переслать или скопировать переписку. E2EE защищает от третьих лиц, но не от получателя.</li>
+  <li><strong>Заражённое устройство.</strong> Если на телефоне вредоносная программа или экран кто-то подсматривает, шифрование бессильно: атакующий читает текст до шифрования или после расшифровки. E2EE защищает канал, а не ваше железо.</li>
+  <li><strong>Потерянный ключ.</strong> Восстановления по SMS нет, кнопки «забыли пароль» нет. В MurMur ключ — это и есть аккаунт. Потеряли его без резервной копии — потеряли аккаунт и доступ к истории.</li>
+  <li><strong>Ошибки в коде.</strong> Шифрование — это программа, а в программах бывают дефекты. Протокол может быть корректным, а реализация — нет.</li>
+</ul>
+
+<table>
+  <thead>
+    <tr><th>Угроза</th><th>Помогает ли E2EE?</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Оператор релея читает переписку</td><td>Да — это и есть его основная задача</td></tr>
+    <tr><td>Перехват в Wi-Fi или на стороне провайдера</td><td>Да</td></tr>
+    <tr><td>Утечка хранимых сообщений с сервера</td><td>В основном да — утекает только шифротекст, и недолго хранившийся</td></tr>
+    <tr><td>Узнать, кто с кем и когда общается</td><td>Нет</td></tr>
+    <tr><td>Вредонос на телефоне или физический доступ к нему</td><td>Нет</td></tr>
+    <tr><td>Вы потеряли ключ</td><td>Нет — восстановления по SMS не существует</td></tr>
+  </tbody>
+</table>
+
+<h2>Честно про MurMur</h2>
+
+<p>MurMur — молодой open-source проект с небольшой аудиторией. Независимого аудита безопасности он пока не проходил. Код открыт, проверить его может любой — и мы были бы рады такой проверке, — но «код доступен для проверки» и «проверка проведена» — разные вещи. Если ваша модель угроз требует именно аудированного ПО, подождать — разумное решение. Лучше сказать это прямо, чем делать вид, что проблемы нет.</p>
+
+<p>Два практических ограничения стоит знать заранее. MurMur — это PWA, он зависит от браузера: обновления и особенности браузеров влияют на него так же, как на любой веб-приложение. А поскольку личность здесь — это ключ, а не номер телефона, резервная копия ключа — ваша ответственность. Это одновременно сила такой модели и её самое уязвимое место.</p>
+
+<h2>Вопросы и ответы</h2>
+
+<dl>
+  <dt><strong>Значит ли E2EE, что релей MurMur вообще ничего не видит?</strong></dt>
+  <dd>Содержание сообщений и звонков — нет, не видит. Но служебные данные ему доступны: какие пары ключей обмениваются трафиком и когда; зашифрованные сообщения он временно хранит для доставки. Это метаданные, и E2EE их не прячет.</dd>
+
+  <dt><strong>Что будет, если я потеряю ключ?</strong></dt>
+  <dd>Вы потеряете аккаунт. Восстановления через SMS или почту нет, потому что к аккаунту не привязаны ни номер, ни адрес. Единственная страховка — заранее сделанная резервная копия ключа.</dd>
+
+  <dt><strong>Зачем шифрованному мессенджеру вообще сервер?</strong></dt>
+  <dd>Чтобы доставлять сообщения, когда получатель не в сети, маршрутизировать звонки и доставлять push-уведомления. Задача релея — транспорт и временное зашифрованное хранение, а не чтение. Поэтому «сквозное шифрование» и «наличие сервера» друг другу не противоречат.</dd>
+
+  <dt><strong>E2EE — это то же самое, что замочек в браузере?</strong></dt>
+  <dd>Нет. Обычный HTTPS шифрует канал между вами и сервером — сервер читает всё. E2EE сохраняет содержимое зашифрованным на всём пути, и прочитать его могут только два устройства на концах.</dd>
+
+  <dt><strong>MurMur проходил аудит безопасности?</strong></dt>
+  <dd>Внешнего аудита пока не было. Исходный код открыт на GitHub, независимая проверка приветствуется. Мы считаем это открытым пунктом, а не закрытым.</dd>
+</dl>
+
+<p>Сквозное шифрование — важный и нужный слой защиты, но это один слой, а не гарантия полной безопасности. Польза от него появляется тогда, когда вы точно понимаете, где он заканчивается. Если такой набор компромиссов — без регистрации и номера телефона, с релеем, который не может прочитать переписку, но с ответственностью за свой ключ и молодым, ещё не аудированным кодом — вам подходит, <a href="https://murmurchat.org">попробуйте MurMur на murmurchat.org</a>. Он устанавливается как PWA на iPhone и Android без App Store и Google Play, а исходники лежат на GitHub.</p>
+<div class="cta"><a href="https://murmurchat.org">Try MurMur — no phone, no email →</a></div>
+<div class="footer"><a href="https://murmurchat.org">murmurchat.org</a> · <a href="https://github.com/Oleg2796996/murmur">GitHub</a> · <a href="/privacy">Privacy</a></div>
+</div>
+</body>
+</html>

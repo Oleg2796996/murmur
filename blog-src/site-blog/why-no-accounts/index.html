@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>A messenger with no accounts, no phone numbers, no emails</title>
+<meta name="description" content="Why MurMur replaces phone-number identity with a cryptographic key, what that solves, what it costs, and how a relay that can&#x27;t read your messages works.">
+<link rel="canonical" href="https://murmurchat.org/blog/why-no-accounts/">
+<meta property="og:title" content="A messenger with no accounts, no phone numbers, no emails">
+<meta property="og:description" content="Why MurMur replaces phone-number identity with a cryptographic key, what that solves, what it costs, and how a relay that can&#x27;t read your messages works.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://murmurchat.org/blog/why-no-accounts/">
+<link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
+<style>
+  :root { --bg:#0f1620; --card:rgba(255,255,255,.045); --accent:#229ED9; --accent2:#5eead4; --text:#e8eef5; --muted:#9fb0c3; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { min-height:100vh; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:28px 20px 60px;
+    background-image: radial-gradient(ellipse 60% 35% at 20% 0%, rgba(34,158,217,.13), transparent),
+      radial-gradient(ellipse 50% 45% at 85% 100%, rgba(94,234,212,.08), transparent); }
+  .wrap { max-width:720px; margin:0 auto; }
+  .back { display:inline-block; color:var(--accent); text-decoration:none; font-size:14px; margin-bottom:18px; }
+  h1 { font-size:30px; font-weight:800; letter-spacing:-.5px; line-height:1.2; margin-bottom:8px;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  h2 { font-size:20px; font-weight:700; margin:28px 0 10px; color:var(--text); }
+  h3 { font-size:16px; font-weight:700; margin:18px 0 6px; color:var(--text); }
+  p { font-size:15px; line-height:1.7; color:var(--muted); margin-bottom:12px; }
+  ul, ol { margin:0 0 14px 22px; }
+  li { font-size:15px; line-height:1.7; color:var(--muted); margin-bottom:6px; }
+  a { color:var(--accent); }
+  strong { color:var(--text); }
+  table { border-collapse:collapse; width:100%; margin:14px 0 18px; font-size:13.5px; }
+  th, td { border:1px solid rgba(255,255,255,.12); padding:8px 10px; text-align:left; vertical-align:top; color:var(--muted); line-height:1.5; }
+  th { background:rgba(34,158,217,.12); color:var(--text); font-weight:700; }
+  td:first-child { color:var(--text); font-weight:600; white-space:nowrap; }
+  .cta { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:18px 20px; margin:26px 0; text-align:center; }
+  .cta a { display:inline-block; background:linear-gradient(90deg,var(--accent),#1d8ac4); color:#fff; text-decoration:none; font-weight:700; font-size:15px; padding:12px 26px; border-radius:12px; }
+  .meta-line { color:var(--muted); font-size:13px; margin-bottom:22px; }
+  .faq { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:18px; padding:20px 18px; margin-top:26px; }
+  .faq h2 { margin-top:0; }
+  .footer { text-align:center; margin-top:40px; color:var(--muted); font-size:13px; }
+  .footer a { color:var(--accent); text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<a class="back" href="/blog/">← Blog</a>
+<h1>A messenger with no accounts, no phone numbers, no emails</h1>
+<div class="meta-line">2026-10-21 · MurMur team</div>
+<h2>We kept asking for a phone number. Then we stopped.</h2>
+
+<p>Most messengers make you register with a phone number or an email. It feels like a formality, but it is actually the foundation of the whole system: your account is tied to something you don't fully control.</p>
+
+<p>A phone number is not yours in any real sense. Your carrier can take it away if you stop paying. A number that was deactivated gets recycled and handed to a stranger after a waiting period — and on several services, that stranger can then attempt to recover accounts linked to the old number. And there is SIM swapping: an attacker convinces (or bribes) a carrier employee to move your number to their SIM card. Once they hold your number, they hold the recovery path to everything built on it.</p>
+
+<p>There's also a quieter issue: metadata. Even in end-to-end encrypted systems, the phone number itself is a permanent identifier that links you to everyone you talk to, across every service where you used the same number. The content can be protected while the graph of who-knows-whom stays exposed.</p>
+
+<p>We didn't want MurMur to inherit any of this. So we removed registration entirely.</p>
+
+<h2>Your identity is a key, not a phone number</h2>
+
+<p>When you first open MurMur — installable as a PWA on iPhone and Android, without the App Store or Google Play — there is no sign-up form. No phone, no email, no "please verify you're human." Instead, the app generates a cryptographic key pair. Your public part is your identity, an npub. People find you by that string, not by who your carrier thinks you are.</p>
+
+<p>What does this change in practice?</p>
+
+<ul>
+  <li><strong>No SIM swap.</strong> Stealing a SIM card gives an attacker nothing, because the account isn't derived from the number.</li>
+  <li><strong>No number recycling.</strong> Your identity can't be handed to the next subscriber.</li>
+  <li><strong>No central account to recover</strong> — which is a feature and a cost at the same time (more on that below).</li>
+  <li><strong>Less metadata by design.</strong> The service doesn't hold a phone book mapping real people to conversations.</li>
+</ul>
+
+<p>Messages and calls are end-to-end encrypted. There are push notifications, so the app behaves like a normal messenger, but the server side was built around the assumption that it cannot read anything you send.</p>
+
+<h2>What the relay actually sees</h2>
+
+<p>MurMur uses a relay server written in Rust. Conceptually, it works like a post office with sealed envelopes: it accepts an encrypted blob from you, delivers it to the recipient's queue, holds it for a limited time if they're offline, then it's gone.</p>
+
+<p>The key property is structural, not a promise. The relay never receives plaintext and never holds your private key. The encryption happens in your browser before anything leaves the device, and decryption happens in the recipient's browser. The Rust code handles routing, storage of ciphertext, and expiry — operations that don't require understanding the content. We chose Rust partly because its memory-safety guarantees reduce the class of bugs that turn into security incidents.</p>
+
+<p>What the relay can still see: that some encrypted traffic exists, roughly when, between which ephemeral identifiers, and its size. We won't pretend metadata disappears completely — no networked service achieves that — but the relay holds far less than a traditional server, and nothing readable.</p>
+
+<h2>The honest cost: lose the key, lose the account</h2>
+
+<p>This trade-off has a real price, and we'd rather state it plainly than bury it. There is no SMS recovery. There is no password reset. Your account is the key; if you lose the key, the account is gone. Nobody — including us — can restore it. That's the same property that protects you from SIM swap, viewed from the other side: if recovery were possible through a phone number, the number would become the weak point again.</p>
+
+<p>So treat your key like a house key, not like a password you can reset. Back it up somewhere you control.</p>
+
+<h2>What we are not</h2>
+
+<p>MurMur is a young project with a small team and a small audience. There has been no independent security audit. We publish the source code on GitHub so anyone can inspect it, but public code without an audit is not proof of security — it's an invitation to check. Two practical limitations follow from the PWA approach: the app depends on the browser you run it in, and browser-based cryptography is only as sound as the browser itself. If you need a messenger with years of audits and a large security team behind it, use one of the established options. We think there's room for a different model, and we'd rather be honest about where we are on that path.</p>
+
+<h2>FAQ</h2>
+
+<dl>
+  <dt><strong>What happens if I lose my key?</strong></dt>
+  <dd>The account is lost. There is no recovery by SMS or email, because those identifiers don't exist in MurMur. Back up your key before you need it.</dd>
+
+  <dt><strong>How do friends find me without a phone number?</strong></dt>
+  <dd>By your npub — the public part of your key. You can share it through any channel you already trust, or show a QR code in person.</dd>
+
+  <dt><strong>Can the server read my messages or hear my calls?</strong></dt>
+  <dd>No. The relay only handles ciphertext. Encryption and decryption happen in the browsers of the participants.</dd>
+
+  <dt><strong>Do I need to install anything from an app store?</strong></dt>
+  <dd>No. MurMur is a PWA: open the site, install it from the browser on iPhone or Android. That also means it works where app stores are restricted or unavailable.</dd>
+
+  <dt><strong>Is MurMur audited?</strong></dt>
+  <dd>Not yet. It's an open-source project by a small team, young and unaudited. We say this up front because you should weigh it when deciding what to trust.</dd>
+</dl>
+
+<p><a href="https://murmurchat.org">Try MurMur at murmurchat.org</a> — no phone number required, and that's the point.</p>
+<div class="cta"><a href="https://murmurchat.org">Try MurMur — no phone, no email →</a></div>
+<div class="footer"><a href="https://murmurchat.org">murmurchat.org</a> · <a href="https://github.com/Oleg2796996/murmur">GitHub</a> · <a href="/privacy">Privacy</a></div>
+</div>
+</body>
+</html>

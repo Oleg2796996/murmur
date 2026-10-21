@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>End-to-End Encryption, Explained Honestly</title>
+<meta name="description" content="What end-to-end encryption protects — and what it doesn&#x27;t: metadata, backups, lost keys, compromised devices. Plus an honest note on MurMur&#x27;s audit status.">
+<link rel="canonical" href="https://murmurchat.org/blog/e2ee-explained-what-it-protects/">
+<meta property="og:title" content="End-to-End Encryption, Explained Honestly">
+<meta property="og:description" content="What end-to-end encryption protects — and what it doesn&#x27;t: metadata, backups, lost keys, compromised devices. Plus an honest note on MurMur&#x27;s audit status.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://murmurchat.org/blog/e2ee-explained-what-it-protects/">
+<link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
+<style>
+  :root { --bg:#0f1620; --card:rgba(255,255,255,.045); --accent:#229ED9; --accent2:#5eead4; --text:#e8eef5; --muted:#9fb0c3; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { min-height:100vh; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:28px 20px 60px;
+    background-image: radial-gradient(ellipse 60% 35% at 20% 0%, rgba(34,158,217,.13), transparent),
+      radial-gradient(ellipse 50% 45% at 85% 100%, rgba(94,234,212,.08), transparent); }
+  .wrap { max-width:720px; margin:0 auto; }
+  .back { display:inline-block; color:var(--accent); text-decoration:none; font-size:14px; margin-bottom:18px; }
+  h1 { font-size:30px; font-weight:800; letter-spacing:-.5px; line-height:1.2; margin-bottom:8px;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  h2 { font-size:20px; font-weight:700; margin:28px 0 10px; color:var(--text); }
+  h3 { font-size:16px; font-weight:700; margin:18px 0 6px; color:var(--text); }
+  p { font-size:15px; line-height:1.7; color:var(--muted); margin-bottom:12px; }
+  ul, ol { margin:0 0 14px 22px; }
+  li { font-size:15px; line-height:1.7; color:var(--muted); margin-bottom:6px; }
+  a { color:var(--accent); }
+  strong { color:var(--text); }
+  table { border-collapse:collapse; width:100%; margin:14px 0 18px; font-size:13.5px; }
+  th, td { border:1px solid rgba(255,255,255,.12); padding:8px 10px; text-align:left; vertical-align:top; color:var(--muted); line-height:1.5; }
+  th { background:rgba(34,158,217,.12); color:var(--text); font-weight:700; }
+  td:first-child { color:var(--text); font-weight:600; white-space:nowrap; }
+  .cta { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:18px 20px; margin:26px 0; text-align:center; }
+  .cta a { display:inline-block; background:linear-gradient(90deg,var(--accent),#1d8ac4); color:#fff; text-decoration:none; font-weight:700; font-size:15px; padding:12px 26px; border-radius:12px; }
+  .meta-line { color:var(--muted); font-size:13px; margin-bottom:22px; }
+  .faq { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:18px; padding:20px 18px; margin-top:26px; }
+  .faq h2 { margin-top:0; }
+  .footer { text-align:center; margin-top:40px; color:var(--muted); font-size:13px; }
+  .footer a { color:var(--accent); text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<a class="back" href="/blog/">← Blog</a>
+<h1>End-to-End Encryption, Explained Honestly</h1>
+<div class="meta-line">2026-10-21 · MurMur team</div>
+<h2>What end-to-end encryption actually means</h2>
+
+<p>End-to-end encryption (E2EE) is a term that gets used a lot and explained rarely. The idea is simple: a message is encrypted on your device and can only be decrypted on the device of the person you're talking to. Everyone in between — the server relaying the message, the network it travels through, the operator running that server — sees only scrambled data with no way to unscramble it.</p>
+
+<p>MurMur is built this way from the ground up. There is no registration with a phone number or email: your identity is a cryptographic key, displayed as an npub. Your messages and your calls are encrypted between the two devices. The relay — a small server written in Rust, located in Europe — passes encrypted data along and can store it only in encrypted form for a limited time. It never holds the plaintext.</p>
+
+<h2>What E2EE protects</h2>
+
+<ul>
+  <li><strong>Message content from the server.</strong> The relay physically cannot read what you write, even though it stores and forwards your messages.</li>
+  <li><strong>Content from network interceptors.</strong> Someone on the same Wi-Fi, your provider, or any intermediate node sees ciphertext, not conversation.</li>
+  <li><strong>Call audio and video.</strong> E2EE applies to calls, not only text.</li>
+  <li><strong>Stored messages after a leak.</strong> If the relay's disk is copied, what leaks is encrypted data with an unknown key and a short retention window.</li>
+</ul>
+
+<h2>What E2EE does not protect</h2>
+
+<p>This is the part that matters most, and it's usually glossed over.</p>
+
+<ul>
+  <li><strong>Metadata.</strong> Encryption hides <em>what</em> you said, not <em>that</em> you said it. The relay still sees which keys connect, when, how often, and roughly how much data moves. It cannot read plaintext, but traffic patterns are real information.</li>
+  <li><strong>Your counterpart.</strong> The person you're talking to can screenshot, forward, or copy the conversation. E2EE protects you from third parties, never from the recipient.</li>
+  <li><strong>A compromised device.</strong> If malware is on your phone or someone is watching your screen, encryption doesn't help — the attacker reads the message before it's encrypted or after it's decrypted. E2EE secures the channel, not your hardware.</li>
+  <li><strong>Lost keys.</strong> There is no SMS recovery, no "forgot password" link. In MurMur, your key <em>is</em> your account. Lose it without a backup, and the account is gone along with access to past conversations.</li>
+  <li><strong>Bugs.</strong> Encryption is code, and code has defects. A protocol can be sound and an implementation still flawed.</li>
+</ul>
+
+<table>
+  <thead>
+    <tr><th>Threat</th><th>Does E2EE help?</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>The relay operator reading your messages</td><td>Yes — that's the core point</td></tr>
+    <tr><td>Interception on Wi-Fi or by the provider</td><td>Yes</td></tr>
+    <tr><td>A leak of stored messages from the server</td><td>Mostly — only ciphertext leaks, kept for a limited time</td></tr>
+    <tr><td>Learning who talks to whom and when</td><td>No</td></tr>
+    <tr><td>Malware or someone with physical access to your phone</td><td>No</td></tr>
+    <tr><td>You losing your key</td><td>No — and there is no SMS-based recovery</td></tr>
+  </tbody>
+</table>
+
+<h2>An honest note about MurMur</h2>
+
+<p>MurMur is a young, open-source project with a small audience. It has not gone through an independent security audit yet. The code is public, so anyone can review it — and we'd genuinely welcome such review — but "anyone can check" is not the same as "someone has checked and signed off". If your threat model requires audited software today, that's a legitimate reason to wait. We'd rather state this plainly than imply otherwise.</p>
+
+<p>Two practical limitations are also worth knowing up front. As a PWA, MurMur depends on the browser it runs in: browser updates and quirks affect it like any web app. And because identity is a key rather than a phone number, backing that key up is your responsibility — it's both the strength of the model and its main sharp edge.</p>
+
+<h2>FAQ</h2>
+
+<dl>
+  <dt><strong>Does E2EE mean the MurMur relay can't see anything at all?</strong></dt>
+  <dd>It can't read message or call content. It does see connection-level facts: which key pairs are exchanging traffic and when, and it holds encrypted messages temporarily for delivery. That's metadata, and E2EE doesn't hide it.</dd>
+
+  <dt><strong>What happens if I lose my key?</strong></dt>
+  <dd>You lose the account. There's no SMS or email recovery because there's no phone number or email attached. A key backup is the only safety net.</dd>
+
+  <dt><strong>Why does an encrypted messenger need a server at all?</strong></dt>
+  <dd>To deliver messages when the recipient is offline, to route calls, and to deliver push notifications. The relay's job is transport and temporary encrypted storage — not reading. That's why "end-to-end" and "has a server" are not contradictory.</dd>
+
+  <dt><strong>Is E2EE the same as the padlock in my browser?</strong></dt>
+  <dd>No. Regular HTTPS (the padlock) encrypts traffic between you and the server, so the server can read everything. E2EE keeps the content encrypted all the way through, so only the two endpoints can read it.</dd>
+
+  <dt><strong>Has MurMur been security audited?</strong></dt>
+  <dd>Not yet by an external party. The source code is public on GitHub, and independent review is welcome. We consider this an open item, not a closed one.</dd>
+</dl>
+
+<p>E2EE is a strong and necessary layer, but it's one layer, not a guarantee of total safety. Knowing exactly where it ends is what makes it useful. If that trade-off set — no registration, no phone number, a relay that can't read plaintext, in exchange for key responsibility and a young, unaudited codebase — sounds reasonable to you, <a href="https://murmurchat.org">try MurMur at murmurchat.org</a>. It installs as a PWA on iPhone and Android without an app store, and the source is on GitHub.</p>
+<div class="cta"><a href="https://murmurchat.org">Try MurMur — no phone, no email →</a></div>
+<div class="footer"><a href="https://murmurchat.org">murmurchat.org</a> · <a href="https://github.com/Oleg2796996/murmur">GitHub</a> · <a href="/privacy">Privacy</a></div>
+</div>
+</body>
+</html>
