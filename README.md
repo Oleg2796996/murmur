@@ -1,80 +1,109 @@
-# murmur
+# MurMur
 
-> Privacy-first decentralized messenger. No trusted servers. No metadata leakage.
+A privacy-first messenger: an installable web app (PWA) with end-to-end encryption for messages and calls, backed by a small relay server written in Rust.
 
-## Vision
+No phone number. No email. No accounts database. Your identity is a cryptographic key.
 
-A messenger that doesn't repeat what already exists. Where:
+## What it is
 
-- **No single server** is a point of trust.
-- **Metadata is private** — who talks to whom, when, and how much, stays between you and your contacts.
-- **Censorship resistance** is a byproduct, not the goal (RKN can be bypassed with VPN — we focus on the harder problem).
+MurMur runs in the browser. You install it as a PWA directly from https://murmurchat.org — no App Store, no Google Play:
 
-## What murmur is NOT
+- **iPhone / iPad:** open the site in Safari → Share → Add to Home Screen.
+- **Android / desktop:** open the site in Chrome → install prompt or menu → Install app.
 
-- ❌ Yet another Matrix/Signal fork with "federation" as a no-server claim.
-- ❌ A blockchain/crypto project — we don't need a global ledger for chat.
-- ❌ A wrapper around Tor — Tor hides IP, but timing patterns stay visible.
+Once installed it behaves like a regular app: its own window/icon, camera and microphone access for calls, and push notifications.
 
-## What murmur IS
+Identity is an `npub` — a public cryptographic key. There is no registration, no phone verification, no email confirmation. The corresponding secret key stays on your device. If you lose it, you lose the account; there is no SMS recovery. Export a backup file (`.murmur`) from the app and keep it somewhere safe.
 
-A **fully client-driven P2P messenger** with three architectural innovations:
+## Features
 
-1. **Lightweight mixnet on devices** — every user's phone acts as a small mix-node for 2-3 contacts, providing drop-and-cover traffic analysis protection without dedicated infrastructure.
-2. **Cold-storage on friends' devices** — encrypted history chunks replicated to 2-3 trusted contact devices, with TTL. No backup servers.
-3. **Locally verifiable history** — append-only log with Merkle anchoring, optionally witnessed by public timestamp services (not required for operation).
+- End-to-end encrypted messages.
+- End-to-end encrypted calls (camera + microphone) in the browser.
+- Push notifications.
+- Contacts added via invite links — ordinary `https://` links containing the contact's `npub`.
+- Local backup: export/import a `.murmur` file via the backup/restore buttons in the app.
+- Installable on iOS, Android, and desktop as a PWA.
 
-## Architecture (high-level)
+## Architecture
 
 ```
-[Identity Layer]
-  └─ ed25519 long-term + per-message X3DH-style session keys
-  
-[Transport Layer]
-  └─ iroh (Rust P2P, QUIC, NAT traversal)
-  └─ mixnet overlay — drop+cover (3 latency profiles: direct / private / paranoid)
-  
-[Storage Layer]
-  ├─ Local append-only log (per contact, SHA3 chain)
-  ├─ CRDT for multi-device sync
-  └─ Cold-storage fanout — 3 random contacts, TTL=30d, encrypted
-  
-[Trust Layer]
-  └─ Web-of-Trust (PGP-style trust events in local log)
-  └─ PoW on identity bootstrap (not per message)
-  └─ Local rate-limit per identity
-  
-[Recovery Layer]
-  └─ Social recovery: N-of-M Shamir fragments across trusted contacts
+[PWA (vanilla JS)]          [Relay (Rust, hosted in Europe)]
+  npub identity        ⇄      encrypted message storage (TTL after delivery)
+  E2EE messages               push notification delivery
+  E2EE calls (WebRTC)         minimal metadata visible to the server
+  local backup file
 ```
 
-## UX budget
+- **Identity.** Each user is an `npub` key pair. The private key lives on the user's device. Contacts are added by exchanging invite links that contain the sender's `npub`.
+- **Encryption.** Messages and calls are end-to-end encrypted between clients. The relay never sees plaintext.
+- **Relay.** A Rust server relays messages between clients. It stores messages only in encrypted form and only for a limited time after delivery, then deletes them. The server sees a minimum of metadata — it cannot read message contents.
+- **PWA.** The frontend is a vanilla JS progressive web app in `pwa/`, installable directly from the site without any app store.
 
-We optimize UX alongside privacy. The "budget" is enforced as a constant:
+## Repository layout
 
-| Metric | Target | Hard limit |
-|---|---|---|
-| Local send/receive latency (online) | < 1.5 s | 3 s |
-| Offline delivery | < 30 s | 2 min |
-| Cold start | < 4 s | 8 s |
-| Background battery drain | < 3 %/h | 8 %/h |
-| Mobile data (no media) | < 50 MB/day | 200 MB/day |
-| Onboarding new contact | < 4 clicks | 6 clicks |
+Rust workspace (`Cargo.toml`) with crates under `crates/`:
 
-If a privacy feature breaks this budget, we either redesign it or expose it as a user-selectable profile (not a default).
+| Crate | Role |
+|---|---|
+| `murmur` | main binary |
+| `murmur-relay` | relay server |
+| `murmur-id` | identity (npub) |
+| `murmur-id-wasm` | identity bindings for the browser |
+| `murmur-log` | logging |
+| `murmur-mix` | mixing |
+| `murmur-transport` | transport |
+| `murmur-cold` | cold storage |
+| `murmur-witness` | witnessing |
+| `murmur-mobile` | mobile |
 
-## Three privacy profiles
+Plus `pwa/` — the vanilla JS progressive web app that users actually install.
 
-Users pick their trade-off:
+## Quick start
 
-- **`direct`** — no padding, sub-1.5s latency. Default for 80% of conversations.
-- **`private`** — 5–10s padding, medium cover traffic. For sensitive topics.
-- **`paranoid`** — 30s+ padding, max cover traffic. For journalists, activists, lawyers.
+### For users
 
-## Status
+1. Open https://murmurchat.org in Safari (iPhone/iPad) or Chrome (Android/desktop).
+2. Add to Home Screen (Safari) or install (Chrome).
+3. Start chatting. Your identity is your key — export a backup file from the app.
 
-- **2026-08-13:** Project bootstrapped. Initial research underway (3 parallel subagents).
-- **Next:** MVP-01 — Identity + iroh transport + local log.
+### For self-hosters
+
+Build the relay workspace:
+
+```
+cargo build --release --workspace
+```
+
+Detailed self-hosting documentation is being written and is not ready yet.
+
+## What MurMur is NOT
+
+- No phone-number identity and no email-based registration.
+- No accounts database on the server — the relay does not maintain user accounts.
+- Not audited. There has been no external security audit yet.
+- Not federated. A single operator runs the relay for now.
+- No cloud key recovery — losing your key means losing your account.
+
+## Limitations (honest list)
+
+- This is a young project built by a small team.
+- No external security audit has been performed.
+- The PWA depends on the browser: capabilities (calls, push, storage) vary by browser and platform, and browser updates can change behavior.
+- One relay operator at the moment; federation does not exist yet.
+
+## Roadmap
+
+These are future plans, not current features:
+
+- Multi-relay / federation.
+- Self-hosting documentation.
+- External security audit.
+
+## Links
+
+- Site: https://murmurchat.org
+- Blog: https://murmurchat.org/blog/
+- Privacy: https://murmurchat.org/privacy
 
 ## License
 
