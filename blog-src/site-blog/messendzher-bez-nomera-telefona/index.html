@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Мессенджер без номера телефона — MurMur</title>
+<meta name="description" content="MurMur — мессенджер с E2EE, которому не нужен номер телефона или почта. Личность на криптоключах, открытый код, работает в браузере.">
+<link rel="canonical" href="https://murmurchat.org/blog/messendzher-bez-nomera-telefona/">
+<meta property="og:title" content="Мессенджер без номера телефона — MurMur">
+<meta property="og:description" content="MurMur — мессенджер с E2EE, которому не нужен номер телефона или почта. Личность на криптоключах, открытый код, работает в браузере.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://murmurchat.org/blog/messendzher-bez-nomera-telefona/">
+<link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
+<style>
+  :root { --bg:#0f1620; --card:rgba(255,255,255,.045); --accent:#229ED9; --accent2:#5eead4; --text:#e8eef5; --muted:#9fb0c3; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { min-height:100vh; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:28px 20px 60px;
+    background-image: radial-gradient(ellipse 60% 35% at 20% 0%, rgba(34,158,217,.13), transparent),
+      radial-gradient(ellipse 50% 45% at 85% 100%, rgba(94,234,212,.08), transparent); }
+  .wrap { max-width:720px; margin:0 auto; }
+  .back { display:inline-block; color:var(--accent); text-decoration:none; font-size:14px; margin-bottom:18px; }
+  h1 { font-size:30px; font-weight:800; letter-spacing:-.5px; line-height:1.2; margin-bottom:8px;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  h2 { font-size:20px; font-weight:700; margin:28px 0 10px; color:var(--text); }
+  h3 { font-size:16px; font-weight:700; margin:18px 0 6px; color:var(--text); }
+  p { font-size:15px; line-height:1.7; color:var(--muted); margin-bottom:12px; }
+  ul, ol { margin:0 0 14px 22px; }
+  li { font-size:15px; line-height:1.7; color:var(--muted); margin-bottom:6px; }
+  a { color:var(--accent); }
+  strong { color:var(--text); }
+  table { border-collapse:collapse; width:100%; margin:14px 0 18px; font-size:13.5px; }
+  th, td { border:1px solid rgba(255,255,255,.12); padding:8px 10px; text-align:left; vertical-align:top; color:var(--muted); line-height:1.5; }
+  th { background:rgba(34,158,217,.12); color:var(--text); font-weight:700; }
+  td:first-child { color:var(--text); font-weight:600; white-space:nowrap; }
+  .cta { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:18px 20px; margin:26px 0; text-align:center; }
+  .cta a { display:inline-block; background:linear-gradient(90deg,var(--accent),#1d8ac4); color:#fff; text-decoration:none; font-weight:700; font-size:15px; padding:12px 26px; border-radius:12px; }
+  .meta-line { color:var(--muted); font-size:13px; margin-bottom:22px; }
+  .faq { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:18px; padding:20px 18px; margin-top:26px; }
+  .faq h2 { margin-top:0; }
+  .footer { text-align:center; margin-top:40px; color:var(--muted); font-size:13px; }
+  .footer a { color:var(--accent); text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<a class="back" href="/blog/">← Blog</a>
+<h1>Мессенджер без номера телефона — MurMur</h1>
+<div class="meta-line">2026-10-21 · MurMur team</div>
+<p>Обычная схема регистрации в мессенджере знакома каждому: вводишь номер, ждёшь SMS с кодом, отдаёшь сервису данные, которые привязывают весь аккаунт к SIM-карте. Даже если номер потом можно скрыть от контактов, аккаунт всё равно построен на нём — и восстанавливается через него.</p>
+
+<p>MurMur использует другой подход: номер телефона не запрашивается вообще. Ни при регистрации, ни как резервный способ входа, ни где-либо ещё.</p>
+
+<h2>Личность — это ключ, а не номер</h2>
+
+<p>При первом открытии MurMur приложение генерирует пару криптографических ключей. Публичный ключ — <strong>npub</strong> — становится вашей идентичностью. Вся регистрация укладывается в одно предложение: ключ создан, значит, аккаунт существует.</p>
+
+<p>Ни телефона, ни почты, ни имени, ни даты рождения, ни загрузки контактной книги. Проверять кодом из SMS нечего — владение приватным ключом и есть подтверждение личности.</p>
+
+<p>Практическое следствие: для работы не нужна SIM-карта. Достаточно браузера на любом устройстве. Смена оператора, перевыпуск номера или просто нежелание оставлять его ещё в одном сервисе — на аккаунт это никак не влияет.</p>
+
+<h2>Что такое MurMur технически</h2>
+
+<ul>
+  <li><strong>PWA, а не приложение из магазина.</strong> MurMur — это Progressive Web App. Вы открываете его в браузере на murmurchat.org, а на iPhone или Android устанавливаете на главный экран напрямую с сайта — без App Store и Google Play. Не нужен аккаунт у платформы, и между вами и приложением нет чьей-то модерации.</li>
+  <li><strong>Сквозное шифрование (E2EE).</strong> Сообщения шифруются на вашем устройстве и расшифровываются только на устройстве собеседника. Звонки тоже защищены сквозным шифрованием.</li>
+  <li><strong>Пуш-уведомления.</strong> MurMur поддерживает push — сообщения приходят, даже когда приложение закрыто. Для веб-мессенджеров это нетривиальная задача, и её решили, а не обошли.</li>
+  <li><strong>Релей на Rust, размещённый в Европе.</strong> Релей передаёт зашифрованный трафик между пользователями. Открытый текст он не видит: сообщения хранятся только в зашифрованном виде и ограниченное время, после чего удаляются.</li>
+  <li><strong>Открытый код.</strong> Исходники опубликованы: <a href="https://github.com/Oleg2796996/murmur">github.com/Oleg2796996/murmur</a>. Как устроены шифрование и релей, можно прочитать самому, а не верить на слово.</li>
+</ul>
+
+<h2>Зачем нужен релей и что он не делает</h2>
+
+<p>Любому мессенджеру нужна инфраструктура, чтобы доставлять сообщения, когда получатель не в сети. Релей MurMur — небольшой сервер с одной задачей: принять зашифрованный блок данных, подержать его и передать дальше.</p>
+
+<p>Ключей расшифровки у релея нет, поэтому прочитать переписку он не может. Он знает, что какой-то зашифрованный блок существовал, когда и между какими парами ключей — такие метаданные не устраняет полностью ни один мессенджер, работающий не напрямую между устройствами. Чего релей не знает — так это содержания ваших сообщений.</p>
+
+<p>Размещение в Европе означает, что сервер работает под европейской юрисдикцией, а не в неопределённой точке мира. Ограниченный срок хранения означает, что зашифрованные сообщения не копятся на сервере бесконечно: есть окно на доставку оффлайн — потом данные удаляются.</p>
+
+<h2>Честно об ограничениях</h2>
+
+<p>Мессенджер, который просит доверия, должен называть свои слабые места прямо. Вот они:</p>
+
+<ul>
+  <li><strong>MurMur — PWA и зависит от браузера.</strong> PWA заметно выросли, но всё же работают внутри браузерного окружения. На некоторых платформах отдельные возможности ограничены по сравнению с нативными приложениями, а производители браузеров могут менять поведение в обновлениях.</li>
+  <li><strong>Проект молодой.</strong> MurMur не прошёл годы продакшн-обкатки, которую имеют старые мессенджеры. Ошибки возможны; сообщения о багах и исправления идут открыто на GitHub.</li>
+  <li><strong>Аудитория пока небольшая.</strong> Мессенджер полезен, только если в нём есть те, с кем вы хотите общаться. Сегодня это, скорее всего, означает уговорить несколько контактов установить PWA.</li>
+  <li><strong>Независимого security-аудита не было.</strong> Схема шифрования описана, код открыт, но сторонний аудит не проводился. Если для вашей модели угроз это важно — учитывайте это сейчас.</li>
+</ul>
+
+<h2>Кому это подходит</h2>
+
+<p>MurMur имеет смысл, если про вас верно хотя бы одно из следующего:</p>
+
+<ul>
+  <li>Вы не хотите привязывать номер телефона к переписке — из-за риска SIM-swap, перевыпуска номеров, спама или просто из принципа.</li>
+  <li>У вас устройство без SIM-карты, либо вы не хотите регистрироваться через магазины приложений.</li>
+  <li>Вы хотите прочитать исходный код, прежде чем доверять мессенджеру, и предпочитаете, чтобы сервер хранил минимум данных.</li>
+  <li>Вы готовы мириться с молодым продуктом ради модели личности, которой не нужны никакие персональные данные.</li>
+</ul>
+
+<p>Если вам нужен мессенджер с сетью в сотни миллионов человек или независимо проверенный протокол «из коробки» — MurMur пока не про это. Об этом сказано прямо, чтобы решение принималось на основе фактов.</p>
+
+<h2>Как начать</h2>
+
+<p>Никаких форм и мастеров установки. Открываете сайт — ключ генерируется в браузере:</p>
+
+<p><a href="https://murmurchat.org">Открыть MurMur на murmurchat.org →</a></p>
+
+<p>Лендинг рассказывает о проекте; само приложение — по адресу <a href="https://murmurchat.org/pwa/">murmurchat.org/pwa/</a>. Исходный код: <a href="https://github.com/Oleg2796996/murmur">GitHub</a>.</p>
+
+<h2>FAQ</h2>
+
+<div class="faq">
+  <h3>Можно ли пользоваться MurMur совсем без SIM-карты?</h3>
+  <p>Да. При регистрации создаётся пара криптографических ключей прямо в браузере — номер телефона, почта и SMS-код не участвуют. Подойдёт любое устройство с современным браузером.</p>
+
+  <h3>Как меня найдут контакты, если нет номера телефона?</h3>
+  <p>Ваша идентичность — npub, строка публичного ключа. Вы передаёте её напрямую — текстом или ссылкой — тем, с кем хотите общаться. Импорт контактов из адресной книги не используется.</p>
+
+  <h3>Если я потеряю данные браузера, аккаунт пропадёт?</h3>
+  <p>Личность живёт в ключах. Если приватный ключ утерян и резервной копии нет — восстановить аккаунт нельзя. То же свойство, что освобождает его от привязки к номеру, означает отсутствие сброса через SMS. Делайте резервную копию там, где приложение её предлагает.</p>
+
+  <h3>Обязательно ли устанавливать MurMur из магазина приложений?</h3>
+  <p>Нет. Это PWA: открываете в браузере и добавляете на главный экран на iOS и Android прямо с сайта — мимо App Store и Google Play.</p>
+
+  <h3>Шифрование проверялось независимым аудитом?</h3>
+  <p>Пока нет. Код открыт, схема шифрования описана, но сторонний аудит не проводился. Это указано среди известных ограничений проекта.</p>
+</div>
+<div class="cta"><a href="https://murmurchat.org">Try MurMur — no phone, no email →</a></div>
+<div class="footer"><a href="https://murmurchat.org">murmurchat.org</a> · <a href="https://github.com/Oleg2796996/murmur">GitHub</a> · <a href="/privacy">Privacy</a></div>
+</div>
+</body>
+</html>

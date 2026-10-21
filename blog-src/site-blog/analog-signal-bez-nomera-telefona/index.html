@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Аналог Signal без номера телефона: честное сравнение</title>
+<meta name="description" content="Signal, WhatsApp, Session и MurMur: регистрация, шифрование, метаданные, звонки. Где нужен номер телефона, а где нет.">
+<link rel="canonical" href="https://murmurchat.org/blog/analog-signal-bez-nomera-telefona/">
+<meta property="og:title" content="Аналог Signal без номера телефона: честное сравнение">
+<meta property="og:description" content="Signal, WhatsApp, Session и MurMur: регистрация, шифрование, метаданные, звонки. Где нужен номер телефона, а где нет.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://murmurchat.org/blog/analog-signal-bez-nomera-telefona/">
+<link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
+<style>
+  :root { --bg:#0f1620; --card:rgba(255,255,255,.045); --accent:#229ED9; --accent2:#5eead4; --text:#e8eef5; --muted:#9fb0c3; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { min-height:100vh; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:28px 20px 60px;
+    background-image: radial-gradient(ellipse 60% 35% at 20% 0%, rgba(34,158,217,.13), transparent),
+      radial-gradient(ellipse 50% 45% at 85% 100%, rgba(94,234,212,.08), transparent); }
+  .wrap { max-width:720px; margin:0 auto; }
+  .back { display:inline-block; color:var(--accent); text-decoration:none; font-size:14px; margin-bottom:18px; }
+  h1 { font-size:30px; font-weight:800; letter-spacing:-.5px; line-height:1.2; margin-bottom:8px;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  h2 { font-size:20px; font-weight:700; margin:28px 0 10px; color:var(--text); }
+  h3 { font-size:16px; font-weight:700; margin:18px 0 6px; color:var(--text); }
+  p { font-size:15px; line-height:1.7; color:var(--muted); margin-bottom:12px; }
+  ul, ol { margin:0 0 14px 22px; }
+  li { font-size:15px; line-height:1.7; color:var(--muted); margin-bottom:6px; }
+  a { color:var(--accent); }
+  strong { color:var(--text); }
+  table { border-collapse:collapse; width:100%; margin:14px 0 18px; font-size:13.5px; }
+  th, td { border:1px solid rgba(255,255,255,.12); padding:8px 10px; text-align:left; vertical-align:top; color:var(--muted); line-height:1.5; }
+  th { background:rgba(34,158,217,.12); color:var(--text); font-weight:700; }
+  td:first-child { color:var(--text); font-weight:600; white-space:nowrap; }
+  .cta { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:18px 20px; margin:26px 0; text-align:center; }
+  .cta a { display:inline-block; background:linear-gradient(90deg,var(--accent),#1d8ac4); color:#fff; text-decoration:none; font-weight:700; font-size:15px; padding:12px 26px; border-radius:12px; }
+  .meta-line { color:var(--muted); font-size:13px; margin-bottom:22px; }
+  .faq { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:18px; padding:20px 18px; margin-top:26px; }
+  .faq h2 { margin-top:0; }
+  .footer { text-align:center; margin-top:40px; color:var(--muted); font-size:13px; }
+  .footer a { color:var(--accent); text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<a class="back" href="/blog/">← Blog</a>
+<h1>Аналог Signal без номера телефона: честное сравнение</h1>
+<div class="meta-line">2026-10-21 · MurMur team</div>
+<p>Signal заслуженно считают эталоном приватного мессенджера: протокол изучен вдоль и поперёк, код открыт, за проектом стоит некоммерческая организация. Но есть жёсткое требование, с которым мирятся не все: для регистрации нужен номер телефона. Если вы искали «аналог Signal без номера телефона» — вот четыре варианта (Signal, WhatsApp, Session, MurMur) и честный разбор, где у каждого болит.</p>
+
+<h2>Чем плох номер телефона — и чем хорош</h2>
+
+<p>Сам по себе номер в Signal не катастрофа: сервер хранит минимум данных и прячет метаданные отправителя. Но номер — это ваш идентификатор. Кто знает ваш телефон, тот нашёл вас в Signal. А чтобы завести аккаунт, нужна рабочая SIM — в ряде стран она оформляется на паспорт. Одних это не смущает, других останавливает. И те и другие правы по-своему.</p>
+
+<h2>Таблица: Signal, WhatsApp, Session, MurMur</h2>
+
+<table>
+  <tr><th></th><th>Signal</th><th>WhatsApp</th><th>Session</th><th>MurMur</th></tr>
+  <tr><td>Что нужно для регистрации</td><td>Номер телефона</td><td>Номер телефона</td><td>Ничего — генерируется Session ID</td><td>Ничего — npub-ключи, без телефона и почты</td></tr>
+  <tr><td>E2EE по умолчанию</td><td>Да</td><td>Да</td><td>Да</td><td>Да</td></tr>
+  <tr><td>Звонки</td><td>Аудио и видео</td><td>Аудио и видео</td><td>Аудио (1:1)</td><td>Есть</td></tr>
+  <tr><td>Метаданные — кто видит связи</td><td>Сервер хранит минимум, но аккаунт привязан к номеру</td><td>Meta собирает метаданные использования в промышленных масштабах</td><td>Трафик идёт через луковую сеть</td><td>Rust-релей в Европе передаёт трафик, но не видит содержимое сообщений</td></tr>
+  <tr><td>Установка</td><td>Магазины приложений или APK</td><td>Магазины приложений</td><td>Магазины или APK</td><td>PWA в браузере — магазин не нужен</td></tr>
+  <tr><td>Хранение сообщений</td><td>Доставляются, на сервере долго не хранятся</td><td>На устройстве; облачные бэкапы — по желанию, шифруются только если включить вручную</td><td>Кэшируются на распределённых узлах сети</td><td>Сквозное шифрование; релей не видит того, что пересылает</td></tr>
+</table>
+
+<h2>Чего таблица не покажет: зрелость проекта</h2>
+
+<p>«Шифрование по умолчанию» и «без номера» — ещё не всё. Мессенджер — это ещё и качество реализации, годы под реальными атаками и то, кто проверял код.</p>
+
+<ul>
+  <li><strong>Signal</strong> многократно проходил независимые аудиты и работает на собственном изученном протоколе. Для большинства это самый безопасный вариант по умолчанию.</li>
+  <li><strong>WhatsApp</strong> использует протокол Signal, но клиентом управляет Meta, а метаданные обслуживают рекламный бизнес. Шифрование защищает содержимое переписки, но не факт общения.</li>
+  <li><strong>Session</strong> вообще не требует номера и гоняет трафик через луковую сеть. Открытый код, есть поддерживающий фонд.</li>
+  <li><strong>MurMur</strong> — молодой проект. Код открыт (github.com/Oleg2796996/murmur), релей — небольшой Rust-сервис в Европе, который не видит plaintext. Но независимого аудита безопасности ещё не было, комьюнити маленькое, а PWA зависит от браузерной платформы. Мы говорим это прямо, а не замалчиваем.</li>
+</ul>
+
+<h2>Кому подходит MurMur</h2>
+
+<ul>
+  <li>Вам нужен аккаунт без телефона <em>и</em> без почты — npub-ключи вместо того и другого.</li>
+  <li>Вы не хотите или не можете ставить приложения из магазинов. MurMur — PWA: открыли сайт, добавили на домашний экран, пуши работают.</li>
+  <li>Нужны звонки, а не только переписка.</li>
+  <li>Вы хотите прочитать код сами, а не верить обещаниям: он на GitHub.</li>
+</ul>
+
+<h2>Кому лучше остаться на Signal</h2>
+
+<ul>
+  <li>Нужны протокол и клиенты, прошедшие годы аудитов и реальных атак.</li>
+  <li>Номер телефона для вас — не проблема.</li>
+  <li>Контакты уже там: ценность мессенджера во многом в сети знакомых.</li>
+  <li>Для чувствительной работы зрелость важнее новизны.</li>
+</ul>
+
+<h2>FAQ</h2>
+
+<h3>Мессенджер без номера телефона — значит менее безопасный?</h3>
+<p>Нет. Безопасность определяют протокол и его реализация, а не способ идентификации. Аккаунт, не привязанный к SIM, скорее плюс для приватности. Настоящая оговорка — зрелость: у молодых проектов меньше независимых проверок кода, и аудита MurMur ещё не было.</p>
+
+<h3>Что такое npub-ключ?</h3>
+<p>В MurMur ваш аккаунт — это пара ключей (npub), а не номер. Без телефона и почты: регистрация — это просто генерация ключей.</p>
+
+<h3>Session работает без номера телефона?</h3>
+<p>Да. Session генерирует случайный Session ID, который служит вашим адресом.</p>
+
+<h3>MurMur можно использовать без установки приложения?</h3>
+<p>Да, это PWA: работает в браузере, добавляется на домашний экран, есть push-уведомления. Но подход зависит от браузера и ОС — это часть компромисса.</p>
+
+<h3>Почему в WhatsApp есть E2EE, но данные всё равно собирают?</h3>
+<p>Сквозное шифрование защищает содержимое сообщений. Метаданные — кто, кому и когда пишет — защищает не оно, и именно они питают системы Meta.</p>
+
+<h2>Попробовать MurMur</h2>
+
+<p>MurMur работает на <a href="https://murmurchat.org">murmurchat.org</a> — откройте в браузере: без телефона, без почты, без магазина приложений. Исходный код: <a href="https://github.com/Oleg2796996/murmur">github.com/Oleg2796996/murmur</a>. И финальная честность: если нужен максимально проверенный вариант прямо сейчас — Signal остаётся разумным дефолтом. Выбирайте по своей модели угроз, а не по лозунгам.</p>
+<div class="cta"><a href="https://murmurchat.org">Try MurMur — no phone, no email →</a></div>
+<div class="footer"><a href="https://murmurchat.org">murmurchat.org</a> · <a href="https://github.com/Oleg2796996/murmur">GitHub</a> · <a href="/privacy">Privacy</a></div>
+</div>
+</body>
+</html>
