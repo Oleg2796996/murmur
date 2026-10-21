@@ -165,7 +165,13 @@ def extract_sections(md_text):
 def clean_body(body):
     # Strip duplicate markdown h1 (template already renders <h1> from title)
     body = re.sub(r"^\s*<h1>.*?</h1>\s*$", "", body, count=1, flags=re.M | re.S) if body.count("<h1>") == 1 else re.sub(r"^#\s+.*$", "", body, flags=re.M)
-    return body.strip()
+    body = body.strip()
+    # Markdown drafts (draft-03) vs HTML drafts: if no HTML block tags present, convert markdown
+    if "<p>" not in body and "<h2" not in body:
+        import markdown as _md
+        body = _md.markdown(body, extensions=["tables", "fenced_code"])
+        # markdown keeps h2 (## ) — strip the first h2 duplicate if it equals nothing; fine as-is
+    return body
 
 def wrap_faq_and_cta(body):
     # Add CTA box before FAQ if present: simple — leave body as-is; CTA added by template.

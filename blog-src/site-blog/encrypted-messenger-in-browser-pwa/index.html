@@ -49,97 +49,60 @@
 <a class="back" href="/blog/">← Blog</a>
 <h1>How to Use an Encrypted Messenger in Your Browser (PWA)</h1>
 <div class="meta-line">2026-10-21 · MurMur team</div>
-Most people assume a "real" messenger has to come from an app store. You open the App Store or Google Play, tap Install, wait, done. But there's another way that works just as well: a PWA — a Progressive Web App. It's a regular website that behaves like a native app once you install it.
-
-MurMur, an end-to-end encrypted messenger, works exactly this way. You open https://murmurchat.org in your browser, add it to your home screen, and from that moment it looks and feels like a normal app — with its own icon, push notifications, and offline support.
-
-Here's what a PWA actually is, why it's a perfectly normal way to run a messenger, and how to get started with MurMur in about two minutes.
-
-## What is a PWA, and why a messenger without an app store is normal
-
-A PWA is a web application that the browser can "install" locally. After installation you get three things that used to be exclusive to native apps:
-
-- **A home screen icon.** The app launches in its own window, without browser bars, just like any installed app.
-- **Push notifications.** New messages arrive on the lock screen, even when the app is closed.
-- **Offline cache.** The app starts without a network connection and shows your locally stored conversations.
-
-So why build a messenger this way instead of shipping it through app stores?
-
-**No gatekeepers.** You don't need an account with Apple or Google to install MurMur. The app comes straight from its own website. That also means no app-store review delays when updates ship — the version you get is always current.
-
-**Works the same on iPhone and Android.** PWA support is built into both platforms. One codebase, same experience.
-
-**Less metadata.** You don't hand your phone number or email to anyone to create an account. MurMur identifies you by an npub — a public key — not by your SIM card.
-
-A messenger being a website doesn't make it less secure. Encryption has nothing to do with where the app comes from. MurMur encrypts messages end-to-end regardless of how you installed it.
-
-## Getting started with MurMur, step by step
-
-The whole setup takes a couple of minutes. No phone number, no email, no registration form.
-
-### Step 1: Open the site
-
-In Safari (iPhone) or Chrome (Android), go to **https://murmurchat.org**.
-
-On desktop it works too — Chrome, Edge, and Firefox all support the install flow or just run the app in a tab.
-
-### Step 2: Install it to your home screen
-
-- **iPhone (Safari):** tap the Share button, then "Add to Home Screen."
-- **Android (Chrome):** open the browser menu (three dots) and choose "Install app" or "Add to Home Screen."
-
-Now MurMur has its own icon and opens full-screen, like any other app.
-
-### Step 3: Create your key
-
-On first launch, MurMur generates your key pair. Your public key is your identity — it starts with `npub1...` and looks like a long random string. That's what you share with people. Your private key stays on your device.
-
-There's no phone number involved. Nobody can find you by your contacts list; people can only reach you if you give them your npub.
-
-### Step 4: Add contacts by npub
-
-To start a chat, you need the other person's npub. Exchange keys with your contact — in person, through another channel, whatever works. Paste their npub into MurMur, and the conversation appears.
-
-Everything you send is encrypted on your device and decrypted only on theirs.
-
-### Step 5: Chat, call, get notifications
-
-From here it works like any messenger: text messages, voice calls, push notifications for new messages. Calls and messages are end-to-end encrypted.
-
-## What the server can see
-
-MurMur uses a relay — a Rust-based server in Europe — to pass messages between users. What does it actually see?
-
-**Not your messages.** The relay receives ciphertext. Without your private key, the encrypted traffic is unreadable — the relay never sees plaintext.
-
-**Minimal metadata.** The relay necessarily knows things like "an encrypted message went from A to B at this time." That's the minimum any transport needs to function. It does not know who you are in real life, because accounts aren't tied to phone numbers or email.
-
-The relay code is open source — you can review it at github.com/Oleg2796996/murmur. The whole project is open, and that's deliberate: trust should come from code you can inspect, not from promises.
-
-## FAQ
-
-**Is a browser messenger safe?**
-Yes, if it encrypts end-to-end — and MurMur does. The browser is just the runtime; encryption happens on your device before anything leaves it. The bigger question with any messenger is who holds the keys, and with E2EE the answer is: only you and your contact.
-
-**Does it work offline?**
-The app itself does. Thanks to the offline cache it opens without a network and shows your locally stored chats. Obviously, sending and receiving new messages requires a connection — that's true for every messenger.
-
-**Where are my messages stored?**
-On your device, locally in the browser's storage. The relay also holds encrypted copies for a limited time — long enough to deliver them if you're offline — and then they're gone. The server never has readable text.
-
-**What happens if I clear my browser data?**
-You lose your locally stored conversations and your key. Clearing site data is the browser equivalent of uninstalling plus wiping the app — there's no copy on the server to restore from. So before clearing data or switching devices, make sure you have your key backed up where the app offers it.
-
-**Do I need to install anything from an app store?**
-No. MurMur installs directly from https://murmurchat.org as a PWA, on both iPhone and Android, without the App Store or Google Play.
-
-## Try it
-
-Open **https://murmurchat.org**, add it to your home screen, create your key, and share your npub with one person you want to talk to privately. That's the whole onboarding. The code is public at github.com/Oleg2796996/murmur — read it, question it, or just use it.
-
-MurMur is a young project, evolving fast. If you want an encrypted messenger that doesn't ask for your phone number and doesn't live in an app store, this is a straightforward way to have one.
-
----
+<p>Most people assume a "real" messenger has to come from an app store. You open the App Store or Google Play, tap Install, wait, done. But there's another way that works just as well: a PWA — a Progressive Web App. It's a regular website that behaves like a native app once you install it.</p>
+<p>MurMur, an end-to-end encrypted messenger, works exactly this way. You open https://murmurchat.org in your browser, add it to your home screen, and from that moment it looks and feels like a normal app — with its own icon, push notifications, and offline support.</p>
+<p>Here's what a PWA actually is, why it's a perfectly normal way to run a messenger, and how to get started with MurMur in about two minutes.</p>
+<h2>What is a PWA, and why a messenger without an app store is normal</h2>
+<p>A PWA is a web application that the browser can "install" locally. After installation you get three things that used to be exclusive to native apps:</p>
+<ul>
+<li><strong>A home screen icon.</strong> The app launches in its own window, without browser bars, just like any installed app.</li>
+<li><strong>Push notifications.</strong> New messages arrive on the lock screen, even when the app is closed.</li>
+<li><strong>Offline cache.</strong> The app starts without a network connection and shows your locally stored conversations.</li>
+</ul>
+<p>So why build a messenger this way instead of shipping it through app stores?</p>
+<p><strong>No gatekeepers.</strong> You don't need an account with Apple or Google to install MurMur. The app comes straight from its own website. That also means no app-store review delays when updates ship — the version you get is always current.</p>
+<p><strong>Works the same on iPhone and Android.</strong> PWA support is built into both platforms. One codebase, same experience.</p>
+<p><strong>Less metadata.</strong> You don't hand your phone number or email to anyone to create an account. MurMur identifies you by an npub — a public key — not by your SIM card.</p>
+<p>A messenger being a website doesn't make it less secure. Encryption has nothing to do with where the app comes from. MurMur encrypts messages end-to-end regardless of how you installed it.</p>
+<h2>Getting started with MurMur, step by step</h2>
+<p>The whole setup takes a couple of minutes. No phone number, no email, no registration form.</p>
+<h3>Step 1: Open the site</h3>
+<p>In Safari (iPhone) or Chrome (Android), go to <strong>https://murmurchat.org</strong>.</p>
+<p>On desktop it works too — Chrome, Edge, and Firefox all support the install flow or just run the app in a tab.</p>
+<h3>Step 2: Install it to your home screen</h3>
+<ul>
+<li><strong>iPhone (Safari):</strong> tap the Share button, then "Add to Home Screen."</li>
+<li><strong>Android (Chrome):</strong> open the browser menu (three dots) and choose "Install app" or "Add to Home Screen."</li>
+</ul>
+<p>Now MurMur has its own icon and opens full-screen, like any other app.</p>
+<h3>Step 3: Create your key</h3>
+<p>On first launch, MurMur generates your key pair. Your public key is your identity — it starts with <code>npub1...</code> and looks like a long random string. That's what you share with people. Your private key stays on your device.</p>
+<p>There's no phone number involved. Nobody can find you by your contacts list; people can only reach you if you give them your npub.</p>
+<h3>Step 4: Add contacts by npub</h3>
+<p>To start a chat, you need the other person's npub. Exchange keys with your contact — in person, through another channel, whatever works. Paste their npub into MurMur, and the conversation appears.</p>
+<p>Everything you send is encrypted on your device and decrypted only on theirs.</p>
+<h3>Step 5: Chat, call, get notifications</h3>
+<p>From here it works like any messenger: text messages, voice calls, push notifications for new messages. Calls and messages are end-to-end encrypted.</p>
+<h2>What the server can see</h2>
+<p>MurMur uses a relay — a Rust-based server in Europe — to pass messages between users. What does it actually see?</p>
+<p><strong>Not your messages.</strong> The relay receives ciphertext. Without your private key, the encrypted traffic is unreadable — the relay never sees plaintext.</p>
+<p><strong>Minimal metadata.</strong> The relay necessarily knows things like "an encrypted message went from A to B at this time." That's the minimum any transport needs to function. It does not know who you are in real life, because accounts aren't tied to phone numbers or email.</p>
+<p>The relay code is open source — you can review it at github.com/Oleg2796996/murmur. The whole project is open, and that's deliberate: trust should come from code you can inspect, not from promises.</p>
+<h2>FAQ</h2>
+<p><strong>Is a browser messenger safe?</strong>
+Yes, if it encrypts end-to-end — and MurMur does. The browser is just the runtime; encryption happens on your device before anything leaves it. The bigger question with any messenger is who holds the keys, and with E2EE the answer is: only you and your contact.</p>
+<p><strong>Does it work offline?</strong>
+The app itself does. Thanks to the offline cache it opens without a network and shows your locally stored chats. Obviously, sending and receiving new messages requires a connection — that's true for every messenger.</p>
+<p><strong>Where are my messages stored?</strong>
+On your device, locally in the browser's storage. The relay also holds encrypted copies for a limited time — long enough to deliver them if you're offline — and then they're gone. The server never has readable text.</p>
+<p><strong>What happens if I clear my browser data?</strong>
+You lose your locally stored conversations and your key. Clearing site data is the browser equivalent of uninstalling plus wiping the app — there's no copy on the server to restore from. So before clearing data or switching devices, make sure you have your key backed up where the app offers it.</p>
+<p><strong>Do I need to install anything from an app store?</strong>
+No. MurMur installs directly from https://murmurchat.org as a PWA, on both iPhone and Android, without the App Store or Google Play.</p>
+<h2>Try it</h2>
+<p>Open <strong>https://murmurchat.org</strong>, add it to your home screen, create your key, and share your npub with one person you want to talk to privately. That's the whole onboarding. The code is public at github.com/Oleg2796996/murmur — read it, question it, or just use it.</p>
+<p>MurMur is a young project, evolving fast. If you want an encrypted messenger that doesn't ask for your phone number and doesn't live in an app store, this is a straightforward way to have one.</p>
+<hr />
 <div class="cta"><a href="https://murmurchat.org">Try MurMur — no phone, no email →</a></div>
 <div class="footer"><a href="https://murmurchat.org">Open MurMur →</a> · <a href="/blog/">Blog</a> · <a href="https://github.com/Oleg2796996/murmur">GitHub</a> · <a href="/privacy">Privacy</a></div>
 </div>
