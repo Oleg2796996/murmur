@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Session против MurMur: мессенджеры без номера</title>
+<meta name="description" content="Честное сравнение Session и MurMur: регистрация, шифрование, звонки, метаданные, установка. Когда Session лучше сегодня и чем отличается MurMur.">
+<link rel="canonical" href="https://murmurchat.org/blog/session-protiv-murmur/">
+<meta property="og:title" content="Session против MurMur: мессенджеры без номера">
+<meta property="og:description" content="Честное сравнение Session и MurMur: регистрация, шифрование, звонки, метаданные, установка. Когда Session лучше сегодня и чем отличается MurMur.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://murmurchat.org/blog/session-protiv-murmur/">
+<link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
+<style>
+  :root { --bg:#0f1620; --card:rgba(255,255,255,.045); --accent:#229ED9; --accent2:#5eead4; --text:#e8eef5; --muted:#9fb0c3; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { min-height:100vh; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:28px 20px 60px;
+    background-image: radial-gradient(ellipse 60% 35% at 20% 0%, rgba(34,158,217,.13), transparent),
+      radial-gradient(ellipse 50% 45% at 85% 100%, rgba(94,234,212,.08), transparent); }
+  .wrap { max-width:720px; margin:0 auto; }
+  .back { display:inline-block; color:var(--accent); text-decoration:none; font-size:14px; margin-bottom:18px; }
+  h1 { font-size:30px; font-weight:800; letter-spacing:-.5px; line-height:1.2; margin-bottom:8px;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  h2 { font-size:20px; font-weight:700; margin:28px 0 10px; color:var(--text); }
+  h3 { font-size:16px; font-weight:700; margin:18px 0 6px; color:var(--text); }
+  p { font-size:15px; line-height:1.7; color:var(--muted); margin-bottom:12px; }
+  ul, ol { margin:0 0 14px 22px; }
+  li { font-size:15px; line-height:1.7; color:var(--muted); margin-bottom:6px; }
+  a { color:var(--accent); }
+  strong { color:var(--text); }
+  table { border-collapse:collapse; width:100%; margin:14px 0 18px; font-size:13.5px; }
+  th, td { border:1px solid rgba(255,255,255,.12); padding:8px 10px; text-align:left; vertical-align:top; color:var(--muted); line-height:1.5; }
+  th { background:rgba(34,158,217,.12); color:var(--text); font-weight:700; }
+  td:first-child { color:var(--text); font-weight:600; white-space:nowrap; }
+  .cta { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:18px 20px; margin:26px 0; text-align:center; }
+  .cta a { display:inline-block; background:linear-gradient(90deg,var(--accent),#1d8ac4); color:#fff; text-decoration:none; font-weight:700; font-size:15px; padding:12px 26px; border-radius:12px; }
+  .meta-line { color:var(--muted); font-size:13px; margin-bottom:22px; }
+  .faq { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:18px; padding:20px 18px; margin-top:26px; }
+  .faq h2 { margin-top:0; }
+  .footer { text-align:center; margin-top:40px; color:var(--muted); font-size:13px; }
+  .footer a { color:var(--accent); text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<a class="back" href="/blog/">← Blog</a>
+<h1>Session против MurMur: мессенджеры без номера</h1>
+<div class="meta-line">2026-10-21 · MurMur team</div>
+<h2>Два мессенджера, которым не нужен ваш номер</h2>
+
+<p>Практически любой мессенджер начинается с просьбы указать номер телефона. WhatsApp и Signal работают именно так. WhatsApp шифрует содержимое переписки по умолчанию, но принадлежит Meta, а Meta видит метаданные: с кем и когда вы общаетесь, с какого устройства. Signal тоже требует номер — хотя собирает минимум метаданных, а его протокол считается эталоном в отрасли. Если цель — мессенджер, которому номер не нужен вообще, список вариантов быстро сокращается до пары имён. Session — самый известный из них. MurMur — куда более молодой проект с открытым кодом, который пошёл другим путём. Ниже — честное сравнение, включая те места, где Session сегодня действительно лучше.</p>
+
+<h2>Коротко</h2>
+
+<table>
+<tr><th></th><th>Session</th><th>MurMur</th></tr>
+<tr><td>Регистрация</td><td>Нет. При первом запуске на устройстве создаётся случайный session ID.</td><td>Нет. Аккаунт — это криптографический ключ (npub), созданный на вашем устройстве.</td></tr>
+<tr><td>E2EE по умолчанию</td><td>Да</td><td>Да — для сообщений и звонков</td></tr>
+<tr><td>Звонки</td><td>Голосовые звонки между пользователями</td><td>Звонки со сквозным шифрованием, работают в браузере</td></tr>
+<tr><td>Метаданные</td><td>Сообщения идут через onion-сеть из независимо управляемых узлов; ни к чему не привязан номер телефона.</td><td>Один Rust-релей в Европе, который не может прочитать содержимое и хранит зашифрованные сообщения ограниченное время.</td></tr>
+<tr><td>Установка</td><td>Приложения из магазинов, APK, десктоп-версии</td><td>PWA, ставится из браузера, магазины не нужны</td></tr>
+<tr><td>Кто управляет</td><td>Фонд Session и сеть узлов, поддерживаемых сообществом</td><td>Один открытый релей в Европе, который держит сам проект</td></tr>
+</table>
+
+<h2>Где Session сегодня лучше</h2>
+
+<p>Скажем прямо. Session существует несколько лет, её код проходил независимый аудит, вокруг проекта сложилось большое сообщество, а приложения давно обкатаны в реальных условиях. Если нужен мессенджер без номера, которым уже пользуются многие, — сегодня это самая надёжная рекомендация. Молодой проект без аудита с такой историей соперничать не может, и притворяться обратным было бы нечестно.</p>
+
+<h2>Чем MurMur отличается</h2>
+
+<ul>
+<li><strong>Установка из браузера.</strong> MurMur — это PWA. На iPhone и Android он ставится прямо из браузера, без App Store и Google Play. Это важно, если магазины приложений для вас препятствие или просто не хочется ещё одного «нативного» приложения.</li>
+<li><strong>Звонки в браузере.</strong> Голосовые звонки зашифрованы сквозным шифрованием и работают в том же приложении, установленном из браузера. Ничего доустанавливать не нужно.</li>
+<li><strong>Простая модель.</strong> Аккаунт — это один криптографический ключ. Один Rust-релей в Европе передаёт зашифрованные данные. Он не видит содержимое и хранит зашифрованные сообщения ограниченное время: хватит, чтобы получить сообщения, пока вы были офлайн, но это не архив на годы.</li>
+<li><strong>Push-уведомления</strong> работают — в повседневном использовании это обычный мессенджер.</li>
+<li><strong>Код можно прочитать.</strong> Проект открыт и невелик: обычный разработчик реально может прочитать его целиком. С большим кодом так не получится.</li>
+</ul>
+
+<h2>Честные ограничения MurMur</h2>
+
+<ul>
+<li><strong>Аудита не было.</strong> Код открыт, но независимой проверки ещё не проводилось. Если для вас обязателен проверенный продукт — сегодня это Session.</li>
+<li><strong>Маленькая аудитория.</strong> Проект молодой, и ваших знакомых там, скорее всего, ещё нет. Это практическая проблема, а не косметическая.</li>
+<li><strong>PWA зависит от браузера.</strong> Приложение живёт внутри браузера со всеми вытекающими: нет «нативной» отделки, а поведение зависит от обновлений браузера.</li>
+<li><strong>Потеряли ключ — потеряли аккаунт.</strong> Восстановления по SMS нет, ссылок для сброса тоже. Ключ стоит сохранить самим — это цена полного отсутствия номера в системе.</li>
+</ul>
+
+<h2>Вопросы и ответы</h2>
+
+<h3>Нужен ли Session номер телефона или почта?</h3>
+<p>Нет. Session создаёт случайный session ID прямо на устройстве, и ни номер телефона, ни почта к этому идентификатору не привязываются.</p>
+
+<h3>MurMur такой же безопасный, как Session?</h3>
+<p>Честно утверждать это нельзя. Оба шифруют переписку сквозным шифрованием, у обоих открытый код, но Session прошла независимые аудиты, а MurMur — нет. Пока аудита не было, MurMur стоит воспринимать как перспективный, но непроверенный проект.</p>
+
+<h3>Можно ли установить MurMur без App Store и Google Play?</h3>
+<p>Да. MurMur — это PWA: откройте сайт в браузере на iPhone или Android и установите приложение оттуда. Учётная запись магазина приложений не нужна.</p>
+
+<h3>Что будет, если потерять ключ MurMur?</h3>
+<p>Аккаунт будет потерян. Криптографический ключ — это и есть личность, а восстановления по SMS в системе нет. Резервная копия ключа — ваша забота.</p>
+
+<h3>Может ли релей или сеть прочитать мои сообщения?</h3>
+<p>Session передаёт сообщения через onion-сеть узлов сообщества, содержимое зашифровано сквозным шифрованием. Релей MurMur тоже не может прочитать открытый текст: он хранит сообщения только в зашифрованном виде и лишь ограниченное время.</p>
+
+<h2>Попробовать MurMur</h2>
+
+<p>Если браузерный подход выглядит интересно, MurMur ставится с сайта <a href="https://murmurchat.org">murmurchat.org</a> за пару минут и работает на iPhone и Android. Исходный код открыт на GitHub. И сразу сохраните ключ: восстановить его не получится.</p>
+<div class="cta"><a href="https://murmurchat.org">Try MurMur — no phone, no email →</a></div>
+<div class="footer"><a href="https://murmurchat.org">Open MurMur →</a> · <a href="/blog/">Blog</a> · <a href="https://github.com/Oleg2796996/murmur">GitHub</a> · <a href="/privacy">Privacy</a></div>
+</div>
+</body>
+</html>

@@ -37,6 +37,16 @@ ARTICLES = [
       "Why MurMur replaces phone-number identity with a cryptographic key, what that solves, what it costs, and how a relay that can't read your messages works."),
      ("pochemu-bez-akkauntov", "Мессенджер без аккаунтов: почему так и что это значит",
       "Почему MurMur заменяет номер телефона криптографическим ключом, что это даёт и чего лишает. Как работает релей, который не может прочитать переписку.")),
+    ("draft-07-session-comparison.md",
+     ("session-vs-murmur", "Session vs MurMur: Messengers Without a Phone Number",
+      "Session and MurMur compared honestly: registration, E2EE, calls, metadata, install. Where Session is the stronger choice today and where MurMur differs."),
+     ("session-protiv-murmur", "Session против MurMur: мессенджеры без номера",
+      "Честное сравнение Session и MurMur: регистрация, шифрование, звонки, метаданные, установка. Когда Session лучше сегодня и чем отличается MurMur.")),
+    ("draft-08-recent-improvements.md",
+     ("recent-improvements-devlog", "What We Fixed in MurMur Lately: a Plain Devlog",
+      "Reliable offline delivery, missed-call notifications, camera flip, no duplicate photos after reconnect — honest notes from a young project."),
+     ("nedavnie-uluchsheniya-devlog", "Что мы исправили в MurMur: обычный девлог",
+      "Доставка офлайн-сообщений, пропущенные вызовы, переключение камеры, дедупликация — честные заметки молодого проекта.")),
 ]
 
 PAGE_TMPL = """<!DOCTYPE html>
@@ -92,7 +102,7 @@ PAGE_TMPL = """<!DOCTYPE html>
 <div class="meta-line">{date} · MurMur team</div>
 {content}
 <div class="cta"><a href="https://murmurchat.org">Try MurMur — no phone, no email →</a></div>
-<div class="footer"><a href="https://murmurchat.org">murmurchat.org</a> · <a href="https://github.com/Oleg2796996/murmur">GitHub</a> · <a href="/privacy">Privacy</a></div>
+<div class="footer"><a href="https://murmurchat.org">Open MurMur →</a> · <a href="/blog/">Blog</a> · <a href="https://github.com/Oleg2796996/murmur">GitHub</a> · <a href="/privacy">Privacy</a></div>
 </div>
 </body>
 </html>
@@ -133,7 +143,7 @@ INDEX_TMPL = """<!DOCTYPE html>
 <h1>MurMur Blog</h1>
 <div class="sub">Private messaging, explained honestly.</div>
 {items}
-<div class="footer"><a href="https://murmurchat.org">murmurchat.org</a> · <a href="https://github.com/Oleg2796996/murmur">GitHub</a></div>
+<div class="footer"><a href="https://murmurchat.org">Open MurMur →</a> · <a href="https://github.com/Oleg2796996/murmur">GitHub</a></div>
 </div>
 </body>
 </html>

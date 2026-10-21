@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>What We Fixed in MurMur Lately: a Plain Devlog</title>
+<meta name="description" content="Reliable offline delivery, missed-call notifications, camera flip, no duplicate photos after reconnect — honest notes from a young project.">
+<link rel="canonical" href="https://murmurchat.org/blog/recent-improvements-devlog/">
+<meta property="og:title" content="What We Fixed in MurMur Lately: a Plain Devlog">
+<meta property="og:description" content="Reliable offline delivery, missed-call notifications, camera flip, no duplicate photos after reconnect — honest notes from a young project.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://murmurchat.org/blog/recent-improvements-devlog/">
+<link rel="icon" type="image/png" sizes="32x32" href="/fav32-2026b.png">
+<style>
+  :root { --bg:#0f1620; --card:rgba(255,255,255,.045); --accent:#229ED9; --accent2:#5eead4; --text:#e8eef5; --muted:#9fb0c3; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { min-height:100vh; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:28px 20px 60px;
+    background-image: radial-gradient(ellipse 60% 35% at 20% 0%, rgba(34,158,217,.13), transparent),
+      radial-gradient(ellipse 50% 45% at 85% 100%, rgba(94,234,212,.08), transparent); }
+  .wrap { max-width:720px; margin:0 auto; }
+  .back { display:inline-block; color:var(--accent); text-decoration:none; font-size:14px; margin-bottom:18px; }
+  h1 { font-size:30px; font-weight:800; letter-spacing:-.5px; line-height:1.2; margin-bottom:8px;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  h2 { font-size:20px; font-weight:700; margin:28px 0 10px; color:var(--text); }
+  h3 { font-size:16px; font-weight:700; margin:18px 0 6px; color:var(--text); }
+  p { font-size:15px; line-height:1.7; color:var(--muted); margin-bottom:12px; }
+  ul, ol { margin:0 0 14px 22px; }
+  li { font-size:15px; line-height:1.7; color:var(--muted); margin-bottom:6px; }
+  a { color:var(--accent); }
+  strong { color:var(--text); }
+  table { border-collapse:collapse; width:100%; margin:14px 0 18px; font-size:13.5px; }
+  th, td { border:1px solid rgba(255,255,255,.12); padding:8px 10px; text-align:left; vertical-align:top; color:var(--muted); line-height:1.5; }
+  th { background:rgba(34,158,217,.12); color:var(--text); font-weight:700; }
+  td:first-child { color:var(--text); font-weight:600; white-space:nowrap; }
+  .cta { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:18px 20px; margin:26px 0; text-align:center; }
+  .cta a { display:inline-block; background:linear-gradient(90deg,var(--accent),#1d8ac4); color:#fff; text-decoration:none; font-weight:700; font-size:15px; padding:12px 26px; border-radius:12px; }
+  .meta-line { color:var(--muted); font-size:13px; margin-bottom:22px; }
+  .faq { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:18px; padding:20px 18px; margin-top:26px; }
+  .faq h2 { margin-top:0; }
+  .footer { text-align:center; margin-top:40px; color:var(--muted); font-size:13px; }
+  .footer a { color:var(--accent); text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<a class="back" href="/blog/">← Blog</a>
+<h1>What We Fixed in MurMur Lately: a Plain Devlog</h1>
+<div class="meta-line">2026-10-21 · MurMur team</div>
+<p>MurMur is a young project, and it behaves like one: sometimes things break, we notice, and we fix them. This post is a plain devlog about a batch of recent fixes — what the problem was and what we changed. No version numbers, no roadmap promises, just what shipped.</p>
+
+<h2>Messages sent offline now actually get delivered</h2>
+
+<p>The most annoying bug we had: if you sent a message while offline or while the connection was flaky, that message could sit in the outbox and never leave. It looked sent on your side. The other person never saw it. For a messenger, that's about the worst failure mode there is, because both sides think the conversation is fine.</p>
+
+<p>We rebuilt the outbox path. Now anything you send while offline is kept locally and automatically re-sent the moment you're back online. The delivery logic no longer assumes you had a stable connection when you hit "send" — because on phones, you often don't. This also covers the common case of writing messages in the metro or on a train and forgetting about them until later.</p>
+
+<h2>Missed-call push notifications</h2>
+
+<p>MurMur has end-to-end encrypted calls, but there was a gap: if you weren't in the app when someone called, the call simply evaporated. No trace, no notification. You'd find out about the attempt only if the person texted you afterwards.</p>
+
+<p>Now a missed call triggers a push notification. You see who tried to reach you and can call back from the notification itself. This works through the same encrypted-notification pipeline as regular messages — the relay that delivers pushes doesn't get to read your conversations, and it doesn't learn anything new about calls either beyond what's needed to route the notification.</p>
+
+<h2>Camera flip during calls</h2>
+
+<p>Small thing, big quality-of-life difference: you can now switch between front and back camera mid-call without hanging up. Before, showing something with the rear camera meant ending the call and starting a new one. That's fixed.</p>
+
+<h2>No more duplicate photos and texts after reconnecting</h2>
+
+<p>Another bug from the unstable-connection family: after a reconnect, some photos and text messages could appear twice — or more. The sender's client wasn't always sure whether a previous attempt went through, so it retried, and the receiving side didn't recognize the retry as the same message.</p>
+
+<p>We added deduplication on reconnect. The client now tracks what it has already received, and repeated deliveries of the same photo or text are collapsed into one. Your chat history stays the way it should: one message is one message, even if the network dropped three times in the middle.</p>
+
+<h2>Updates without reinstalling</h2>
+
+<p>MurMur is a PWA — it installs on iPhone and Android straight from the browser, without the App Store or Google Play. That has a nice side effect for updates: there's nothing to reinstall. When we ship a fix, the app picks it up from the web on its own, like a regular website. Next time you open MurMur, you're on the current version.</p>
+
+<p>For a small team, this matters a lot. We can fix a bug and have it reach everyone within a day, instead of waiting days for store review on two platforms. It also means we can be honest about the trade-off: the app depends on your browser. If the browser is outdated or the vendor breaks something in PWA support, that affects us too. That's a limitation we accept and keep an eye on.</p>
+
+<h2>What we're not going to pretend</h2>
+
+<p>MurMur is open source, young, and has a small audience. There has been no independent security audit. Identity in MurMur is a cryptographic key (an npub) — there's no phone number or email to register with, which also means: lose the key, lose the account. There's no SMS recovery, by design, because there's nothing to send an SMS to. These are real limitations, not fine print.</p>
+
+<p>Why do we write changelogs like this one? Partly because a small project earns trust by being specific about what changed — and about what can go wrong. If we ship a fix for a delivery bug, that means the delivery bug existed. We'd rather say so.</p>
+
+<h2>FAQ</h2>
+
+<h3>I sent a message while offline. What happens now?</h3>
+<p>It stays in the outbox and is delivered automatically once you're back online. You don't need to resend it or keep the chat open.</p>
+
+<h3>Do missed-call notifications show message content?</h3>
+<p>They show who called you. Calls and messages are end-to-end encrypted, and the relay can't read your conversations.</p>
+
+<h3>How do I update the app?</h3>
+<p>You don't have to do anything. As a PWA installed from the browser, MurMur updates itself from the web — no App Store, no Google Play, no reinstalling.</p>
+
+<h3>What if I lose my key?</h3>
+<p>You lose access to the account. There is no SMS or email recovery, because registration doesn't involve a phone number or email. Back up your key carefully.</p>
+
+<p>MurMur is free and open source — try it at <a href="https://murmurchat.org">murmurchat.org</a> or read the code on <a href="https://github.com/Oleg2796996/murmur">GitHub</a>.</p>
+<div class="cta"><a href="https://murmurchat.org">Try MurMur — no phone, no email →</a></div>
+<div class="footer"><a href="https://murmurchat.org">Open MurMur →</a> · <a href="/blog/">Blog</a> · <a href="https://github.com/Oleg2796996/murmur">GitHub</a> · <a href="/privacy">Privacy</a></div>
+</div>
+</body>
+</html>
