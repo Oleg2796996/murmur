@@ -4,6 +4,12 @@ A privacy-first messenger: an installable web app (PWA) with end-to-end encrypti
 
 No phone number. No email. No accounts database. Your identity is a cryptographic key.
 
+<p align="center">
+  <img src="docs/screenshots/app-onboarding.png" alt="MurMur onboarding — privacy-first messaging" width="280" />
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/app-chat.png" alt="MurMur messenger — first run, invite to start chatting" width="280" />
+</p>
+
 **Try it:** [open MurMur](https://murmurchat.org) · **Source:** [github.com/Oleg2796996/murmur](https://github.com/Oleg2796996/murmur)
 
 > MurMur is experimental software. It has not undergone an external security audit. Do not use it for high-risk communications without reviewing the code and threat model.
