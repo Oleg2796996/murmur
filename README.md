@@ -4,6 +4,10 @@ A privacy-first messenger: an installable web app (PWA) with end-to-end encrypti
 
 No phone number. No email. No accounts database. Your identity is a cryptographic key.
 
+**Try it:** [open MurMur](https://murmurchat.org) · **Source:** [github.com/Oleg2796996/murmur](https://github.com/Oleg2796996/murmur)
+
+> MurMur is experimental software. It has not undergone an external security audit. Do not use it for high-risk communications without reviewing the code and threat model.
+
 ## What it is
 
 MurMur runs in the browser. You install it as a PWA directly from https://murmurchat.org — no App Store, no Google Play:
@@ -62,9 +66,10 @@ Plus `pwa/` — the vanilla JS progressive web app that users actually install.
 
 ### For users
 
-1. Open https://murmurchat.org in Safari (iPhone/iPad) or Chrome (Android/desktop).
+1. Open [murmurchat.org](https://murmurchat.org) in Safari (iPhone/iPad) or Chrome (Android/desktop).
 2. Add to Home Screen (Safari) or install (Chrome).
-3. Start chatting. Your identity is your key — export a backup file from the app.
+3. Create your identity and start chatting.
+4. **Export the `.murmur` backup immediately** and store it safely. The private key stays on your device; there is no SMS or email recovery.
 
 ### For self-hosters
 
