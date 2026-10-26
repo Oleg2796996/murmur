@@ -3,7 +3,7 @@ name = "murmur-witness"
 version = "0.1.0"
 edition = "2021"
 description = "OpenTimestamps witness layer for murmur logs (minimal dependency footprint)"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 
 [dependencies]
 murmur-log = { path = "../murmur-log" }

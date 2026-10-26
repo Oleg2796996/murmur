@@ -3,7 +3,7 @@ name = "murmur-transport"
 version = "0.1.0"
 edition = "2021"
 description = "P2P transport (iroh) for murmur"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 
 [features]
 default = []

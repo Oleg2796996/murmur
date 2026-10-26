@@ -3,7 +3,7 @@ name = "murmur-relay"
 version = "0.1.0"
 edition = "2021"
 description = "murmur relay server: receives iroh-direct envelopes and pushes them to subscribed WebSocket clients"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 
 [dependencies]
 # Core types

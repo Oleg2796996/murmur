@@ -3,7 +3,7 @@ name = "murmur"
 version = "0.1.0"
 edition = "2021"
 description = "murmur messenger: P2P sends and receives messages into append-only logs"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 
 [features]
 default = []

@@ -107,4 +107,6 @@ These are future plans, not current features:
 
 ## License
 
-MIT.
+AGPL-3.0-or-later.
+
+If you run a modified MurMur service for users over a network, the AGPL requires you to offer those users the corresponding modified source code. See `LICENSE` for the full terms.

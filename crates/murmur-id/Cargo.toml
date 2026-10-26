@@ -3,7 +3,7 @@ name = "murmur-id"
 version = "0.1.0"
 edition = "2021"
 description = "Identity layer for murmur: ed25519/X25519 keypair, bech32 npub, postcard serde"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 
 [dependencies]
 ed25519-dalek = { version = "2.0", features = ["rand_core", "serde"] }

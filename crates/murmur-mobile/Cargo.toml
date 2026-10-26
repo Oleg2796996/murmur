@@ -2,7 +2,7 @@
 name = "murmur-mobile"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 description = "Tauri 2.x shell for murmur — desktop + mobile (iOS/Android)"
 authors = ["Oleg <oleg@murmur.local>", "Matilda <matilda@murmur.local>"]
 

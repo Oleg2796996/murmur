@@ -3,7 +3,7 @@ name = "murmur-log"
 version = "0.1.0"
 edition = "2021"
 description = "Append-only local log with Merkle anchoring for murmur"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 
 [dependencies]
 sha3 = "0.10"

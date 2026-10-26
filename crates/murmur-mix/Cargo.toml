@@ -3,7 +3,7 @@ name = "murmur-mix"
 version = "0.1.0"
 edition = "2021"
 description = "Lightweight mixnet overlay (drop+cover) for murmur"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
