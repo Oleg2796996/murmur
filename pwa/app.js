@@ -151,10 +151,14 @@ async function loadWasmModule() {
         // v160g6-fix: cache-bust на pkg JS И wasm — Safari держит старый бинарник
         // без групповых экспортов (wasm.group_new_key is not a function).
         // Явный URL с query: import.meta.url resolution сьедает ?v= на relative path.
-        const bust = "v=160h8";
-        const mod = await import("./pkg/murmur_id_wasm.js?" + bust);
+        const bust = "v=160i1-appfix";
+        // v160i1-fix: абсолютные пути от корня origin. "./pkg/..." и
+        // new URL("pkg/...", location.href) резолвились относительно пути страницы:
+        // на /app/ (тот же SPA по другому пути) грузился /app/pkg/... -> 404,
+        // создание identity падало. Привязываем к location.origin.
+        const mod = await import("/pkg/murmur_id_wasm.js?" + bust);
         if (!_wasmReady) {
-            const wasmUrl = new URL("pkg/murmur_id_wasm_bg.wasm?" + bust, location.href);
+            const wasmUrl = new URL("/pkg/murmur_id_wasm_bg.wasm?" + bust, location.origin);
             await mod.default(wasmUrl.href);   // <-- явный путь с bust, не import.meta.url
             _wasmReady = true;
         }
@@ -5242,7 +5246,7 @@ function showInviteLanding(inviteNpub) {
         // её не было (скрин Олега). Открывается в той же вкладке (window.location),
         // т.к. лендинг — единственное, что видит посетитель до установки.
         '<div style="text-align:center;margin-top:14px;">' +
-        '<a href="/privacy" style="font-size:12.5px;color:#5a6b80;text-decoration:none;">Privacy Policy</a>' +
+        '<a href="/privacy" style="font-size:12.5px;color:#5a6b80;text-decoration:none;">Privacy</a> &nbsp;·&nbsp; <a href="/blog/" style="font-size:12.5px;color:#5a6b80;text-decoration:none;">Blog</a>' +
         '</div>' +
         '</div>';
 
