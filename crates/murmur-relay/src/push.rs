@@ -777,6 +777,12 @@ fn serve_static(path: &str, static_dir: &Option<PathBuf>, head_only: bool) -> Op
     if let Some(stripped) = rel.strip_prefix("pwa/") {
         rel = stripped.to_string();
     }
+    // v160i2-secfix: after stripping the prefix the remainder may still start
+    // with '/' (e.g. "/pwa//etc/passwd" -> "/etc/passwd"). PathBuf::join with an
+    // ABSOLUTE path discards the base entirely, serving arbitrary files from
+    // the server (/etc/passwd, /etc/shadow, configs). Trim ALL leading slashes
+    // so the candidate is always relative to static_dir.
+    rel = rel.trim_start_matches('/').to_string();
     if rel.is_empty() {
         // "/pwa/" -> index.html
         return try_file(dir, "index.html", head_only);
@@ -786,6 +792,11 @@ fn serve_static(path: &str, static_dir: &Option<PathBuf>, head_only: bool) -> Op
         return None;
     }
     let candidate = dir.join(&rel);
+    // Defense in depth: candidate must resolve INSIDE static_dir even if
+    // future refactors reintroduce an absolute component.
+    if !candidate.starts_with(dir) {
+        return None;
+    }
     if candidate.is_file() {
         return serve_file(&candidate, head_only);
     }
