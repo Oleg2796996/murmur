@@ -469,7 +469,7 @@ async function pollHistoryForGroup(gid) {
         // убран, своих копий на сервере больше нет).
         if (m === myNpub) continue;
         try {
-            const r = await fetch(RELAY + "/api/history?npub=" + encodeURIComponent(myNpub) + "&peer=" + encodeURIComponent(m) + "&limit=" + HISTORY_LIMIT + "&visible=" + (document.visibilityState === "visible" ? 1 : 0) + "&_t=" + Date.now(), { cache: "no-store", credentials: "omit" });
+            const r = await fetch(RELAY + "/api/history?npub=" + encodeURIComponent(myNpub) + "&peer=" + encodeURIComponent(m) + "&limit=" + HISTORY_LIMIT + "&visible=" + (document.visibilityState === "visible" ? 1 : 0) + "&_t=" + Date.now() + await apiAuthParams(), { cache: "no-store", credentials: "omit" }); // v160i3-authfix
             if (!r.ok) continue;
             const j = await r.json();
             for (const msg of (j.messages || [])) {

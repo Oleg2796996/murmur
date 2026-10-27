@@ -55,7 +55,7 @@ function contactDisplay(peer) {
 async function loadContacts() {
     if (!myNpub) return;
     try {
-        const r = await fetch(RELAY + "/api/contacts?npub=" + encodeURIComponent(myNpub) + "&_t=" + Date.now(), { cache: "no-store", credentials: "omit" });
+        const r = await fetch(RELAY + "/api/contacts?npub=" + encodeURIComponent(myNpub) + "&_t=" + Date.now() + await apiAuthParams(), { cache: "no-store", credentials: "omit" }); // v160i3-authfix
         if (!r.ok) return;
         const j = await r.json();
         if (j.contacts) {

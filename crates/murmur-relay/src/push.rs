@@ -1218,8 +1218,12 @@ async fn handle_api_contacts(
 
     let query = req.uri().query().unwrap_or("");
     let mut npub: Option<String> = None;
+    let mut ts: Option<u64> = None;
+    let mut sig: Option<String> = None;
     for kv in query.split('&') {
         if let Some(v) = kv.strip_prefix("npub=") { npub = Some(v.to_string()); }
+        else if let Some(v) = kv.strip_prefix("_ts=") { ts = v.parse().ok(); }
+        else if let Some(v) = kv.strip_prefix("_sig=") { sig = Some(v.to_string()); }
     }
     let npub = match npub {
         Some(n) if !n.is_empty() => n,
@@ -1230,6 +1234,12 @@ async fn handle_api_contacts(
             ));
         }
     };
+
+    // v160i3-authfix (GHSA-vfc3-2fmm-28xv): /api/contacts returns a user's
+    // contact list — prove possession of the identity key before serving.
+    if let Err(resp) = verify_identity_auth(&npub, ts, sig.as_deref()) {
+        return Ok(resp);
+    }
 
     // Опциональный side-effect: пометить входящие от peer'а как прочитанные.
     // Нужен чтобы badge после reload отражал реальное состояние, а
@@ -1271,6 +1281,9 @@ async fn handle_api_history(
         }
     };
 
+    let query = req.uri().query().unwrap_or("");
+    let mut ts: Option<u64> = None;
+    let mut sig: Option<String> = None;
     let npub = match req
         .uri()
         .query()
@@ -1284,6 +1297,16 @@ async fn handle_api_history(
             ));
         }
     };
+    for kv in query.split('&') {
+        if let Some(v) = kv.strip_prefix("_ts=") { ts = v.parse().ok(); }
+        else if let Some(v) = kv.strip_prefix("_sig=") { sig = Some(v.to_string()); }
+    }
+
+    // v160i3-authfix (GHSA-vfc3-2fmm-28xv): /api/history returns message
+    // metadata and bodies for ?npub= — require identity proof.
+    if let Err(resp) = verify_identity_auth(&npub, ts, sig.as_deref()) {
+        return Ok(resp);
+    }
 
     let peer = match req
         .uri()
@@ -1523,6 +1546,72 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
+/// v160i3-authfix (GHSA-vfc3-2fmm-28xv): proof-of-possession for metadata
+/// endpoints. Client signs `"murmur-auth-v1|<npub>|<ts>"` with its identity
+/// (ed25519) key; relay verifies against the npub's public key and enforces
+/// a ±5-minute clock window (anti-replay).
+///
+/// Transition: while clients update, a missing _sig/_ts is accepted
+/// (`GRACE`) — but an INVALID signature is always rejected. Flip to
+/// `Required` after the PWA fleet has rolled over.
+fn verify_identity_auth(
+    npub: &str,
+    ts: Option<u64>,
+    sig_hex: Option<&str>,
+) -> Result<(), Response<Full<Bytes>>> {
+    const CLOCK_SKEW_SECS: u64 = 300;
+    const MODE: AuthMode = AuthMode::Grace;
+    enum AuthMode { Grace, Required }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    match (ts, sig_hex) {
+        (Some(ts), Some(sig_hex)) => {
+            // Anti-replay: timestamp within ±5 min.
+            let delta = now.abs_diff(ts);
+            if delta > CLOCK_SKEW_SECS {
+                return Err(json_error(StatusCode::UNAUTHORIZED, "stale auth timestamp"));
+            }
+            let sig_bytes = decode_sig_hex(sig_hex);
+            let sig = match sig_bytes {
+                Some(s) => s,
+                None => return Err(json_error(StatusCode::UNAUTHORIZED, "bad auth signature")),
+            };
+            let msg = format!("murmur-auth-v1|{npub}|{ts}");
+            let ok = murmur_id::IdentityPublic::from_npub(npub)
+                .map(|pk| pk.verify(msg.as_bytes(), &sig))
+                .unwrap_or(false);
+            if !ok {
+                return Err(json_error(StatusCode::UNAUTHORIZED, "auth signature verification failed"));
+            }
+            Ok(())
+        }
+        (None, None) => match MODE {
+            AuthMode::Grace => Ok(()),
+            AuthMode::Required => Err(json_error(
+                StatusCode::UNAUTHORIZED,
+                "missing auth signature",
+            )),
+        },
+        _ => Err(json_error(
+            StatusCode::UNAUTHORIZED,
+            "incomplete auth params",
+        )),
+    }
+}
+
+fn decode_sig_hex(s: &str) -> Option<[u8; 64]> {
+    if s.len() != 128 { return None; }
+    let mut out = [0u8; 64];
+    for i in 0..64 {
+        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
 fn json_error(status: StatusCode, msg: &str) -> Response<Full<Bytes>> {
     let body = serde_json::json!({ "ok": false, "error": msg }).to_string();
     Response::builder()
@@ -1633,6 +1722,19 @@ async fn handle_api_upload(
         } else if let Some(rest) = kv.strip_prefix("wrapped_key=") {
             wrapped_key = Some(url_decode(rest));
         }
+    }
+
+    // v160i3-secfix (GHSA-chw3-q7vf-qhjg): reject attacker-chosen active MIME
+    // types. Anything that a browser can execute/render as a document
+    // (HTML, SVG, XML, scripts) must never be stored, even though the download
+    // path now serves octet-stream: defense in depth.
+    let mime_lc = mime.clone().unwrap_or_default().to_ascii_lowercase();
+    const DANGEROUS_MIME_MARKERS: [&str; 8] = [
+        "text/html", "application/xhtml", "image/svg", "text/xml",
+        "application/xml", "application/rss", "application/atom", "javascript",
+    ];
+    if DANGEROUS_MIME_MARKERS.iter().any(|m| mime_lc.contains(m)) {
+        return Ok(json_error(StatusCode::UNSUPPORTED_MEDIA_TYPE, "active content mime type is not allowed"));
     }
 
     let (sha256, mime, name, size, wrapped_key) = match (sha256, mime, name, size, wrapped_key) {
@@ -1746,10 +1848,17 @@ async fn handle_api_blob_download(
         Err(e) => return Ok(json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("read blob: {e}"))),
     };
 
+    // v160i3-secfix (GHSA-chw3-q7vf-qhjg): never trust the stored attacker-
+    // chosen MIME. Serving user content as text/html in the app origin would
+    // let a script read the identity secret key from localStorage. The client
+    // decrypts the ciphertext bytes itself and assigns the real (verified)
+    // MIME when constructing the Blob, so octet-stream here is transparent
+    // for legit clients and inert for anyone opening the URL directly.
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header("content-type", &meta.mime)
-        .header("content-length", meta.size)
+        .header("content-type", "application/octet-stream")
+        .header("x-content-type-options", "nosniff")
+        .header("content-disposition", "attachment")
         .header("x-blob-id", &meta.blob_id)
         .header("x-blob-sha256", &meta.sha256)
         .header("access-control-allow-origin", "*")

@@ -2040,6 +2040,14 @@ function openChat(peer, opts) {
         renderChatList();
         renderMessages();
         scrollToBottom();
+        // v160y61-receiptreq (Олег 27.10 «галочки странно проставились»):
+        // self-heal ✓→✓✓. После loadHistory у исходящих присвоены _hash;
+        // тем, у кого нет ✓✓ и кто старше 90с, отправляем receipt_req —
+        // Боб отвечает квитанцией по реально полученным hash'ам.
+        // Backoff 10 мин/peer (LS_RECEIPT_REQ) против шторма.
+        if (typeof requestMissingReceipts === "function") {
+            setTimeout(() => { requestMissingReceipts(peer).catch(() => {}); }, 1500);
+        }
         // v160g4-kbd6 (порт w6m2/m3/m5): догон-серия с гейтом - decrypt/attachments
         // растят ленту после первого скролла. dist>140 -> smooth, иначе мгновенно.
         [100, 300, 600, 1000, 1500, 2500].forEach(t => setTimeout(() => {
@@ -2100,6 +2108,23 @@ function openChat(peer, opts) {
     });
 }
 
+// ── v160i3-authfix: клиентская подпись /api/* (GHSA-vfc3-2fmm-28xv) ──
+// Релей проверяет proof-of-possession: sig = ed25519("murmur-auth-v1|<npub>|<ts>"),
+// ±5 мин clock skew. Пока релей в Grace-режиме, подпись опциональна, но клиент
+// шлёт её с первого деплоя — чтобы flip в Required прошёл без волны 401.
+// sign_message вернёт err если identity ещё не загружена — тогда идём без sig
+// (Grace примет).
+async function apiAuthParams() {
+    try {
+        if (!myNpub || typeof loadWasmModule !== "function") return "";
+        const mod = await loadWasmModule();
+        const ts = Math.floor(Date.now() / 1000);
+        const r = unwrap(mod.sign_message("murmur-auth-v1|" + myNpub + "|" + ts));
+        if (r && r.ok) return "&_ts=" + ts + "&_sig=" + encodeURIComponent(r.data);
+    } catch (e) { /* Grace-режим примет запрос без подписи */ }
+    return "";
+}
+
 // ── Load History ──
 async function loadHistory(peer, beforeTs) {
     if (!myNpub) return;
@@ -2121,6 +2146,8 @@ async function loadHistory(peer, beforeTs) {
               "&visible=" + (document.visibilityState === "visible" ? 1 : 0) +
               "&_t=" + Date.now();
     if (beforeTs) url += "&before_ts=" + beforeTs;
+    // v160i3-authfix: proof-of-possession для /api/history.
+    url += await apiAuthParams();
     const area = messagesArea;
     const loadingEl = document.createElement("div");
     loadingEl.className = "loading-spinner";
@@ -4271,7 +4298,7 @@ async function pollInbox() {
         // even if pollHistoryForPeer doesn't fire on them.
         await loadContacts();
         // Step 1: get all peers I've ever talked to.
-        const cr = await fetch(RELAY + "/api/contacts?npub=" + encodeURIComponent(myNpub) + "&_t=" + Date.now(), { cache: "no-store", credentials: "omit" });
+        const cr = await fetch(RELAY + "/api/contacts?npub=" + encodeURIComponent(myNpub) + "&_t=" + Date.now() + await apiAuthParams(), { cache: "no-store", credentials: "omit" }); // v160i3-authfix
         if (!cr.ok) return;
         const cj = await cr.json();
         const peers = new Set();
@@ -4397,7 +4424,7 @@ async function pollHistoryForPeer(peer) {
     }
     console.log("[pollHist] peer=", peer.slice(0,12), "myNpub=", myNpub.slice(0,12));
     try {
-        const r = await fetch(RELAY + "/api/history?npub=" + encodeURIComponent(myNpub) + "&peer=" + encodeURIComponent(peer) + "&limit=" + HISTORY_LIMIT + "&visible=" + (document.visibilityState === "visible" ? 1 : 0) + "&_t=" + Date.now(), { cache: "no-store", credentials: "omit" });
+        const r = await fetch(RELAY + "/api/history?npub=" + encodeURIComponent(myNpub) + "&peer=" + encodeURIComponent(peer) + "&limit=" + HISTORY_LIMIT + "&visible=" + (document.visibilityState === "visible" ? 1 : 0) + "&_t=" + Date.now() + await apiAuthParams(), { cache: "no-store", credentials: "omit" }); // v160i3-authfix
         if (!r.ok) return;
         const j = await r.json();
         const msgs = j.messages || [];
