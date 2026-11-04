@@ -526,6 +526,18 @@ public protocol MurmurIdentityProtocol : AnyObject {
      */
     func signEnvelope(senderNpub: String, payload: Data) throws  -> Data
     
+    /**
+     * Same as `sign_envelope`, but lowercase hex — matches PWA `sign_envelope`
+     * (`msg.sig` on the wire is hex, so the relay can verify it).
+     */
+    func signEnvelopeHex(senderNpub: String, payload: Data) throws  -> String
+    
+    /**
+     * Same as `sign`, but lowercase hex — byte-identical format to the PWA
+     * WASM `sign_message` return value (used for `murmur-auth-v1` tokens).
+     */
+    func signHex(msg: Data)  -> String
+    
 }
 
 /**
@@ -678,6 +690,31 @@ open func signEnvelope(senderNpub: String, payload: Data)throws  -> Data {
     uniffi_murmur_uniffi_fn_method_murmuridentity_sign_envelope(self.uniffiClonePointer(),
         FfiConverterString.lower(senderNpub),
         FfiConverterData.lower(payload),$0
+    )
+})
+}
+    
+    /**
+     * Same as `sign_envelope`, but lowercase hex — matches PWA `sign_envelope`
+     * (`msg.sig` on the wire is hex, so the relay can verify it).
+     */
+open func signEnvelopeHex(senderNpub: String, payload: Data)throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMurmurError.lift) {
+    uniffi_murmur_uniffi_fn_method_murmuridentity_sign_envelope_hex(self.uniffiClonePointer(),
+        FfiConverterString.lower(senderNpub),
+        FfiConverterData.lower(payload),$0
+    )
+})
+}
+    
+    /**
+     * Same as `sign`, but lowercase hex — byte-identical format to the PWA
+     * WASM `sign_message` return value (used for `murmur-auth-v1` tokens).
+     */
+open func signHex(msg: Data) -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_murmur_uniffi_fn_method_murmuridentity_sign_hex(self.uniffiClonePointer(),
+        FfiConverterData.lower(msg),$0
     )
 })
 }
@@ -1166,6 +1203,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_murmur_uniffi_checksum_method_murmuridentity_sign_envelope() != 53514) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_murmur_uniffi_checksum_method_murmuridentity_sign_envelope_hex() != 32181) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_murmur_uniffi_checksum_method_murmuridentity_sign_hex() != 25273) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_murmur_uniffi_checksum_constructor_murmuridentity_generate() != 196) {

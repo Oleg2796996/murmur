@@ -194,6 +194,19 @@ impl MurmurIdentity {
         Ok(self.inner.lock().unwrap().sign(&input).to_vec())
     }
 
+    /// Same as `sign`, but lowercase hex — byte-identical format to the PWA
+    /// WASM `sign_message` return value (used for `murmur-auth-v1` tokens).
+    pub fn sign_hex(&self, msg: Vec<u8>) -> String {
+        hex_encode(&self.inner.lock().unwrap().sign(&msg))
+    }
+
+    /// Same as `sign_envelope`, but lowercase hex — matches PWA `sign_envelope`
+    /// (`msg.sig` on the wire is hex, so the relay can verify it).
+    pub fn sign_envelope_hex(&self, sender_npub: String, payload: Vec<u8>) -> Result<String> {
+        let input = murmur_transport::signature_input(&sender_npub, &payload);
+        Ok(hex_encode(&self.inner.lock().unwrap().sign(&input)))
+    }
+
     /// ECIES-encrypt plaintext for a recipient npub.
     /// Returns sealed envelope bytes: [ephem:32][nonce:12][ct+tag].
     pub fn ecies_encrypt(&self, recipient_npub: String, plaintext: Vec<u8>) -> Result<Vec<u8>> {

@@ -1,0 +1,51 @@
+name: MurmurApp
+options:
+  bundleIdPrefix: org.murmurchat
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.9"
+    DEVELOPMENT_TEAM: "" # fill in App Store Connect team id
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  MurmurApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: MurmurApp
+      - path: MurmurKit/Generated/murmur_uniffi.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.murmurchat.app
+        INFOPLIST_FILE: MurmurApp/Info.plist
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        OTHER_LDFLAGS:
+          - "-lmurmur_uniffi"
+        FRAMEWORK_SEARCH_PATHS:
+          - "$(SRCROOT)/MurmurKit"
+          - "$(SRCROOT)/MurmurKit/MurmurUniffi.xcframework/ios-arm64"
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/MurmurKit/Generated"
+        SWIFT_INCLUDE_PATHS:
+          - "$(SRCROOT)/MurmurKit/Generated"
+    dependencies:
+      - framework: MurmurKit/MurmurUniffi.xcframework
+        embed: false
+    info:
+      path: MurmurApp/Info.plist
+      properties:
+        CFBundleDisplayName: MurMur
+        UILaunchScreen: {}
+        NSMicrophoneUsageDescription: "Микрофон нужен для звонков."
+        NSCameraUsageDescription: "Камера нужна для видеозвонков."
+        UIBackgroundModes:
+          - audio
+          - remote-notification
+          - voip
+        ITSAppUsesNonExemptEncryption: false
