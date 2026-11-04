@@ -1,0 +1,98 @@
+name: iOS XCFramework
+
+# Builds the Rust core (murmur-uniffi) into an iOS XCFramework on a macOS
+# runner, so neither the HP machine nor Oleg's Mac needs a Rust toolchain.
+# Download the artifact, drop it into ios/MurmurKit/, open Xcode.
+
+on:
+  push:
+    branches: [pushfix-v160y22, main]
+    paths:
+      - 'crates/murmur-uniffi/**'
+      - 'crates/murmur-id/**'
+      - 'crates/murmur-transport/**'
+      - 'ios/**'
+      - '.github/workflows/ios-xcframework.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build XCFramework
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-ios-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Verify bindings generate (regression guard)
+        run: ./ios/check-bindings.sh
+
+      - name: Build device slice (arm64)
+        run: cargo build -p murmur-uniffi --release --target aarch64-apple-ios
+
+      - name: Build simulator slices
+        run: |
+          cargo build -p murmur-uniffi --release --target aarch64-apple-ios-sim
+          cargo build -p murmur-uniffi --release --target x86_64-apple-ios
+
+      - name: Merge simulator slices into fat library
+        run: |
+          mkdir -p "$RUNNER_TEMP/sim"
+          lipo -create \
+            target/aarch64-apple-ios-sim/release/libmurmur_uniffi.a \
+            target/x86_64-apple-ios/release/libmurmur_uniffi.a \
+            -output "$RUNNER_TEMP/sim/libmurmur_uniffi.a"
+          lipo -info "$RUNNER_TEMP/sim/libmurmur_uniffi.a"
+
+      - name: Generate Swift bindings
+        run: |
+          cargo run -p murmur-uniffi --bin uniffi-bindgen -- \
+            generate --library target/aarch64-apple-ios/release/libmurmur_uniffi.a \
+            --language swift --out-dir ios/MurmurKit/Generated
+
+      - name: Create XCFramework
+        run: |
+          rm -rf ios/MurmurKit/MurmurUniffi.xcframework
+          xcodebuild -create-xcframework \
+            -library target/aarch64-apple-ios/release/libmurmur_uniffi.a \
+            -headers ios/MurmurKit/Generated \
+            -library "$RUNNER_TEMP/sim/libmurmur_uniffi.a" \
+            -headers ios/MurmurKit/Generated \
+            -output ios/MurmurKit/MurmurUniffi.xcframework
+          echo "--- structure ---"
+          find ios/MurmurKit/MurmurUniffi.xcframework -maxdepth 2
+
+      - name: Generate Xcode project (xcodegen)
+        run: |
+          brew install xcodegen
+          cd ios && xcodegen generate
+          ls -la
+
+      - name: Upload XCFramework artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MurmurUniffi.xcframework
+          path: ios/MurmurKit/MurmurUniffi.xcframework
+          retention-days: 30
+
+      - name: Upload generated project
+        uses: actions/upload-artifact@v4
+        with:
+          name: MurmurApp-xcodeproj
+          path: ios/MurmurApp.xcodeproj
+          retention-days: 30

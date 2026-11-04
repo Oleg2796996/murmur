@@ -1,51 +1,74 @@
-# MurMur iOS — сборка на Mac
+# MurMur iOS — сборка без Rust на Mac
 
-Клиент в `ios/MurmurApp/`. Крипто-ядро — Rust (`crates/murmur-uniffi`), то же,
-что исполняется в PWA как WASM. Формат конвертов и подписей бит-в-бит совпадает
-с PWA, поэтому клиенты взаимозаменяемы на одном релее.
+Rust-ядро собирается в облаке (GitHub Actions, macOS-раннер), ты качаешь готовый
+`XCFramework`. **Rust на Mac не нужен.**
 
-## 1. Получить код
-
-```bash
-cd ~/murmur        # или куда ты клонируешь
-git pull origin pushfix-v160y22
-```
-
-## 2. Собрать XCFramework с Rust-ядром
-
-Нужен Xcode + Rust.
+## 1. Забрать код (один раз)
 
 ```bash
-rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
-./ios/build-xcframework.sh
+git clone https://github.com/Oleg2796996/murmur.git ~/murmur
+cd ~/murmur
+git checkout pushfix-v160y22
 ```
 
-Скрипт соберёт три слайса (устройство + симулятор arm64/x86_64), склеит
-симуляторные в fat-библиотеку, перегенерирует Swift-биндинги и создаст
-`ios/MurmurKit/MurmurUniffi.xcframework`.
+## 2. Собрать XCFramework в облаке
 
-## 3. Сгенерировать Xcode-проект
+Открой в браузере:
+
+```
+https://github.com/Oleg2796996/murmur/actions/workflows/ios-xcframework.yml
+```
+
+Нажми **Run workflow** → ветка `pushfix-v160y22` → **Run**.
+
+Ждать ~10–15 минут (первый раз дольше). Зелёная галочка = сборка удалась.
+
+## 3. Скачать готовое
+
+Внизу страницы завершённого запуска, раздел **Artifacts**:
+
+| Артефакт | Что это |
+|---|---|
+| `MurmurUniffi.xcframework` | Rust-ядро, готовое для iOS |
+| `MurmurApp-xcodeproj` | сгенерированный Xcode-проект |
+
+Скачай оба (zip), распакуй.
+
+## 4. Разложить по местам
 
 ```bash
-brew install xcodegen      # если ещё нет
-cd ios && xcodegen generate
-open MurmurApp.xcodeproj
+cd ~/murmur
+
+# XCFramework -> в ios/MurmurKit/
+rm -rf ios/MurmurKit/MurmurUniffi.xcframework
+cp -R ~/Downloads/MurmurUniffi.xcframework ios/MurmurKit/
+
+# проект -> в ios/
+cp -R ~/Downloads/MurmurApp.xcodeproj ios/
 ```
 
-## 4. Подпись
+## 5. Открыть и запустить
+
+```bash
+open ~/murmur/ios/MurmurApp.xcodeproj
+```
 
 В Xcode: таргет **MurmurApp** → Signing & Capabilities → выбрать свою команду
-(аккаунт Казахстан, тот же, что CatTrack). Bundle id: `org.murmurchat.app`
-(можно поменять в `ios/project.yml`).
+(аккаунт Казахстан). Bundle id `org.murmurchat.app`.
 
-## 5. Запустить
+Выбрать симулятор → ⌘R.
 
-- **Симулятор**: чаты и отправка работают, push и звонки — нет (APNs в
-  симуляторе не доставляется, PushKit отсутствует).
-- **Устройство**: полный набор после шага с APNs (пока не реализован).
+---
 
-Онбординг: «Создать» — новый npub; «Импортировать ключ» — вставить
-`murmur.sk` из PWA; «Файл .murmur» — бэкап + пароль.
+## Альтернатива: собрать локально (если поставишь Rust)
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+cd ~/murmur
+./ios/build-xcframework.sh
+cd ios && xcodegen generate && open MurmurApp.xcodeproj
+```
 
 ## Что уже работает
 
@@ -60,14 +83,9 @@ open MurmurApp.xcodeproj
 | APNs-пуши | ❌ следующий шаг |
 | Звонки (PushKit/CallKit/WebRTC) | ❌ следующий шаг |
 
-## Проверка совместимости (без Mac, на HP)
+Симулятор: чаты и отправка работают. Push и звонки — только на устройстве,
+после реализации APNs.
 
-```bash
-cargo test -p murmur-uniffi        # 12 тестов, включая PWA-векторы
-./ios/check-bindings.sh            # guard: биндинги реально генерируются
-```
+## Если сборка в облаке упала
 
-## Что сказать мне после теста
-
-Что именно не работает и на каком шаге: сборка / запуск / онбординг / отправка /
-приём. Скриншот ошибки Xcode сильно ускоряет.
+Пришли ссылку на упавший запуск или лог шага. Правлю на HP, пушу, перезапускаем.
