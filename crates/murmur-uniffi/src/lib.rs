@@ -143,21 +143,20 @@ pub struct MurmurIdentity {
 impl MurmurIdentity {
     /// Generate a fresh identity.
     #[uniffi::constructor]
-    pub fn generate() -> MurmurIdentityHandle {
-        let id = Identity::generate(&mut OsRng);
-        MurmurIdentityHandle(std::sync::Arc::new(MurmurIdentity {
-            inner: std::sync::Mutex::new(id),
-        }))
+    pub fn generate() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(MurmurIdentity {
+            inner: std::sync::Mutex::new(Identity::generate(&mut OsRng)),
+        })
     }
 
     /// Restore from the PWA-compatible hex secret (`murmur.sk`).
     #[uniffi::constructor]
-    pub fn restore_hex(sk_hex: String) -> Result<MurmurIdentityHandle> {
+    pub fn restore_hex(sk_hex: String) -> Result<std::sync::Arc<Self>> {
         let bytes = hex_decode(&sk_hex)?;
-        let id = Identity::from_bytes(&bytes).map_err(|e| MurmurError::crypto(e))?;
-        Ok(MurmurIdentityHandle(std::sync::Arc::new(MurmurIdentity {
+        let id = Identity::from_bytes(&bytes).map_err(MurmurError::crypto)?;
+        Ok(std::sync::Arc::new(MurmurIdentity {
             inner: std::sync::Mutex::new(id),
-        })))
+        }))
     }
 
     /// npub of this identity.
@@ -216,10 +215,6 @@ impl MurmurIdentity {
             .map_err(|e| MurmurError::crypto(e))
     }
 }
-
-/// Handle so Swift can pass the identity around freely.
-#[derive(uniffi::Object)]
-pub struct MurmurIdentityHandle(pub std::sync::Arc<MurmurIdentity>);
 
 // --- free functions ---
 
