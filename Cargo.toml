@@ -11,6 +11,7 @@ members = [
     "crates/murmur-relay",
     "crates/murmur-mobile",
     "crates/murmur-id-wasm",
+    "crates/murmur-uniffi",
 ]
 
 [workspace.package]
