@@ -98,7 +98,7 @@ struct ChatView: View {
 
     private func loadHistory() async {
         do {
-            let rows = try await app.relay.history(peer: peer)
+            let rows = try await app.relay.history(peer: peer).map { $0.withUnwrappedBody() }
             for row in rows {
                 guard let body = app.relay.decrypt(row: row) else { continue }
                 let direction: ChatMessage.Direction =

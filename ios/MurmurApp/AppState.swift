@@ -28,6 +28,40 @@ final class AppState: ObservableObject {
         relay.onEnvelope = { [weak self] row in
             Task { @MainActor in self?.handleIncoming(row) }
         }
+        // WS push = metadata only (like the PWA) -> re-poll history.
+        relay.onPushMetadata = { [weak self] in
+            Task { @MainActor in self?.pollAllPeers() }
+        }
+    }
+
+    /// Debounced history re-poll for all known peers (answer to a WS push).
+    private var pollTask: Task<Void, Never>?
+    func pollAllPeers() {
+        pollTask?.cancel()
+        pollTask = Task { [weak self] in
+            // small debounce: pushes can burst
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard let self, !Task.isCancelled else { return }
+            for chat in self.chats {
+                await self.pollHistory(peer: chat.peer)
+            }
+        }
+    }
+
+    private func pollHistory(peer: String) async {
+        guard !peer.isEmpty else { return }
+        do {
+            let rows = try await relay.history(peer: peer)
+            for row in rows {
+                guard let body = relay.decrypt(row: row) else { continue }
+                let direction: ChatMessage.Direction =
+                    (row.from_npub == myNpub || row.from_npub == nil) ? .outgoing : .incoming
+                upsert(peer: peer, body: body, ts: row.ts ?? 0,
+                       direction: direction, hash: row.hash)
+            }
+        } catch {
+            NSLog("murmur pollHistory failed: \(error)")
+        }
     }
 
     func didAuthenticate() {

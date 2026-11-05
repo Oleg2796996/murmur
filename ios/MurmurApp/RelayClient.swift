@@ -18,6 +18,8 @@ final class RelayClient {
     private var shouldReconnect = false
 
     var onEnvelope: ((HistoryRow) -> Void)?
+    /// WS push arrived (metadata only) — app should poll /api/history.
+    var onPushMetadata: (() -> Void)?
     var onConnected: (() -> Void)?
 
     init(baseURL: String = RelayConfig.defaultBaseURL) {
@@ -49,7 +51,10 @@ final class RelayClient {
         req.cachePolicy = .reloadIgnoringLocalCacheData
         let (data, resp) = try await session.data(for: req)
         try Self.checkHTTP(resp, data)
-        return try JSONDecoder().decode(HistoryResponse.self, from: data).messages
+        // History rows carry the envelope under body_base64 (base64 of the
+        // envelope JSON with ct inside) — unwrap so decrypt() sees ct.
+        return try JSONDecoder().decode(HistoryResponse.self, from: data)
+            .messages.map { $0.withUnwrappedBody() }
     }
 
     /// Builds and sends one encrypted envelope. Returns the relay-assigned hash.
@@ -154,15 +159,26 @@ final class RelayClient {
         // call signaling arrive bare (same as pwa/app.js onmessage).
         let envelope = (obj["payload"] as? [String: Any]) ?? obj
         guard let ts = envelope["ts"] as? Int else { return }
-        let row = HistoryRow(
+        // WS push is METADATA-ONLY (from_npub/ts/envelope_hash_hex, no ct —
+        // same as the PWA sees). Two paths:
+        //  - receipts/ws_envelope_b64 (service envelopes): decoded via
+        //    withUnwrappedBody, mostly contentless;
+        //  - normal messages: the PWA answers the push by polling
+        //    /api/history — we fire onPushMetadata so AppState re-polls.
+        var row = HistoryRow(
             from_npub: envelope["from"] as? String ?? envelope["from_npub"] as? String,
             to: envelope["to"] as? String,
             ct: envelope["ct"] as? String,
             ts: ts,
-            sig: envelope["sig"] as? String,
-            hash: envelope["hash"] as? String
+            hash: envelope["hash"] as? String ?? envelope["envelope_hash_hex"] as? String,
+            bodyBase64: envelope["body_base64"] as? String
         )
-        onEnvelope?(row)
+        row = row.withUnwrappedBody()
+        if row.ct != nil {
+            onEnvelope?(row)
+        } else {
+            onPushMetadata?()
+        }
     }
 
     private func scheduleReconnect() {
