@@ -71,10 +71,7 @@ final class RelayClient {
     func sendWithAttachments(peer: String, plaintext: String,
                              prepared: [AttachmentManager.Prepared]) async throws -> String? {
         let attachments: [[String: Any]] = prepared.map { p in
-            var a: [String: Any] = [
-                "name": p.fileName, "mime": p.mime, "size": p.size,
-            ]
-            return a
+            ["name": p.fileName, "mime": p.mime, "size": p.size] as [String: Any]
         }
         let serverMeta: [[String: Any]] = prepared.map { p in
             var m: [String: Any] = [

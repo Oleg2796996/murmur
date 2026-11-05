@@ -163,15 +163,13 @@ struct ChatView: View {
                 peer: peer, plaintext: draft, prepared: [prepared])
             let body = draft.isEmpty ? "📎 \(name)" : draft + "\n📎 " + name
             let ts = Int(Date().timeIntervalSince1970)
-            let chips = prepared.map { p -> [String: Any] in
-                var m: [String: Any] = [
-                    "blob_id": p.blobID, "wrapped_key": p.wrappedKey,
-                    "iv": p.ivB64, "mime": p.mime, "size": p.size,
-                    "name": p.fileName,
-                ]
-                if let t = p.blobToken { m["blob_token"] = t }
-                return m
-            }
+            var chip: [String: Any] = [
+                "blob_id": prepared.blobID, "wrapped_key": prepared.wrappedKey,
+                "iv": prepared.ivB64, "mime": prepared.mime, "size": prepared.size,
+                "name": prepared.fileName,
+            ]
+            if let t = prepared.blobToken { chip["blob_token"] = t }
+            let chips: [[String: Any]] = [chip]
             await MainActor.run {
                 app.upsert(peer: peer, body: body, ts: ts, direction: .outgoing,
                            hash: hash, attachments: chips)
