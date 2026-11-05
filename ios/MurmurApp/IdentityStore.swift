@@ -115,3 +115,28 @@ enum Keychain {
         return s
     }
 }
+
+extension IdentityStore {
+    /// Full sk hex export for the "Мой ключ" reveal (PWA parity: btnShowKey).
+    func exportSkHex() -> String? {
+        if let identity, let sk = try? identity.exportSkHex() { return sk }
+        return Keychain.read(account: keychainAccount)
+    }
+
+    /// Wipes every local trace of the identity (PWA parity: "Удалить все
+    /// данные" — localStorage.clear() + IDB wipe).
+    func wipeAll() {
+        identity = nil
+        Keychain.delete(account: keychainAccount)
+    }
+}
+
+extension Keychain {
+    static func delete(account: String) {
+        SecItemDelete([
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ] as CFDictionary)
+    }
+}

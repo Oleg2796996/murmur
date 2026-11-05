@@ -198,3 +198,24 @@ private struct HistoryResponse: Decodable {
     }
     enum CodingKeys: String, CodingKey { case messages }
 }
+
+extension RelayClient {
+    /// PWA parity: POST /api/register_alias {alias, npub} — fire and forget.
+    func registerAlias(alias: String, npub: String) {
+        guard let url = URL(string: baseURL + "/api/register_alias") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 15
+        let payload: [String: Any] = ["alias": alias, "npub": npub]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        req.httpBody = body
+        session.dataTask(with: req) { _, resp, err in
+            if let err {
+                NSLog("murmur register_alias failed: \(err)")
+            } else if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                NSLog("murmur register_alias HTTP \(http.statusCode)")
+            }
+        }.resume()
+    }
+}

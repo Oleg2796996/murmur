@@ -9,6 +9,8 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var sending = false
     @State private var errorText: String?
+    @State private var showRename = false
+    @State private var renameText = ""
 
     private var messages: [ChatMessage] {
         app.chats.first(where: { $0.peer == peer })?.messages ?? []
@@ -42,8 +44,25 @@ struct ChatView: View {
 
             composer
         }
-        .navigationTitle(shortNpub(peer))
+        .navigationTitle(app.displayName(for: peer) ?? shortNpub(peer))
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    renameText = app.displayName(for: peer) ?? ""
+                    showRename = true
+                } label: {
+                    Image(systemName: "pencil")
+                }
+            }
+        }
+        .alert("Имя контакта", isPresented: $showRename) {
+            TextField("Имя", text: $renameText)
+            Button("Сохранить") {
+                app.setDisplayName(renameText.trimmingCharacters(in: .whitespaces), for: peer)
+            }
+            Button("Отмена", role: .cancel) {}
+        }
         .task { await loadHistory() }
     }
 

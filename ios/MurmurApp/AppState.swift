@@ -7,14 +7,24 @@ final class AppState: ObservableObject {
     @Published var myNpub: String = ""
     @Published var chats: [ChatSummary] = []
     @Published var errorText: String?
+    /// Transient sidebar status (paste errors, import notes) — PWA `backup-status`.
+    @Published var statusLine: String?
+
+    /// npub -> display name (PWA `murmur.contact_names` parity).
+    @Published var contactNames: [String: String] = [:] {
+        didSet { persistContactNames() }
+    }
 
     let relay = RelayClient()
+
+    private let contactNamesKey = "murmur.contact_names"
 
     init() {
         if IdentityStore.shared.restoreFromKeychain() {
             authenticated = true
             myNpub = IdentityStore.shared.npub ?? ""
         }
+        loadContactNames()
         relay.onEnvelope = { [weak self] row in
             Task { @MainActor in self?.handleIncoming(row) }
         }
@@ -23,12 +33,42 @@ final class AppState: ObservableObject {
     func didAuthenticate() {
         authenticated = true
         myNpub = IdentityStore.shared.npub ?? ""
+        statusLine = nil
+        registerAlias()
         connect()
+    }
+
+    /// PWA parity: POST /api/register_alias on enter — the relay must know our
+    /// alias or history queries and WS delivery find nobody.
+    func registerAlias() {
+        guard !myNpub.isEmpty else { return }
+        relay.registerAlias(alias: myNpub, npub: myNpub)
     }
 
     func connect() {
         guard authenticated else { return }
         relay.connect()
+    }
+
+    /// PWA parity: "Удалить все данные" — wipe identity + chats + contacts.
+    func wipeEverything() {
+        IdentityStore.shared.wipeAll()
+        relay.disconnect()
+        chats = []
+        contactNames = [:]
+        UserDefaults.standard.removeObject(forKey: contactNamesKey)
+        authenticated = false
+        myNpub = ""
+    }
+
+    /// PWA parity: 🗑 delete chat — removes messages and the contact entry.
+    func deleteChat(peer: String) {
+        chats.removeAll { $0.peer == peer }
+        contactNames.removeValue(forKey: peer)
+    }
+
+    func setDisplayName(_ name: String, for peer: String) {
+        contactNames[peer] = name
     }
 
     private func handleIncoming(_ row: HistoryRow) {
@@ -65,6 +105,23 @@ final class AppState: ObservableObject {
             chats.append(summary)
             chats.sort { $0.lastTs > $1.lastTs }
         }
+    }
+
+    // MARK: - Contact names (murmur.contact_names parity)
+
+    func displayName(for peer: String) -> String? {
+        contactNames[peer]
+    }
+
+    private func loadContactNames() {
+        guard let data = UserDefaults.standard.data(forKey: contactNamesKey),
+              let dict = try? JSONDecoder().decode([String: String].self, from: data) else { return }
+        contactNames = dict
+    }
+
+    private func persistContactNames() {
+        guard let data = try? JSONEncoder().encode(contactNames) else { return }
+        UserDefaults.standard.set(data, forKey: contactNamesKey)
     }
 }
 
