@@ -127,8 +127,12 @@ enum AttachmentManager {
             throw RelayError.make("bad wrapped_key")
         }
         let keyBytes = try identity.eciesDecrypt(sealed: sealed)
-        // WebCrypto layout ct||tag
-        let box = try AES.GCM.SealedBox(combined: data)
+        // WebCrypto AES-GCM layout: [ct][16-byte tag]; nonce comes from att.iv.
+        guard data.count > 16 else { throw RelayError.make("blob too short") }
+        let ct = data.prefix(data.count - 16)
+        let tag = data.suffix(16)
+        let box = try AES.GCM.SealedBox(nonce: AES.GCM.Nonce(data: iv),
+                                        ciphertext: ct, tag: tag)
         let plain = try AES.GCM.open(box, using: SymmetricKey(data: keyBytes))
         let mime = (att["mime"] as? String) ?? "application/octet-stream"
         return (plain, mime)

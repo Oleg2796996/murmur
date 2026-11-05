@@ -115,7 +115,7 @@ struct HistoryRow {
         for i in 0..<n {
             var m = i < attachments.count ? attachments[i] : [:]
             if i < metaFromEnvelope.count {
-                for (k, v) in metaFromEnvelope[i] where v != nil && !(v is NSNull) {
+                for (k, v) in metaFromEnvelope[i] where !(v is NSNull) {
                     m[k] = v
                 }
             }
@@ -163,8 +163,47 @@ extension HistoryRow: Decodable {
             bodyBase64: try c.decodeIfPresent(String.self, forKey: .body_base64),
             kind: try c.decodeIfPresent(String.self, forKey: ._kind)
         )
-        if let atts = try? c.decodeIfPresent([[String: Any]].self, forKey: .attachments) {
-            self.attachments = atts
+        // [[String: Any]] is not Decodable — re-decode the row as raw JSON.
+        if let container = try? decoder.singleValueContainer(),
+           let raw = try? container.decode(FlexibleRow.self) {
+            self.attachments = raw.attachmentsArray
         }
     }
+}
+
+/// Adapter to pull `attachments` (array of objects) without Codable key constraints.
+private struct FlexibleRow: Decodable {
+    let attachments: [AttachmentDict]?
+}
+
+/// [String: Any] dictionary decoded from JSON (values: String / Int / Double / Bool / NSNull).
+struct AttachmentDict: Decodable, ExpressibleByDictionaryLiteral {
+    private var storage: [String: Any]
+    init(dictionaryLiteral elements: (String, Any)...) {
+        storage = Dictionary(uniqueKeysWithValues: elements)
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: JSONKey.self)
+        storage = [:]
+        for key in c.allKeys {
+            if let s = try? c.decode(String.self, forKey: key) { storage[key.stringValue] = s }
+            else if let i = try? c.decode(Int.self, forKey: key) { storage[key.stringValue] = i }
+            else if let d = try? c.decode(Double.self, forKey: key) { storage[key.stringValue] = d }
+            else if let b = try? c.decode(Bool.self, forKey: key) { storage[key.stringValue] = b }
+            else { _ = try? c.decode(Empty.self, forKey: key) } // null / nested — skip
+        }
+    }
+    subscript(key: String) -> Any? { storage[key] }
+    var asDict: [String: Any] { storage }
+    struct JSONKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { return nil }
+    }
+    struct Empty: Decodable {}
+}
+
+extension Array where Element == AttachmentDict {
+    var attachmentsArray: [[String: Any]] { map { $0.asDict } }
 }
