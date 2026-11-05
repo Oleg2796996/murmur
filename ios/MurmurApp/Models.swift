@@ -77,16 +77,18 @@ struct HistoryRow {
     var hash: String?
     /// base64 of the envelope JSON — history rows carry the body here.
     var bodyBase64: String?
+    /// Wire-level marker from the envelope JSON ({"_kind":"receipt",...}).
+    var kind: String?
 
     /// Unwraps body_base64 -> inner envelope ct (pwa decryptEnvelopeForRender
     /// branch 2). Returns self with ct filled in.
     func withUnwrappedBody() -> HistoryRow {
         if ct != nil { return self }
         guard let b64 = bodyBase64, let data = Data(base64Encoded: b64),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let innerCt = obj["ct"] as? String else { return self }
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return self }
         var copy = self
-        copy.ct = innerCt
+        copy.kind = obj["_kind"] as? String
+        copy.ct = obj["ct"] as? String
         return copy
     }
 }
@@ -96,7 +98,7 @@ extension HistoryRow: Decodable {
     private enum Keys: String, CodingKey {
         case from_npub, from, to, to_alias, ct
         case ts, sig, hash, envelope_hash, envelope_hash_hex
-        case body_base64, ws_envelope_b64
+        case body_base64, ws_envelope_b64, _kind
     }
 
     init(from decoder: Decoder) throws {
@@ -111,7 +113,8 @@ extension HistoryRow: Decodable {
             hash: try c.decodeIfPresent(String.self, forKey: .envelope_hash)
                 ?? c.decodeIfPresent(String.self, forKey: .envelope_hash_hex)
                 ?? c.decodeIfPresent(String.self, forKey: .hash),
-            bodyBase64: try c.decodeIfPresent(String.self, forKey: .body_base64)
+            bodyBase64: try c.decodeIfPresent(String.self, forKey: .body_base64),
+            kind: try c.decodeIfPresent(String.self, forKey: ._kind)
         )
     }
 }

@@ -129,9 +129,10 @@ final class AppState: ObservableObject {
 
     private func handleIncoming(_ row: HistoryRow) {
         guard let peer = peerOf(row) else { return }
-        let body = relay.decrypt(row: row) ?? "🔒"
+        // Service envelopes (✓✓ receipts) are swallowed, not rendered.
+        guard let dec = relay.decryptMessage(row: row), !dec.isService else { return }
         let ts = row.ts ?? Int(Date().timeIntervalSince1970)
-        upsert(peer: peer, body: body, ts: ts, direction: .incoming, hash: row.hash)
+        upsert(peer: peer, body: dec.displayBody, ts: ts, direction: .incoming, hash: row.hash)
     }
 
     private func peerOf(_ row: HistoryRow) -> String? {

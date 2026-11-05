@@ -66,9 +66,14 @@ final class RelayClient {
         guard let npub = store.npub else { throw RelayError.make("no identity") }
 
         // 1. Encrypt for the recipient (same Rust ECIES as the PWA).
+        // Wire format parity: the PWA encrypts JSON {body, reply_to, attachments}
+        // and JSON.parses after decrypt — raw text breaks the peer's client
+        // ("не удалось расшифровать"). Always send the JSON shape.
+        let wire: [String: Any] = ["body": plaintext, "attachments": [], "reply_to": NSNull()]
+        let plainBytes = try JSONSerialization.data(withJSONObject: wire)
         let sealed = try identity.eciesEncrypt(
             recipientNpub: peer,
-            plaintext: Data(plaintext.utf8)
+            plaintext: plainBytes
         )
         let ct = sealed.base64EncodedString()
 
@@ -100,18 +105,68 @@ final class RelayClient {
         return try? JSONDecoder().decode(EnvelopeAck.self, from: data).hash
     }
 
+    /// Decrypted payload of an incoming row.
+    struct Decrypted {
+        var body: String
+        /// Attachment chips from the PWA ({name, mime, size, ...} inside ct).
+        var attachments: [[String: Any]]
+        /// True for service envelopes (✓✓ receipts, group control) — never rendered.
+        var isService: Bool
+
+        /// Render body: attachment-only messages get 📎 chips in text
+        /// (pwa decryptEnvelopeForRender parity).
+        var displayBody: String {
+            var out = body
+            for a in attachments {
+                let name = a["name"] as? String ?? "file"
+                let size = a["size"] as? Int ?? 0
+                out += (out.isEmpty ? "" : "\n") + "📎 \(name) (\(Self.fmtSize(size)))"
+            }
+            return out
+        }
+
+        static func fmtSize(_ b: Int) -> String {
+            b >= 1_048_576 ? String(format: "%.1f MB", Double(b) / 1_048_576)
+                : b >= 1024 ? "\(b / 1024) KB" : "\(b) B"
+        }
+    }
+
     /// Decrypts an incoming history row. Returns nil if it is not for us or
-    /// cannot be decrypted (wrong key / foreign envelope).
-    func decrypt(row: HistoryRow) -> String? {
+    /// cannot be decrypted (wrong key / foreign envelope / own outgoing echo —
+    /// outgoing ct is sealed to the PEER's key, we cannot open it, same as PWA
+    /// which reads own messages from its outbox).
+    func decryptMessage(row: HistoryRow) -> Decrypted? {
+        if row.kind == "receipt" || row.kind == "group_invite" || row.kind == "group_key" {
+            return Decrypted(body: "", attachments: [], isService: true)
+        }
         guard let ct = row.ct, let data = Data(base64Encoded: ct) else { return nil }
         guard let identity = try? IdentityStore.shared.requireIdentity() else { return nil }
         guard let pt = try? identity.eciesDecrypt(sealed: data) else { return nil }
-        // Body may be a JSON payload {body, reply_to, attachments} or raw text.
-        if let obj = try? JSONSerialization.jsonObject(with: pt) as? [String: Any],
-           let body = obj["body"] as? String {
-            return body
+        // PWA wire format: JSON {body, reply_to, attachments}; receipts carry
+        // _kind:"receipt" (or rt:1) and must be swallowed, not rendered
+        // (pwa/receipts.js isReceiptRow parity).
+        if let obj = try? JSONSerialization.jsonObject(with: pt) as? [String: Any] {
+            // Service envelopes (pwa/receipts.js parity):
+            //  - wire-level _kind:"receipt" is OUTSIDE ct (we see it in body_base64
+            //    JSON, carried on the row);
+            //  - inside ct: {v:1, _t:"receipt"|"receipt_req", msgs:[...], pad}
+            //  - group control: _kind:"group_invite"/"group_key".
+            let t = obj["_t"] as? String
+            if t == "receipt" || t == "receipt_req" {
+                return Decrypted(body: "", attachments: [], isService: true)
+            }
+            let body = obj["body"] as? String ?? ""
+            let atts = obj["attachments"] as? [[String: Any]] ?? []
+            return Decrypted(body: body, attachments: atts, isService: false)
         }
-        return String(data: pt, encoding: .utf8)
+        // Legacy raw text (older iOS builds).
+        return Decrypted(body: String(data: pt, encoding: .utf8) ?? "",
+                         attachments: [], isService: false)
+    }
+
+    /// Legacy string-shape decrypt (kept for tooling/tests).
+    func decrypt(row: HistoryRow) -> String? {
+        decryptMessage(row: row).map { $0.body }
     }
 
     // MARK: - WebSocket
@@ -175,6 +230,7 @@ final class RelayClient {
             hash: envelope["hash"] as? String ?? envelope["envelope_hash_hex"] as? String,
             bodyBase64: envelope["body_base64"] as? String
         )
+        row.kind = (envelope["_kind"] as? String) ?? row.kind
         row = row.withUnwrappedBody()
         if row.ct != nil {
             onEnvelope?(row)

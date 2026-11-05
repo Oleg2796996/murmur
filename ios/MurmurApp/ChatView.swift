@@ -100,11 +100,14 @@ struct ChatView: View {
         do {
             let rows = try await app.relay.history(peer: peer).map { $0.withUnwrappedBody() }
             for row in rows {
-                guard let body = app.relay.decrypt(row: row) else { continue }
+                // Skip undecryptable rows (own outgoing echo — sealed to the
+                // peer's key) and service envelopes (✓✓ receipts).
+                guard let dec = app.relay.decryptMessage(row: row),
+                      !dec.isService, !dec.body.isEmpty || !dec.attachments.isEmpty else { continue }
                 let direction: ChatMessage.Direction =
                     (row.from_npub == app.myNpub) ? .outgoing : .incoming
                 await MainActor.run {
-                    app.upsert(peer: peer, body: body, ts: row.ts ?? 0,
+                    app.upsert(peer: peer, body: dec.displayBody, ts: row.ts ?? 0,
                                direction: direction, hash: row.hash)
                 }
             }
