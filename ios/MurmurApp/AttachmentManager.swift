@@ -49,10 +49,13 @@ enum AttachmentManager {
         var ct = sealed.ciphertext
         ct.append(sealed.tag)
 
-        // 2. Double ECIES wrap {r, s} (pwa attachments.js eciesWrapKey parity)
+        // 2. Double ECIES wrap {r, s} (pwa attachments.js eciesWrapKey parity).
+        // PWA wraps the BASE64 STRING of the key (b64encode(key) -> encrypt),
+        // and eciesUnwrapKey b64decodes the result — raw 32B keys break PWA.
+        let keyB64 = keyBytes.base64EncodedString()
         let identity = try IdentityStore.shared.requireIdentity()
         let wrapOne: (String) throws -> String = { npub in
-            let sealed = try identity.eciesEncrypt(recipientNpub: npub, plaintext: keyBytes)
+            let sealed = try identity.eciesEncrypt(recipientNpub: npub, plaintext: Data(keyB64.utf8))
             return sealed.base64EncodedString()
         }
         let r = try wrapOne(peerNpub)
@@ -126,7 +129,12 @@ enum AttachmentManager {
         guard let sealed = Data(base64Encoded: pick) else {
             throw RelayError.make("bad wrapped_key")
         }
-        let keyBytes = try identity.eciesDecrypt(sealed: sealed)
+        var keyBytes = try identity.eciesDecrypt(sealed: sealed)
+        // PWA wrapOne encrypts the BASE64 STRING of the key (not raw bytes):
+        // eciesUnwrapKey ends with b64decode(unwrapped). Accept both shapes.
+        if keyBytes.count != 32, let decoded = Data(base64Encoded: keyBytes) {
+            keyBytes = decoded
+        }
         // WebCrypto AES-GCM layout: [ct][16-byte tag]; nonce comes from att.iv.
         guard data.count > 16 else { throw RelayError.make("blob too short") }
         let ct = data.prefix(data.count - 16)
