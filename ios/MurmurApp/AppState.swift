@@ -9,6 +9,8 @@ final class AppState: ObservableObject {
     @Published var errorText: String?
     /// Transient sidebar status (paste errors, import notes) — PWA `backup-status`.
     @Published var statusLine: String?
+    /// npub currently typing (ephemeral UI state, PWA parity).
+    @Published var typingPeers: Set<String> = []
 
     /// npub -> display name (PWA `murmur.contact_names` parity).
     @Published var contactNames: [String: String] = [:] {
@@ -32,11 +34,23 @@ final class AppState: ObservableObject {
         relay.onPushMetadata = { [weak self] row in
             Task { @MainActor in self?.handlePushMetadata(row) }
         }
+        relay.onTyping = { [weak self] from in
+            Task { @MainActor in self?.showTyping(from) }
+        }
     }
 
     /// WS push for possibly-UNKNOWN peer: create the chat first, then poll.
     /// (Bug 2026-11-05: pollAllPeers only polled existing chats, so the first
     /// message from a new peer never surfaced.)
+    func showTyping(_ from: String) {
+        guard !from.isEmpty, from != myNpub else { return }
+        typingPeers.insert(from)
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            await MainActor.run { self?.typingPeers.remove(from) }
+        }
+    }
+
     func handlePushMetadata(_ row: HistoryRow?) {
         var newPeer: String?
         if let from = row?.from_npub, from != myNpub,
@@ -92,6 +106,22 @@ final class AppState: ObservableObject {
         statusLine = nil
         registerAlias()
         connect()
+        Task { await loadContactList() }
+    }
+
+    /// Startup chat list: GET /api/contacts (peers in the relay TTL window).
+    func loadContactList() async {
+        do {
+            let contacts = try await relay.contacts()
+            for c in contacts where c.peer != myNpub {
+                if !chats.contains(where: { $0.peer == c.peer }) {
+                    upsert(peer: c.peer, body: "", ts: c.lastTs,
+                           direction: .incoming, hash: nil)
+                }
+            }
+        } catch {
+            NSLog("murmur contacts load failed: \(error)")
+        }
     }
 
     /// PWA parity: POST /api/register_alias on enter — the relay must know our

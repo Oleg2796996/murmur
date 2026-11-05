@@ -196,10 +196,14 @@ struct ChatListView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(app.displayName(for: chat.peer) ?? shortNpub(chat.peer))
                 .font(.headline)
-            Text(chat.lastBody.isEmpty ? "…" : chat.lastBody)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            if app.typingPeers.contains(chat.peer) {
+                Text("печатает…").font(.subheadline).foregroundStyle(.tertiary)
+            } else {
+                Text(chat.lastBody.isEmpty ? "…" : chat.lastBody)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
     }
 

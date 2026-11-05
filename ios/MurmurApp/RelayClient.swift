@@ -18,6 +18,8 @@ final class RelayClient {
     private var shouldReconnect = false
 
     var onEnvelope: ((HistoryRow) -> Void)?
+    /// "печатает…" — ephemeral, UI-only.
+    var onTyping: ((String) -> Void)?
     /// WS push arrived (metadata only) — app should poll /api/history.
     /// The row carries from_npub/ts/envelope_hash_hex so the app can create
     /// the chat for an unknown peer before polling.
@@ -53,10 +55,41 @@ final class RelayClient {
         req.cachePolicy = .reloadIgnoringLocalCacheData
         let (data, resp) = try await session.data(for: req)
         try Self.checkHTTP(resp, data)
+        // Decode OFF the main actor (poll bursts during typing starved the UI).
+        let rows = try await Task.detached {
+            try JSONDecoder().decode(HistoryResponse.self, from: data).messages
+        }.value
         // History rows carry the envelope under body_base64 (base64 of the
         // envelope JSON with ct inside) — unwrap so decrypt() sees ct.
-        return try JSONDecoder().decode(HistoryResponse.self, from: data)
-            .messages.map { $0.withUnwrappedBody() }
+        return rows.map { $0.withUnwrappedBody() }
+    }
+
+    /// GET /api/contacts — peers seen in the TTL window (startup chat list).
+    func contacts() async throws -> [(peer: String, lastTs: Int, preview: String)] {
+        let store = IdentityStore.shared
+        guard let npub = store.npub else { throw RelayError.make("no identity") }
+        let auth = try store.authQuery()
+        guard let url = URL(string: baseURL + "/api/contacts?npub=\(npub)&_t=\(Int(Date().timeIntervalSince1970 * 1000))" + auth) else {
+            throw RelayError.make("bad contacts url")
+        }
+        var req = URLRequest(url: url)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        let (data, resp) = try await session.data(for: req)
+        try Self.checkHTTP(resp, data)
+        struct ContactsResponse: Decodable {
+            struct Row: Decodable {
+                let peer: String
+                let last_ts: Int?
+                let last_message_preview: String?
+            }
+            let contacts: [Row]
+        }
+        let parsed = try await Task.detached {
+            try JSONDecoder().decode(ContactsResponse.self, from: data)
+        }.value
+        return parsed.contacts.map {
+            (peer: $0.peer, lastTs: $0.last_ts ?? 0, preview: $0.last_message_preview ?? "")
+        }
     }
 
     /// Builds and sends one encrypted envelope. Returns the relay-assigned hash.
@@ -245,6 +278,14 @@ final class RelayClient {
         // Relay wraps deliveries as {"type":"push","payload":{...}}; typing and
         // call signaling arrive bare (same as pwa/app.js onmessage).
         let envelope = (obj["payload"] as? [String: Any]) ?? obj
+        // Ephemeral events (typing, call signaling, control) are NOT message
+        // pushes — typing arrives bare {type:"typing", from_npub, ts(ms)} on
+        // every keystroke; treating it as a push hammered /api/history.
+        let type = (obj["type"] as? String) ?? (envelope["type"] as? String) ?? ""
+        if ["typing", "call_signal", "subscribed", "pong", "error"].contains(type) {
+            if type == "typing" { onTyping?(envelope["from_npub"] as? String ?? "") }
+            return
+        }
         guard let ts = envelope["ts"] as? Int else { return }
         // WS push is METADATA-ONLY (from_npub/ts/envelope_hash_hex, no ct —
         // same as the PWA sees). Two paths:
