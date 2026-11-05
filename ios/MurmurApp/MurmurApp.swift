@@ -14,7 +14,10 @@ struct MurmurApp: App {
                 }
             }
             .environmentObject(app)
-            .onAppear { app.connect() }
+            .onAppear {
+                app.connect()
+                app.refreshOnLaunch()
+            }
         }
     }
 }

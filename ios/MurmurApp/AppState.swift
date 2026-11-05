@@ -109,6 +109,15 @@ final class AppState: ObservableObject {
         Task { await loadContactList() }
     }
 
+    /// Cold-start refresh for a Keychain-restored identity: `didAuthenticate`
+    /// only fires after onboarding/backup import, so `loadContactList()` never
+    /// ran on a normal launch — the chat list stayed empty until the first
+    /// incoming WS push (bug 2026-11-05). PWA parity: contacts load on enter.
+    func refreshOnLaunch() {
+        guard authenticated else { return }
+        Task { await loadContactList() }
+    }
+
     /// Startup chat list: GET /api/contacts (peers in the relay TTL window).
     func loadContactList() async {
         do {
