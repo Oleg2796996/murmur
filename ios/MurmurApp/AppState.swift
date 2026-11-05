@@ -213,6 +213,9 @@ final class AppState: ObservableObject {
             }
             chats[i].messages.append(msg)
             chats[i].messages.removeDuplicates()
+            // Chronological thread: history arrives newest-first and optimistic
+            // sends append at the end — sort by ts so the feed reads bottom-up.
+            chats[i].messages.sort { $0.ts < $1.ts }
             chats.sort { $0.lastTs > $1.lastTs }
         } else {
             var summary = ChatSummary(peer: peer, lastBody: body, lastTs: ts)

@@ -1,4 +1,5 @@
 import SwiftUI
+import AVKit
 
 /// Renders one attachment chip: images inline (after decrypt), other files
 /// as a tappable chip that opens a share/preview sheet.
@@ -9,9 +10,11 @@ struct AttachmentChip: View {
     let outgoing: Bool
 
     @State private var image: UIImage?
+    @State private var player: AVPlayer?
     @State private var loading = false
     @State private var failed = false
     @State private var openURL: URL?
+    @State private var decryptAttempts = 0
 
     private var mime: String { att["mime"] as? String ?? "application/octet-stream" }
     private var isImage: Bool { mime.hasPrefix("image/") }
@@ -19,7 +22,12 @@ struct AttachmentChip: View {
 
     var body: some View {
         Group {
-            if let image {
+            if let player {
+                VideoPlayer(player: player)
+                    .frame(width: 220, height: 220)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .onDisappear { player.pause() }
+            } else if let image {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
@@ -73,10 +81,18 @@ struct AttachmentChip: View {
         loading = true; failed = false
         defer { loading = false }
         do {
-            let (plain, _) = try await AttachmentManager.downloadAndDecrypt(
+            let (plain, plainMime) = try await AttachmentManager.downloadAndDecrypt(
                 att: att, selfKey: outgoing)
-            if let img = UIImage(data: plain) {
+            let mime = plainMime.isEmpty ? mime : plainMime
+            if mime.hasPrefix("image/"), let img = UIImage(data: plain) {
                 image = img
+            } else if mime.hasPrefix("video/") {
+                let dir = FileManager.default.temporaryDirectory
+                let ext = mime == "video/quicktime" ? "mov" : (mime == "video/webm" ? "webm" : "mp4")
+                let url = dir.appendingPathComponent("\(att["blob_id"] as? String ?? "v").\(ext)")
+                try plain.write(to: url)
+                let p = AVPlayer(url: url)
+                await MainActor.run { player = p }
             } else {
                 failed = true
             }

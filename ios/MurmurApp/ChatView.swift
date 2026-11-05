@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 /// 1:1 chat. Sending path mirrors pwa/app.js sendMessage():
 /// encrypt in Rust -> sign `from|to|ts|ct` -> POST /envelope.
@@ -12,6 +13,10 @@ struct ChatView: View {
     @State private var showRename = false
     @State private var renameText = ""
     @State private var showFileImporter = false
+    @State private var showPhotoPicker = false
+    @State private var showCamera = false
+    @State private var cameraImage: UIImage?
+    @State private var pickedItem: PhotosPickerItem?
     @State private var attaching = false
 
     private var messages: [ChatMessage] {
@@ -118,16 +123,47 @@ struct ChatView: View {
 
     private var composer: some View {
         HStack(spacing: 8) {
-            Button {
-                showFileImporter = true
+            // Paperclip = attachment menu: фото из галереи / камера / файл.
+            Menu {
+                Button {
+                    showPhotoPicker = true
+                } label: {
+                    Label("Фото из галереи", systemImage: "photo.on.rectangle")
+                }
+                Button {
+                    showCamera = true
+                } label: {
+                    Label("Сделать фото", systemImage: "camera")
+                }
+                Button {
+                    showFileImporter = true
+                } label: {
+                    Label("Файл…", systemImage: "folder")
+                }
             } label: {
                 Image(systemName: attaching ? "hourglass" : "paperclip")
                     .font(.title3)
             }
             .disabled(sending || attaching)
+            .photosPicker(isPresented: $showPhotoPicker, selection: $pickedItem,
+                          matching: .images)
+            .fullScreenCover(isPresented: $showCamera) {
+                CameraPicker { image in cameraImage = image }
+                    .ignoresSafeArea()
+            }
             .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item],
                           allowsMultipleSelection: false) { result in
                 Task { await attachAndSend(result) }
+            }
+            .onChange(of: pickedItem) {
+                guard let item = pickedItem else { return }
+                pickedItem = nil
+                Task { await attachPicked(item) }
+            }
+            .onChange(of: cameraImage) {
+                guard let image = cameraImage else { return }
+                cameraImage = nil
+                Task { await attachCameraPhoto(image) }
             }
             TextField("Сообщение", text: $draft, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
@@ -142,6 +178,54 @@ struct ChatView: View {
         }
         .padding(12)
         .background(.bar)
+    }
+
+    /// Photo from gallery: PhotosPickerItem -> jpeg Data -> shared pipeline.
+    private func attachPicked(_ item: PhotosPickerItem) async {
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else { return }
+            await sendAttachment(data: data,
+                                 fileName: "photo-\(Int(Date().timeIntervalSince1970)).jpg",
+                                 mime: "image/jpeg")
+        } catch {
+            await MainActor.run { errorText = error.localizedDescription }
+        }
+    }
+
+    /// Camera shot: UIImage -> jpeg Data -> shared pipeline.
+    private func attachCameraPhoto(_ image: UIImage) async {
+        guard let data = image.jpegData(compressionQuality: 0.85) else { return }
+        await sendAttachment(data: data,
+                             fileName: "camera-\(Int(Date().timeIntervalSince1970)).jpg",
+                             mime: "image/jpeg")
+    }
+
+    /// Shared attachment send path (used by all three pickers).
+    private func sendAttachment(data: Data, fileName: String, mime: String) async {
+        await MainActor.run { attaching = true; errorText = nil }
+        defer { Task { @MainActor in attaching = false } }
+        do {
+            let prepared = try await AttachmentManager.encryptAndUpload(
+                fileData: data, fileName: fileName, mime: mime,
+                peerNpub: peer, selfNpub: app.myNpub)
+            let hash = try await app.relay.sendWithAttachments(
+                peer: peer, plaintext: draft, prepared: [prepared])
+            let body = draft.isEmpty ? "📎 \(fileName)" : draft + "\n📎 " + fileName
+            let ts = Int(Date().timeIntervalSince1970)
+            var chip: [String: Any] = [
+                "blob_id": prepared.blobID, "wrapped_key": prepared.wrappedKey,
+                "iv": prepared.ivB64, "mime": prepared.mime, "size": prepared.size,
+                "name": prepared.fileName,
+            ]
+            if let t = prepared.blobToken { chip["blob_token"] = t }
+            await MainActor.run {
+                app.upsert(peer: peer, body: body, ts: ts, direction: .outgoing,
+                           hash: hash, attachments: [chip])
+                draft = ""
+            }
+        } catch {
+            await MainActor.run { errorText = error.localizedDescription }
+        }
     }
 
     /// pwa attachEncryptAndUpload parity: encrypt+wrap+upload, then envelope
