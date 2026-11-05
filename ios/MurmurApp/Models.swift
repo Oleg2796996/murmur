@@ -46,13 +46,24 @@ struct ChatMessage: Identifiable, Equatable {
 /// Wire envelope exactly as the relay expects it (`POST /envelope?to=<npub>`).
 /// Field set and signature scheme match pwa/app.js; the relay verifies the
 /// signature over `from|to|ts|ct` so it can never tamper with `ct`.
-struct WireEnvelope: Codable {
+struct WireEnvelope {
     let from: String
     let to: String
     let ct: String            // base64 ECIES sealed envelope
     let ts: Int
     var sig: String           // lowercase hex ed25519
     var signed_payload: String // base64 of the signed bytes (PWA sends this too)
+    /// Neutral blob chips (f-…bin) visible to the relay — real names ride inside ct.
+    var attachments_meta: [[String: Any]]?
+
+    func jsonData() throws -> Data {
+        var obj: [String: Any] = [
+            "from": from, "to": to, "ct": ct, "ts": ts,
+            "sig": sig, "signed_payload": signed_payload,
+        ]
+        if let attachments_meta { obj["attachments_meta"] = attachments_meta }
+        return try JSONSerialization.data(withJSONObject: obj)
+    }
 }
 
 /// Response of `POST /envelope`.

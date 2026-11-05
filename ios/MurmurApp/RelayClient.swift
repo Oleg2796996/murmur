@@ -113,15 +113,15 @@ final class RelayClient {
         let payloadBytes = Data(signedPayload.utf8)
         let sig = try store.signEnvelope(payload: payloadBytes)
 
-        var env = WireEnvelope(
+        let env = WireEnvelope(
             from: npub,
             to: peer,
             ct: ct,
             ts: ts,
             sig: sig,
-            signed_payload: payloadBytes.base64EncodedString()
+            signed_payload: payloadBytes.base64EncodedString(),
+            attachments_meta: serverMeta.isEmpty ? nil : serverMeta
         )
-        env.sig = sig
 
         var comps = URLComponents(string: baseURL + "/envelope")!
         comps.queryItems = [.init(name: "to", value: peer)]
