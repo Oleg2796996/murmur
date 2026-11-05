@@ -1,5 +1,7 @@
 import Foundation
-import MurmurKit  // generated uniffi bindings
+// NOTE: no `import MurmurKit` — the generated uniffi bindings
+// (MurmurKit/Generated/murmur_uniffi.swift) are compiled directly into the
+// MurmurApp target via project.yml, so all Murmur* types are in the app module.
 
 /// Wraps the Rust identity so the secret key never lives in Swift memory
 /// (spec section 2). All crypto is delegated to `murmur-uniffi`, which is the
