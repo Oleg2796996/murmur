@@ -18,6 +18,7 @@ struct AttachmentChip: View {
 
     private var mime: String { att["mime"] as? String ?? "application/octet-stream" }
     private var isImage: Bool { mime.hasPrefix("image/") }
+    private var isVideo: Bool { mime.hasPrefix("video/") }
     private var name: String { att["name"] as? String ?? "file" }
 
     var body: some View {
@@ -50,9 +51,19 @@ struct AttachmentChip: View {
                 } label: {
                     chipLabel
                 }
+            } else if isVideo, let player {
+                VideoPlayer(player: player)
+                    .frame(width: 220, height: 220)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .onDisappear { player.pause() }
             } else {
                 Button {
-                    openURL = URL(string: "murmur-attach://open")
+                    if isVideo {
+                        // Inline playback: decrypt to temp + AVPlayer in place.
+                        Task { await load() }
+                    } else {
+                        openURL = URL(string: "murmur-attach://open")
+                    }
                 } label: {
                     chipLabel
                 }
@@ -61,7 +72,7 @@ struct AttachmentChip: View {
                 }
             }
         }
-        .task { if isImage { await load() } }
+        .task { if isImage || mime.hasPrefix("video/") { await load() } }
     }
 
     /// Tappable file chip: icon + name. Images that failed to decode and all
@@ -92,7 +103,10 @@ struct AttachmentChip: View {
                 let url = dir.appendingPathComponent("\(att["blob_id"] as? String ?? "v").\(ext)")
                 try plain.write(to: url)
                 let p = AVPlayer(url: url)
-                await MainActor.run { player = p }
+                await MainActor.run {
+                    player = p
+                    p.play()   // autoplay inline, like the PWA <video> chip
+                }
             } else {
                 failed = true
             }
