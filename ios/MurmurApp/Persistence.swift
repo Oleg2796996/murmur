@@ -82,7 +82,7 @@ enum Persistence {
             // Keep the thread chronological after restore.
             summary.messages.sort { $0.ts < $1.ts }
             // Drop legacy empty "…" pills (pre-guard rows: no text, no attachments).
-            summary.messages.removeAll { $0.body.isEmpty && $0.attachments.isEmpty && $0.direction == "incoming" }
+            summary.messages.removeAll { $0.body.isEmpty && $0.attachments.isEmpty && $0.direction == .incoming }
             if summary.messages.isEmpty { return nil }
             return summary
         }
