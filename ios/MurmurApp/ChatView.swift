@@ -11,6 +11,8 @@ struct ChatView: View {
     @State private var errorText: String?
     @State private var showRename = false
     @State private var renameText = ""
+    @State private var showFileImporter = false
+    @State private var attaching = false
 
     private var messages: [ChatMessage] {
         app.chats.first(where: { $0.peer == peer })?.messages ?? []
@@ -67,20 +69,46 @@ struct ChatView: View {
     }
 
     private func bubble(_ m: ChatMessage) -> some View {
-        HStack {
+        HStack(alignment: .bottom, spacing: 6) {
             if m.direction == .outgoing { Spacer(minLength: 40) }
-            Text(m.body.isEmpty ? "…" : m.body)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(m.direction == .outgoing ? Color.accentColor : Color(.secondarySystemBackground))
-                .foregroundStyle(m.direction == .outgoing ? Color.white : Color.primary)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            VStack(alignment: m.direction == .outgoing ? .trailing : .leading, spacing: 2) {
+                Text(m.body.isEmpty ? "…" : m.body)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(m.direction == .outgoing ? Color.accentColor : Color(.secondarySystemBackground))
+                    .foregroundStyle(m.direction == .outgoing ? Color.white : Color.primary)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                Text(Self.timeString(m.ts))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             if m.direction == .incoming { Spacer(minLength: 40) }
         }
     }
 
+    static func timeString(_ ts: Int) -> String {
+        let f = DateFormatter()
+        f.dateFormat = (ts > 100_000_000_000) ? "HH:mm:ss" : "HH:mm"
+        f.timeZone = .current
+        // ts is unix SECONDS (relay stores seconds); if a value looks like ms, treat as ms
+        let date = ts > 100_000_000_000 ? Date(timeIntervalSince1970: Double(ts) / 1000)
+                                        : Date(timeIntervalSince1970: Double(ts))
+        return f.string(from: date)
+    }
+
     private var composer: some View {
         HStack(spacing: 8) {
+            Button {
+                showFileImporter = true
+            } label: {
+                Image(systemName: attaching ? "hourglass" : "paperclip")
+                    .font(.title3)
+            }
+            .disabled(sending || attaching)
+            .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item],
+                          allowsMultipleSelection: false) { result in
+                Task { await attachAndSend(result) }
+            }
             TextField("Сообщение", text: $draft, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...5)
@@ -90,10 +118,57 @@ struct ChatView: View {
                 Image(systemName: sending ? "clock" : "arrow.up.circle.fill")
                     .font(.title2)
             }
-            .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(sending || attaching || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(12)
         .background(.bar)
+    }
+
+    /// pwa attachEncryptAndUpload parity: encrypt+wrap+upload, then envelope
+    /// with attachments_meta (neutral names server-side, real names in ct).
+    private func attachAndSend(_ result: Result<[URL], Error>) async {
+        await MainActor.run { attaching = true; errorText = nil }
+        defer { Task { @MainActor in attaching = false } }
+        do {
+            guard let url = try result.get().first else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let data = try Data(contentsOf: url)
+            let name = url.lastPathComponent
+            let mime = Self.guessMime(name)
+            let prepared = try await AttachmentManager.encryptAndUpload(
+                fileData: data, fileName: name, mime: mime,
+                peerNpub: peer, selfNpub: app.myNpub)
+            let hash = try await app.relay.sendWithAttachments(
+                peer: peer, plaintext: draft, prepared: [prepared])
+            let body = draft.isEmpty ? "📎 \(name)" : draft + "\n📎 " + name
+            let ts = Int(Date().timeIntervalSince1970)
+            await MainActor.run {
+                app.upsert(peer: peer, body: body, ts: ts, direction: .outgoing, hash: hash)
+                draft = ""
+            }
+        } catch {
+            await MainActor.run { errorText = error.localizedDescription }
+        }
+    }
+
+    static func guessMime(_ name: String) -> String {
+        let ext = (name as NSString).pathExtension.lowercased()
+        switch ext {
+        case "jpg", "jpeg": return "image/jpeg"
+        case "png": return "image/png"
+        case "webp": return "image/webp"
+        case "gif": return "image/gif"
+        case "mp3": return "audio/mpeg"
+        case "ogg": return "audio/ogg"
+        case "wav": return "audio/wav"
+        case "mp4": return "video/mp4"
+        case "mov": return "video/quicktime"
+        case "webm": return "video/webm"
+        case "pdf": return "application/pdf"
+        case "txt": return "text/plain"
+        default: return "application/octet-stream"
+        }
     }
 
     private func loadHistory() async {

@@ -75,10 +75,10 @@ final class AppState: ObservableObject {
         do {
             let rows = try await relay.history(peer: peer)
             for row in rows {
-                guard let body = relay.decrypt(row: row) else { continue }
+                guard let dec = relay.decryptMessage(row: row), !dec.isService else { continue }
                 let direction: ChatMessage.Direction =
                     (row.from_npub == myNpub || row.from_npub == nil) ? .outgoing : .incoming
-                upsert(peer: peer, body: body, ts: row.ts ?? 0,
+                upsert(peer: peer, body: dec.displayBody, ts: row.ts ?? 0,
                        direction: direction, hash: row.hash)
             }
         } catch {
@@ -130,7 +130,8 @@ final class AppState: ObservableObject {
     private func handleIncoming(_ row: HistoryRow) {
         guard let peer = peerOf(row) else { return }
         // Service envelopes (✓✓ receipts) are swallowed, not rendered.
-        guard let dec = relay.decryptMessage(row: row), !dec.isService else { return }
+        guard let dec = relay.decryptMessage(row: row), !dec.isService,
+              !dec.body.isEmpty || !dec.attachments.isEmpty else { return }
         let ts = row.ts ?? Int(Date().timeIntervalSince1970)
         upsert(peer: peer, body: dec.displayBody, ts: ts, direction: .incoming, hash: row.hash)
     }

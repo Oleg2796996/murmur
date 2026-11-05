@@ -61,6 +61,37 @@ final class RelayClient {
 
     /// Builds and sends one encrypted envelope. Returns the relay-assigned hash.
     func send(peer: String, plaintext: String) async throws -> String? {
+        try await sendEnvelope(peer: peer, plainObj: [
+            "body": plaintext, "attachments": [Any](), "reply_to": NSNull(),
+        ], serverMeta: [])
+    }
+
+    /// Send with attachments: plainObj.attachments carry REAL names (inside ct),
+    /// serverMeta carries neutral f-…bin (server-visible) — pwa app.js parity.
+    func sendWithAttachments(peer: String, plaintext: String,
+                             prepared: [AttachmentManager.Prepared]) async throws -> String? {
+        let attachments: [[String: Any]] = prepared.map { p in
+            var a: [String: Any] = [
+                "name": p.fileName, "mime": p.mime, "size": p.size,
+            ]
+            return a
+        }
+        let serverMeta: [[String: Any]] = prepared.map { p in
+            var m: [String: Any] = [
+                "blob_id": p.blobID, "sha256": p.sha256,
+                "wrapped_key": p.wrappedKey, "iv": p.ivB64,
+                "mime": p.mime, "size": p.size, "name": p.publicName,
+            ]
+            if let t = p.blobToken { m["blob_token"] = t }
+            return m
+        }
+        return try await sendEnvelope(peer: peer, plainObj: [
+            "body": plaintext, "attachments": attachments, "reply_to": NSNull(),
+        ], serverMeta: serverMeta)
+    }
+
+    private func sendEnvelope(peer: String, plainObj: [String: Any],
+                              serverMeta: [[String: Any]]) async throws -> String? {
         let store = IdentityStore.shared
         let identity = try store.requireIdentity()
         guard let npub = store.npub else { throw RelayError.make("no identity") }
@@ -69,8 +100,7 @@ final class RelayClient {
         // Wire format parity: the PWA encrypts JSON {body, reply_to, attachments}
         // and JSON.parses after decrypt — raw text breaks the peer's client
         // ("не удалось расшифровать"). Always send the JSON shape.
-        let wire: [String: Any] = ["body": plaintext, "attachments": [], "reply_to": NSNull()]
-        let plainBytes = try JSONSerialization.data(withJSONObject: wire)
+        let plainBytes = try JSONSerialization.data(withJSONObject: plainObj)
         let sealed = try identity.eciesEncrypt(
             recipientNpub: peer,
             plaintext: plainBytes
@@ -98,7 +128,7 @@ final class RelayClient {
         var req = URLRequest(url: comps.url!)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONEncoder().encode(env)
+        req.httpBody = try env.jsonData()
 
         let (data, resp) = try await session.data(for: req)
         try Self.checkHTTP(resp, data)
