@@ -50,12 +50,14 @@ enum AttachmentManager {
         ct.append(sealed.tag)
 
         // 2. Double ECIES wrap {r, s} (pwa attachments.js eciesWrapKey parity).
-        // PWA wraps the BASE64 STRING of the key (b64encode(key) -> encrypt),
-        // and eciesUnwrapKey b64decodes the result — raw 32B keys break PWA.
+        // PWA: encryptForRecipient(JSON.stringify(b64(key))) — the sealed
+        // plaintext is the QUOTED b64 string; decryptEnvelope JSON.parses.
+        // Wrap the quoted form so PWA can open iOS photos.
         let keyB64 = keyBytes.base64EncodedString()
+        let quotedKey = "\"\(keyB64)\""
         let identity = try IdentityStore.shared.requireIdentity()
         let wrapOne: (String) throws -> String = { npub in
-            let sealed = try identity.eciesEncrypt(recipientNpub: npub, plaintext: Data(keyB64.utf8))
+            let sealed = try identity.eciesEncrypt(recipientNpub: npub, plaintext: Data(quotedKey.utf8))
             return sealed.base64EncodedString()
         }
         let r = try wrapOne(peerNpub)
@@ -130,10 +132,18 @@ enum AttachmentManager {
             throw RelayError.make("bad wrapped_key")
         }
         var keyBytes = try identity.eciesDecrypt(sealed: sealed)
-        // PWA wrapOne encrypts the BASE64 STRING of the key (not raw bytes):
-        // eciesUnwrapKey ends with b64decode(unwrapped). Accept both shapes.
-        if keyBytes.count != 32, let decoded = Data(base64Encoded: keyBytes) {
-            keyBytes = decoded
+        // PWA chain: encryptForRecipient JSON.stringifies the plaintext, so the
+        // sealed payload is "\"<b64-of-key>\"" (46B = 2 quotes + 44 b64 chars —
+        // verified against a live prod envelope); decryptEnvelope JSON.parses
+        // it back, then eciesUnwrapKey b64decodes. Strip quotes, then decode.
+        if keyBytes.count != 32 {
+            var s = String(data: keyBytes, encoding: .utf8) ?? ""
+            if s.hasPrefix("\""), s.hasSuffix("\""), s.count >= 2 {
+                s = String(s.dropFirst().dropLast())
+            }
+            if let decoded = Data(base64Encoded: s) {
+                keyBytes = decoded
+            }
         }
         // WebCrypto AES-GCM layout: [ct][16-byte tag]; nonce comes from att.iv.
         guard data.count > 16 else { throw RelayError.make("blob too short") }
