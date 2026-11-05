@@ -138,7 +138,7 @@ final class RelayClient {
     /// Decrypted payload of an incoming row.
     struct Decrypted {
         var body: String
-        /// Attachment chips from the PWA ({name, mime, size, ...} inside ct).
+        /// Merged attachment chips (server refs + envelope meta, with blob_token).
         var attachments: [[String: Any]]
         /// True for service envelopes (✓✓ receipts, group control) — never rendered.
         var isService: Bool
@@ -187,7 +187,10 @@ final class RelayClient {
             }
             let body = obj["body"] as? String ?? ""
             let atts = obj["attachments"] as? [[String: Any]] ?? []
-            return Decrypted(body: body, attachments: atts, isService: false)
+            // Real chips = server attachment_refs merged with envelope meta
+            // (blob_token only exists in the envelope copy).
+            let merged = !atts.isEmpty ? atts : row.mergedAttachments()
+            return Decrypted(body: body, attachments: merged, isService: false)
         }
         // Legacy raw text (older iOS builds).
         return Decrypted(body: String(data: pt, encoding: .utf8) ?? "",

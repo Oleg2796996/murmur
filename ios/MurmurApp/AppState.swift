@@ -79,7 +79,7 @@ final class AppState: ObservableObject {
                 let direction: ChatMessage.Direction =
                     (row.from_npub == myNpub || row.from_npub == nil) ? .outgoing : .incoming
                 upsert(peer: peer, body: dec.displayBody, ts: row.ts ?? 0,
-                       direction: direction, hash: row.hash)
+                       direction: direction, hash: row.hash, attachments: dec.attachments)
             }
         } catch {
             NSLog("murmur pollHistory failed: \(error)")
@@ -133,7 +133,8 @@ final class AppState: ObservableObject {
         guard let dec = relay.decryptMessage(row: row), !dec.isService,
               !dec.body.isEmpty || !dec.attachments.isEmpty else { return }
         let ts = row.ts ?? Int(Date().timeIntervalSince1970)
-        upsert(peer: peer, body: dec.displayBody, ts: ts, direction: .incoming, hash: row.hash)
+        upsert(peer: peer, body: dec.displayBody, ts: ts, direction: .incoming,
+               hash: row.hash, attachments: dec.attachments)
     }
 
     private func peerOf(_ row: HistoryRow) -> String? {
@@ -145,21 +146,20 @@ final class AppState: ObservableObject {
         return nil
     }
 
-    func upsert(peer: String, body: String, ts: Int, direction: ChatMessage.Direction, hash: String?) {
+    func upsert(peer: String, body: String, ts: Int, direction: ChatMessage.Direction,
+                hash: String?, attachments: [[String: Any]] = []) {
+        let msg = ChatMessage(id: hash ?? "\(peer)-\(ts)", peer: peer, body: body,
+                              ts: ts, direction: direction, status: .sent,
+                              hash: hash, attachments: attachments)
         if let i = chats.firstIndex(where: { $0.peer == peer }) {
             chats[i].lastBody = body
             chats[i].lastTs = ts
-            chats[i].messages.append(
-                ChatMessage(id: hash ?? "\(peer)-\(ts)", peer: peer, body: body,
-                            ts: ts, direction: direction, status: .sent, hash: hash)
-            )
+            chats[i].messages.append(msg)
             chats[i].messages.removeDuplicates()
             chats.sort { $0.lastTs > $1.lastTs }
         } else {
             var summary = ChatSummary(peer: peer, lastBody: body, lastTs: ts)
-            summary.messages = [ChatMessage(id: hash ?? "\(peer)-\(ts)", peer: peer,
-                                            body: body, ts: ts, direction: direction,
-                                            status: .sent, hash: hash)]
+            summary.messages = [msg]
             chats.append(summary)
             chats.sort { $0.lastTs > $1.lastTs }
         }

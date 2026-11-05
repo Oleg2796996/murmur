@@ -30,6 +30,9 @@ struct RelayError: LocalizedError {
 
 /// One message in a 1:1 chat, as stored locally.
 struct ChatMessage: Identifiable, Equatable {
+    static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
+        lhs.id == rhs.id && lhs.body == rhs.body && lhs.status == rhs.status
+    }
     enum Direction: String { case incoming, outgoing }
     enum Status: String { case sending, sent, failed }
 
@@ -41,6 +44,13 @@ struct ChatMessage: Identifiable, Equatable {
     var status: Status
     /// Server-assigned envelope hash, used for dedup against the echo.
     var hash: String?
+    /// Merged attachment chips for rendering (server refs + envelope meta).
+    var attachments: [[String: Any]] = []
+}
+
+/// Hashable key for ForEach over attachment dicts.
+extension Dictionary where Key == String, Value == Any {
+    var blobID: String { self["blob_id"] as? String ?? UUID().uuidString }
 }
 
 /// Wire envelope exactly as the relay expects it (`POST /envelope?to=<npub>`).
@@ -90,6 +100,29 @@ struct HistoryRow {
     var bodyBase64: String?
     /// Wire-level marker from the envelope JSON ({"_kind":"receipt",...}).
     var kind: String?
+    /// Server-side attachment chips (attachment_refs: blob_id, wrapped_key, iv,
+    /// name=f-…bin, mime, size) — NO blob_token here.
+    var attachments: [[String: Any]] = []
+    /// attachments_meta from the inner wire envelope (body_base64) — carries
+    /// blob_token; merged over `attachments` field-by-field.
+    var metaFromEnvelope: [[String: Any]] = []
+
+    /// Server meta + envelope meta merged by index (blob_token wins).
+    func mergedAttachments() -> [[String: Any]] {
+        let n = max(attachments.count, metaFromEnvelope.count)
+        guard n > 0 else { return [] }
+        var out: [[String: Any]] = []
+        for i in 0..<n {
+            var m = i < attachments.count ? attachments[i] : [:]
+            if i < metaFromEnvelope.count {
+                for (k, v) in metaFromEnvelope[i] where v != nil && !(v is NSNull) {
+                    m[k] = v
+                }
+            }
+            out.append(m)
+        }
+        return out
+    }
 
     /// Unwraps body_base64 -> inner envelope ct (pwa decryptEnvelopeForRender
     /// branch 2). Returns self with ct filled in.
@@ -100,6 +133,9 @@ struct HistoryRow {
         var copy = self
         copy.kind = obj["_kind"] as? String
         copy.ct = obj["ct"] as? String
+        if let meta = obj["attachments_meta"] as? [[String: Any]] {
+            copy.metaFromEnvelope = meta
+        }
         return copy
     }
 }
@@ -109,7 +145,7 @@ extension HistoryRow: Decodable {
     private enum Keys: String, CodingKey {
         case from_npub, from, to, to_alias, ct
         case ts, sig, hash, envelope_hash, envelope_hash_hex
-        case body_base64, ws_envelope_b64, _kind
+        case body_base64, ws_envelope_b64, _kind, attachments
     }
 
     init(from decoder: Decoder) throws {
@@ -127,5 +163,8 @@ extension HistoryRow: Decodable {
             bodyBase64: try c.decodeIfPresent(String.self, forKey: .body_base64),
             kind: try c.decodeIfPresent(String.self, forKey: ._kind)
         )
+        if let atts = try? c.decodeIfPresent([[String: Any]].self, forKey: .attachments) {
+            self.attachments = atts
+        }
     }
 }

@@ -72,12 +72,32 @@ struct ChatView: View {
         HStack(alignment: .bottom, spacing: 6) {
             if m.direction == .outgoing { Spacer(minLength: 40) }
             VStack(alignment: m.direction == .outgoing ? .trailing : .leading, spacing: 2) {
-                Text(m.body.isEmpty ? "…" : m.body)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(m.direction == .outgoing ? Color.accentColor : Color(.secondarySystemBackground))
-                    .foregroundStyle(m.direction == .outgoing ? Color.white : Color.primary)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                if m.body.isEmpty && !m.attachments.isEmpty {
+                    // attachment-only message: chips outside the colored bubble
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(m.attachments, id: \.blobID) { att in
+                            AttachmentChip(att: att, outgoing: m.direction == .outgoing)
+                        }
+                    }
+                } else {
+                    let cleanBody = m.attachments.isEmpty ? m.body
+                        : m.body.components(separatedBy: "\n")
+                            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("📎") }
+                            .joined(separator: "\n")
+                    Text(cleanBody.isEmpty ? "…" : cleanBody)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(m.direction == .outgoing ? Color.accentColor : Color(.secondarySystemBackground))
+                        .foregroundStyle(m.direction == .outgoing ? Color.white : Color.primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    if !m.attachments.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(m.attachments, id: \.blobID) { att in
+                                AttachmentChip(att: att, outgoing: m.direction == .outgoing)
+                            }
+                        }
+                    }
+                }
                 Text(Self.timeString(m.ts))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -143,8 +163,18 @@ struct ChatView: View {
                 peer: peer, plaintext: draft, prepared: [prepared])
             let body = draft.isEmpty ? "📎 \(name)" : draft + "\n📎 " + name
             let ts = Int(Date().timeIntervalSince1970)
+            let chips = prepared.map { p -> [String: Any] in
+                var m: [String: Any] = [
+                    "blob_id": p.blobID, "wrapped_key": p.wrappedKey,
+                    "iv": p.ivB64, "mime": p.mime, "size": p.size,
+                    "name": p.fileName,
+                ]
+                if let t = p.blobToken { m["blob_token"] = t }
+                return m
+            }
             await MainActor.run {
-                app.upsert(peer: peer, body: body, ts: ts, direction: .outgoing, hash: hash)
+                app.upsert(peer: peer, body: body, ts: ts, direction: .outgoing,
+                           hash: hash, attachments: chips)
                 draft = ""
             }
         } catch {
@@ -183,7 +213,8 @@ struct ChatView: View {
                     (row.from_npub == app.myNpub) ? .outgoing : .incoming
                 await MainActor.run {
                     app.upsert(peer: peer, body: dec.displayBody, ts: row.ts ?? 0,
-                               direction: direction, hash: row.hash)
+                               direction: direction, hash: row.hash,
+                               attachments: dec.attachments)
                 }
             }
         } catch {
