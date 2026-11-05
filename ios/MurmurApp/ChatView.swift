@@ -56,6 +56,9 @@ struct ChatView: View {
         }
         .navigationTitle(app.displayName(for: peer) ?? shortNpub(peer))
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(MurmurTheme.panel, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -151,6 +154,7 @@ struct ChatView: View {
             } label: {
                 Image(systemName: attaching ? "hourglass" : "paperclip")
                     .font(.title3)
+                    .foregroundStyle(MurmurTheme.textMuted)
             }
             .disabled(sending || attaching)
             .photosPicker(isPresented: $showPhotoPicker, selection: $pickedItem,
@@ -174,8 +178,13 @@ struct ChatView: View {
                 Task { await attachCameraPhoto(image) }
             }
             TextField("Сообщение", text: $draft, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
                 .lineLimit(1...5)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(MurmurTheme.bubbleIn)
+                .foregroundStyle(MurmurTheme.text)
+                .tint(MurmurTheme.accent)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             Button {
                 Task { await send() }
             } label: {
@@ -184,8 +193,9 @@ struct ChatView: View {
             }
             .disabled(sending || attaching || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .padding(12)
-        .background(.bar)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(MurmurTheme.panel)
     }
 
     /// Photo from gallery: PhotosPickerItem -> jpeg Data -> shared pipeline.

@@ -81,8 +81,37 @@ struct ChatListView: View {
             }
             .background(MurmurTheme.bg)
             .searchable(text: $searchText, prompt: "поиск чатов…")
-            .navigationTitle("MurMur")
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .navigationBarTitleDisplayMode(.minimized)
+            .toolbarBackground(MurmurTheme.panel, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            showInvite = true
+                        } label: { Label("Пригласить друга", systemImage: "envelope") }
+                        Button {
+                            pasteInvite()
+                        } label: { Label("Вставить ссылку", systemImage: "doc.on.clipboard") }
+                        Button {
+                            showBackupExport = true
+                        } label: { Label("Скачать backup", systemImage: "square.and.arrow.down") }
+                        Button {
+                            showBackupImporter = true
+                        } label: { Label("Восстановить backup", systemImage: "square.and.arrow.up.on.square") }
+                        Button {
+                            showKeyReveal = true
+                        } label: { Label("Мой ключ", systemImage: "key") }
+                        Divider()
+                        Button(role: .destructive) {
+                            showWipeConfirm = true
+                        } label: { Label("Удалить все данные", systemImage: "trash") }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.title3)
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showNewChat = true
@@ -112,91 +141,10 @@ struct ChatListView: View {
             } message: {
                 Text("Скопируйте ссылку из приложения СОБЕСЕДНИКА («Пригласить друга» у него), либо попросите его прислать вам его ссылку.")
             }
-            .safeAreaInset(edge: .bottom) {
-                sidebarFooter
-            }
         }
     }
 
     // MARK: - Sidebar footer (PWA parity)
-
-    private var sidebarFooter: some View {
-        VStack(spacing: 8) {
-            if let status = app.statusLine {
-                Text(status).font(.caption2).foregroundStyle(MurmurTheme.textMuted)
-            }
-            VStack(spacing: 8) {
-                HStack(spacing: 8) {
-                    Button {
-                        showInvite = true
-                    } label: {
-                        Text("Пригласить друга ✉")
-                            .font(.system(size: 14, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(MurmurTheme.green)
-                            .foregroundStyle(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    .buttonStyle(.plain)
-                    Button {
-                        pasteInvite()
-                    } label: {
-                        Text("Вставить ссылку 📋")
-                            .font(.system(size: 14, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(MurmurTheme.gold)
-                            .foregroundStyle(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    .buttonStyle(.plain)
-                }
-                HStack(spacing: 8) {
-                    actionTile("Скачать backup") { showBackupExport = true }
-                    actionTile("Восстановить backup") { showBackupImporter = true }
-                }
-                Button {
-                    showWipeConfirm = true
-                } label: {
-                    Text("Удалить все данные")
-                        .font(.system(size: 14))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(MurmurTheme.panel)
-                        .foregroundStyle(MurmurTheme.danger)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(MurmurTheme.danger, lineWidth: 1)
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .buttonStyle(.plain)
-            }
-            Text(shortNpub(app.myNpub))
-                .font(.caption2.monospaced())
-                .foregroundStyle(MurmurTheme.textMuted)
-        }
-        .padding(12)
-        .background(MurmurTheme.panel)
-    }
-
-    private func actionTile(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 14, weight: .medium))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(MurmurTheme.bubbleOut)   // #2b5278 tile
-                .foregroundStyle(Color(red: 0xed/255, green: 0xf6/255, blue: 0xff/255))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color(red: 0x7d/255, green: 0xbe/255, blue: 0xeb/255).opacity(0.4), lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-        }
-        .buttonStyle(.plain)
-    }
 
     // MARK: - Paste invite (PWA btn-add-by-link parity)
 
