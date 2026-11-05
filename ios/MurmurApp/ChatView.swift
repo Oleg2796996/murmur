@@ -89,12 +89,17 @@ struct ChatView: View {
                         : m.body.components(separatedBy: "\n")
                             .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("📎") }
                             .joined(separator: "\n")
-                    Text(cleanBody.isEmpty ? "…" : cleanBody)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(m.direction == .outgoing ? Color.accentColor : Color(.secondarySystemBackground))
-                        .foregroundStyle(m.direction == .outgoing ? Color.white : Color.primary)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    // Attachment-carrying message with caption-less body renders
+                    // ONLY chips — an empty "…" bubble above them is noise
+                    // (screenshot 21:42: blue "…" pill over photo chip).
+                    if !cleanBody.isEmpty {
+                        Text(cleanBody)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(m.direction == .outgoing ? Color.accentColor : Color(.secondarySystemBackground))
+                            .foregroundStyle(m.direction == .outgoing ? Color.white : Color.primary)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
                     if !m.attachments.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(m.attachments, id: \.blobID) { att in

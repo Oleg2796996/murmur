@@ -93,6 +93,10 @@ enum AttachmentManager {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let blobID = obj["blob_id"] as? String else { throw AttachmentError.badResponse }
 
+        // Outgoing self-cache: after the peer receipts, the blob is gone from
+        // the relay — only this cache can re-render our own photo/video.
+        cachePut(blobID, fileData, mime: mime)
+
         return Prepared(
             blobID: blobID,
             sha256: (obj["sha256"] as? String) ?? ctSHA,
@@ -106,9 +110,36 @@ enum AttachmentManager {
         )
     }
 
+    // MARK: - Local plaintext cache (PWA blob-cache/OPFS parity).
+    // The relay deletes a blob right after the peer's receipt, so an outgoing
+    // photo can only re-render after restart from the device cache.
+
+    static func cacheURL(_ blobID: String) -> URL {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("murmur-attach", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent(blobID)
+    }
+
+    static func cachePut(_ blobID: String, _ data: Data, mime: String) {
+        try? data.write(to: cacheURL(blobID), options: .atomic)
+        UserDefaults.standard.set(mime, forKey: "murmur-att-mime-" + blobID)
+    }
+
+    static func cacheGet(_ blobID: String) -> (Data, String)? {
+        let url = cacheURL(blobID)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let mime = UserDefaults.standard.string(forKey: "murmur-att-mime-" + blobID) ?? "application/octet-stream"
+        return (data, mime)
+    }
+
     /// Download + decrypt a blob (recipient path: picks `r` from the wrap).
     /// Returns (plaintext, mime).
     static func downloadAndDecrypt(att: [String: Any], selfKey: Bool) async throws -> (Data, String) {
+        if let blobID = att["blob_id"] as? String,
+           let cached = cacheGet(blobID) {
+            return cached
+        }
         guard let blobID = att["blob_id"] as? String,
               let wrapped = att["wrapped_key"] as? String,
               let ivB64 = att["iv"] as? String,
@@ -153,6 +184,9 @@ enum AttachmentManager {
                                         ciphertext: ct, tag: tag)
         let plain = try AES.GCM.open(box, using: SymmetricKey(data: keyBytes))
         let mime = (att["mime"] as? String) ?? "application/octet-stream"
+        if let blobID = att["blob_id"] as? String {
+            cachePut(blobID, plain, mime: mime)
+        }
         return (plain, mime)
     }
 

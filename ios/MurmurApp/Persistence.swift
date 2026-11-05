@@ -66,7 +66,7 @@ enum Persistence {
 
     static func restoreChats() -> (chats: [ChatSummary], contactNames: [String: String])? {
         guard let state = load() else { return nil }
-        let chats = state.chats.map { chat -> ChatSummary in
+        let chats = state.chats.compactMap { chat -> ChatSummary? in
             var summary = ChatSummary(peer: chat.peer, lastBody: chat.lastBody, lastTs: chat.lastTs)
             summary.messages = chat.messages.map { m in
                 ChatMessage(
@@ -81,6 +81,9 @@ enum Persistence {
             }
             // Keep the thread chronological after restore.
             summary.messages.sort { $0.ts < $1.ts }
+            // Drop legacy empty "…" pills (pre-guard rows: no text, no attachments).
+            summary.messages.removeAll { $0.body.isEmpty && $0.attachments.isEmpty && $0.direction == "incoming" }
+            if summary.messages.isEmpty { return nil }
             return summary
         }
         return (chats, state.contactNames)

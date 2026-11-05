@@ -29,8 +29,11 @@ final class AppState: ObservableObject {
         // Local history (PWA IDB parity): restore before any network — the
         // relay erases delivered envelopes, the device is the archive.
         if let restored = Persistence.restoreChats() {
-            chats = restored.chats
+            // One-time cleanup: system:relay service rows leaked into persisted
+            // chats before the filter existed (undelivered notices).
+            chats = restored.chats.filter { $0.peer != "system:relay" }
             contactNames = restored.contactNames
+            persist()
         }
         loadContactNames()
         relay.onEnvelope = { [weak self] row in
@@ -59,7 +62,7 @@ final class AppState: ObservableObject {
 
     func handlePushMetadata(_ row: HistoryRow?) {
         var newPeer: String?
-        if let from = row?.from_npub, from != myNpub,
+        if let from = row?.from_npub, from != myNpub, from != "system:relay",
            !chats.contains(where: { $0.peer == from }) {
             upsert(peer: from, body: "", ts: row?.ts ?? Int(Date().timeIntervalSince1970),
                    direction: .incoming, hash: row?.hash)
@@ -91,7 +94,7 @@ final class AppState: ObservableObject {
     }
 
     private func pollHistory(peer: String) async {
-        guard !peer.isEmpty else { return }
+        guard !peer.isEmpty, peer != "system:relay" else { return }
         do {
             let rows = try await relay.history(peer: peer)
             // Decrypt OFF the main actor: 12fe19e moved only the JSON decode
@@ -134,7 +137,7 @@ final class AppState: ObservableObject {
     func loadContactList() async {
         do {
             let contacts = try await relay.contacts()
-            for c in contacts where c.peer != myNpub {
+            for c in contacts where c.peer != myNpub && c.peer != "system:relay" {
                 if !chats.contains(where: { $0.peer == c.peer }) {
                     upsert(peer: c.peer, body: "", ts: c.lastTs,
                            direction: .incoming, hash: nil)
@@ -190,7 +193,7 @@ final class AppState: ObservableObject {
     }
 
     private func handleIncoming(_ row: HistoryRow) {
-        guard let peer = peerOf(row) else { return }
+        guard let peer = peerOf(row), peer != "system:relay" else { return }
         // Service envelopes (✓✓ receipts) are swallowed, not rendered.
         guard let dec = relay.decryptMessage(row: row), !dec.isService,
               !dec.body.isEmpty || !dec.attachments.isEmpty else { return }
