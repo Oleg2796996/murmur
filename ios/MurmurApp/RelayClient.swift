@@ -19,7 +19,9 @@ final class RelayClient {
 
     var onEnvelope: ((HistoryRow) -> Void)?
     /// WS push arrived (metadata only) — app should poll /api/history.
-    var onPushMetadata: (() -> Void)?
+    /// The row carries from_npub/ts/envelope_hash_hex so the app can create
+    /// the chat for an unknown peer before polling.
+    var onPushMetadata: ((HistoryRow?) -> Void)?
     var onConnected: (() -> Void)?
 
     init(baseURL: String = RelayConfig.defaultBaseURL) {
@@ -177,7 +179,7 @@ final class RelayClient {
         if row.ct != nil {
             onEnvelope?(row)
         } else {
-            onPushMetadata?()
+            onPushMetadata?(row)
         }
     }
 

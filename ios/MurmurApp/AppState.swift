@@ -29,8 +29,30 @@ final class AppState: ObservableObject {
             Task { @MainActor in self?.handleIncoming(row) }
         }
         // WS push = metadata only (like the PWA) -> re-poll history.
-        relay.onPushMetadata = { [weak self] in
-            Task { @MainActor in self?.pollAllPeers() }
+        relay.onPushMetadata = { [weak self] row in
+            Task { @MainActor in self?.handlePushMetadata(row) }
+        }
+    }
+
+    /// WS push for possibly-UNKNOWN peer: create the chat first, then poll.
+    /// (Bug 2026-11-05: pollAllPeers only polled existing chats, so the first
+    /// message from a new peer never surfaced.)
+    func handlePushMetadata(_ row: HistoryRow?) {
+        var newPeer: String?
+        if let from = row?.from_npub, from != myNpub,
+           !chats.contains(where: { $0.peer == from }) {
+            upsert(peer: from, body: "", ts: row?.ts ?? Int(Date().timeIntervalSince1970),
+                   direction: .incoming, hash: row?.hash)
+            newPeer = from
+        }
+        pollTask?.cancel()
+        pollTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard let self, !Task.isCancelled else { return }
+            if let newPeer { await self.pollHistory(peer: newPeer) }
+            for chat in self.chats where chat.peer != newPeer {
+                await self.pollHistory(peer: chat.peer)
+            }
         }
     }
 
