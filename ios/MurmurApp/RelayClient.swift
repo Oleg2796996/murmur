@@ -216,11 +216,19 @@ final class RelayClient {
                 return Decrypted(body: "", attachments: [], isService: true)
             }
             let body = obj["body"] as? String ?? ""
-            let atts = obj["attachments"] as? [[String: Any]] ?? []
-            // Real chips = server attachment_refs merged with envelope meta
-            // (blob_token only exists in the envelope copy).
-            let merged = !atts.isEmpty ? atts : row.mergedAttachments()
-            return Decrypted(body: body, attachments: merged, isService: false)
+            // ct-attachments carry ONLY {name, mime, size, poster_data_url}
+            // (pwa/app.js encryptForRecipient) — no blob_id/wrapped_key/iv.
+            // Server attachment_refs + envelope attachments_meta carry the
+            // download triple. Merge: server/envelope base, ct overlays by
+            // index (real name, poster). (Bug d67c396: non-empty ct-atts
+            // replaced the merged set entirely -> chips without blob_id.)
+            let ctAtts = obj["attachments"] as? [[String: Any]] ?? []
+            var chips = row.mergedAttachments()
+            if chips.isEmpty { chips = ctAtts }
+            for (i, pa) in ctAtts.enumerated() where i < chips.count {
+                for (k, v) in pa where !(v is NSNull) { chips[i][k] = v }
+            }
+            return Decrypted(body: body, attachments: chips, isService: false)
         }
         // Legacy raw text (older iOS builds).
         return Decrypted(body: String(data: pt, encoding: .utf8) ?? "",

@@ -72,7 +72,7 @@ final class IdentityStore {
         let ts = Int(now.timeIntervalSince1970)
         let msg = "murmur-auth-v1|\(id.npub())|\(ts)"
         let sig = id.signHex(msg: Data(msg.utf8))
-        return "&_ts=\(ts)&_sig=\(sig.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? sig)"
+        return "&_ts=\(ts)&_sig=\(Self.percentEncodeQueryValue(sig))"
     }
 }
 
@@ -138,5 +138,15 @@ extension Keychain {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ] as CFDictionary)
+    }
+}
+
+extension IdentityStore {
+    /// Percent-encoding for query values (ed25519 hex sig is URL-safe already,
+    /// but be explicit — matches pwa encodeURIComponent semantics).
+    static func percentEncodeQueryValue(_ s: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
     }
 }
