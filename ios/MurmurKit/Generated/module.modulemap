@@ -1,0 +1,4 @@
+module murmur_uniffiFFI {
+    header "murmur_uniffiFFI.h"
+    export *
+}

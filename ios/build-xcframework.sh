@@ -39,6 +39,8 @@ echo "==> generating Swift bindings from the device staticlib"
 cargo run -p murmur-uniffi --bin uniffi-bindgen -- \
   generate --library "$DEVICE_LIB" --language swift --out-dir "$OUT/Generated"
 
+cp "$OUT/Generated/murmur_uniffiFFI.modulemap" "$OUT/Generated/module.modulemap"
+
 echo "==> packaging XCFramework"
 rm -rf "$OUT/MurmurUniffi.xcframework"
 xcodebuild -create-xcframework \

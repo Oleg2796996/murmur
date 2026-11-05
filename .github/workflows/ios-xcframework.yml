@@ -65,6 +65,11 @@ jobs:
             generate --library target/aarch64-apple-ios/release/libmurmur_uniffi.a \
             --language swift --out-dir ios/MurmurKit/Generated
 
+      - name: Add module.modulemap (Clang requires this exact name for auto-discovery)
+        run: |
+          cp ios/MurmurKit/Generated/murmur_uniffiFFI.modulemap ios/MurmurKit/Generated/module.modulemap
+          cat ios/MurmurKit/Generated/module.modulemap
+
       - name: Create XCFramework
         run: |
           rm -rf ios/MurmurKit/MurmurUniffi.xcframework
@@ -82,6 +87,15 @@ jobs:
           brew install xcodegen
           cd ios && xcodegen generate
           ls -la
+
+      - name: Build app unsigned (smoke check, iOS Simulator)
+        continue-on-error: true   # artifacts must still upload; failure is visible
+        run: |
+          cd ios
+          xcodebuild -project MurmurApp.xcodeproj -scheme MurmurApp \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY= \
+            build 2>&1 | tail -40
 
       - name: Upload XCFramework artifact
         uses: actions/upload-artifact@v4
