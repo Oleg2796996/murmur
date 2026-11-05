@@ -88,8 +88,14 @@ final class AppState: ObservableObject {
         guard !peer.isEmpty else { return }
         do {
             let rows = try await relay.history(peer: peer)
-            for row in rows {
-                guard let dec = relay.decryptMessage(row: row), !dec.isService else { continue }
+            // Decrypt OFF the main actor: 12fe19e moved only the JSON decode
+            // off-main, but decryptMessage still ran sync Rust ECIES per row
+            // on the MainActor — a 100-row poll burst starved the UI again.
+            for (row, decOpt) in await relay.decryptRows(rows) {
+                // Content guard parity with handleIncoming/loadHistory: skip
+                // decryptable-but-empty rows so they can't render as "…" pills.
+                guard let dec = decOpt, !dec.isService,
+                      !dec.body.isEmpty || !dec.attachments.isEmpty else { continue }
                 let direction: ChatMessage.Direction =
                     (row.from_npub == myNpub || row.from_npub == nil) ? .outgoing : .incoming
                 upsert(peer: peer, body: dec.displayBody, ts: row.ts ?? 0,
@@ -191,8 +197,20 @@ final class AppState: ObservableObject {
                               ts: ts, direction: direction, status: .sent,
                               hash: hash, attachments: attachments)
         if let i = chats.firstIndex(where: { $0.peer == peer }) {
-            chats[i].lastBody = body
-            chats[i].lastTs = ts
+            // History arrives newest-first (ORDER BY ts DESC); lastTs/lastBody
+            // must track the NEWEST row, not the last-processed one — after a
+            // full re-poll the old code left the preview showing the OLDEST
+            // message and mis-sorted the chat list.
+            if ts >= chats[i].lastTs {
+                if !body.isEmpty || chats[i].lastBody.isEmpty {
+                    chats[i].lastBody = body
+                }
+                chats[i].lastTs = ts
+            } else if chats[i].lastBody.isEmpty && !body.isEmpty {
+                // Older-than-placeholder rows still fill an empty preview
+                // (new chat upserted with ts=now shows "…" forever otherwise).
+                chats[i].lastBody = body
+            }
             chats[i].messages.append(msg)
             chats[i].messages.removeDuplicates()
             chats.sort { $0.lastTs > $1.lastTs }

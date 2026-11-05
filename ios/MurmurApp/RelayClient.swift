@@ -165,6 +165,22 @@ final class RelayClient {
         return try? JSONDecoder().decode(EnvelopeAck.self, from: data).hash
     }
 
+    /// Decrypts a batch of history rows OFF the main actor. Rust ECIES per
+    /// row is pure CPU over immutable inputs (row struct + IdentityStore read)
+    /// — safe to run detached; the caller merges results back on MainActor.
+    /// (12fe19e moved only JSON decode off-main; decrypt stayed on-main and
+    /// still froze the UI on 100-row poll bursts.)
+    func decryptRows(_ rows: [HistoryRow]) async -> [(row: HistoryRow, dec: Decrypted?)] {
+        guard !rows.isEmpty else { return [] }
+        // Snap the identity before detaching: IdentityStore.shared is MainActor-
+        // adjacent state; decryptMessage(data-only) below must not race a
+        // concurrent importBackup/wipe.
+        _ = try? IdentityStore.shared.requireIdentity()
+        return await Task.detached(priority: .userInitiated) { [self] in
+            rows.map { (row: $0, dec: self.decryptMessage(row: $0)) }
+        }.value
+    }
+
     /// Decrypted payload of an incoming row.
     struct Decrypted {
         var body: String

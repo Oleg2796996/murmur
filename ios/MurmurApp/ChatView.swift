@@ -201,11 +201,14 @@ struct ChatView: View {
 
     private func loadHistory() async {
         do {
-            let rows = try await app.relay.history(peer: peer).map { $0.withUnwrappedBody() }
-            for row in rows {
+            let rows = try await app.relay.history(peer: peer)
+            // Decrypt off the MainActor (Rust ECIES per row; on-main decrypt
+            // froze the UI on poll bursts — same class of bug as 12fe19e).
+            let pairs = await app.relay.decryptRows(rows)
+            for (row, decOpt) in pairs {
                 // Skip undecryptable rows (own outgoing echo — sealed to the
                 // peer's key) and service envelopes (✓✓ receipts).
-                guard let dec = app.relay.decryptMessage(row: row),
+                guard let dec = decOpt,
                       !dec.isService, !dec.body.isEmpty || !dec.attachments.isEmpty else { continue }
                 let direction: ChatMessage.Direction =
                     (row.from_npub == app.myNpub) ? .outgoing : .incoming

@@ -34,26 +34,19 @@ struct AttachmentChip: View {
                 .background(Color(.secondarySystemBackground))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             } else if failed {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle")
-                    Button("повторить") { Task { await load() } }
+                // Download/decode failed (network, or .task cancelled when the
+                // row scrolled out of the LazyVStack) — tap to retry. Never a
+                // dead blank spot where the photo should be.
+                Button {
+                    Task { await load() }
+                } label: {
+                    chipLabel
                 }
-                .font(.footnote)
-                .padding(10)
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
             } else {
                 Button {
                     openURL = URL(string: "murmur-attach://open")
                 } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: iconFor(mime))
-                        Text(name).lineLimit(1)
-                    }
-                    .padding(10)
-                    .background(Color(.secondarySystemBackground))
-                    .foregroundStyle(.primary)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    chipLabel
                 }
                 .sheet(item: $openURL) { _ in
                     AttachPreviewSheet(att: att, outgoing: outgoing, name: name)
@@ -61,6 +54,19 @@ struct AttachmentChip: View {
             }
         }
         .task { if isImage { await load() } }
+    }
+
+    /// Tappable file chip: icon + name. Images that failed to decode and all
+    /// non-image attachments render through this.
+    private var chipLabel: some View {
+        HStack(spacing: 6) {
+            Image(systemName: iconFor(mime))
+            Text(name).lineLimit(1)
+        }
+        .padding(10)
+        .background(Color(.secondarySystemBackground))
+        .foregroundStyle(.primary)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private func load() async {
@@ -74,6 +80,13 @@ struct AttachmentChip: View {
             } else {
                 failed = true
             }
+        } catch let e as CancellationError {
+            // .task is cancelled when the row scrolls out of the LazyVStack —
+            // not a failure; a fresh chip instance retries via its own .task.
+            NSLog("murmur chip load cancelled: \(e)")
+        } catch let e as URLError where e.code == .cancelled {
+            // URLSession surfaces cooperative cancellation as URLError.cancelled.
+            NSLog("murmur chip load cancelled (url)")
         } catch {
             failed = true
         }
