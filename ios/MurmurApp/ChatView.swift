@@ -24,7 +24,9 @@ struct ChatView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        ZStack {
+            MurmurTheme.bg.ignoresSafeArea()
+            VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 6) {
@@ -50,6 +52,7 @@ struct ChatView: View {
             }
 
             composer
+            }
         }
         .navigationTitle(app.displayName(for: peer) ?? shortNpub(peer))
         .navigationBarTitleDisplayMode(.inline)
@@ -79,7 +82,7 @@ struct ChatView: View {
             VStack(alignment: m.direction == .outgoing ? .trailing : .leading, spacing: 2) {
                 if m.body.isEmpty && !m.attachments.isEmpty {
                     // attachment-only message: chips outside the colored bubble
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: m.direction == .outgoing ? .trailing : .leading, spacing: 4) {
                         ForEach(m.attachments, id: \.blobID) { att in
                             AttachmentChip(att: att, outgoing: m.direction == .outgoing)
                         }
@@ -96,8 +99,8 @@ struct ChatView: View {
                         Text(cleanBody)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
-                            .background(m.direction == .outgoing ? Color.accentColor : Color(.secondarySystemBackground))
-                            .foregroundStyle(m.direction == .outgoing ? Color.white : Color.primary)
+                            .background(m.direction == .outgoing ? MurmurTheme.bubbleOut : MurmurTheme.bubbleIn)
+                            .foregroundStyle(m.direction == .outgoing ? Color.white : MurmurTheme.text)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                     if !m.attachments.isEmpty {

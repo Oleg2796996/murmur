@@ -1,5 +1,35 @@
 import SwiftUI
 
+/// PWA palette (pwa/styles.css :root — Telegram dark theme).
+enum MurmurTheme {
+    static let bg = Color(red: 0x17/255, green: 0x21/255, blue: 0x2b/255)      // #17212b
+    static let panel = Color(red: 0x0e/255, green: 0x16/255, blue: 0x21/255)   // #0e1621
+    static let bubbleOut = Color(red: 0x2b/255, green: 0x52/255, blue: 0x78/255) // #2b5278
+    static let text = Color(red: 0xe1/255, green: 0xe9/255, blue: 0xf0/255)    // #e1e9f0
+    static let textMuted = Color(red: 0x70/255, green: 0x84/255, blue: 0x99/255) // #708499
+    static let accent = Color(red: 0x4f/255, green: 0xa3/255, blue: 0xff/255)  // #4fa3ff
+    static let border = Color(red: 0x1f/255, green: 0x2c/255, blue: 0x3a/255)  // #1f2c3a
+    static let bubbleIn = Color(red: 0x18/255, green: 0x25/255, blue: 0x33/255) // #182533
+    static let danger = Color(red: 0xf0/255, green: 0x6c/255, blue: 0x6c/255)  // #f06c6c
+    static let green = Color(red: 0x28/255, green: 0xa7/255, blue: 0x45/255)   // #28a745
+    static let gold = Color(red: 0xd6/255, green: 0xa5/255, blue: 0x00/255)    // #d6a500
+
+    /// Avatar colors cycle (PWA: colored circles with the first letter).
+    static func avatarColor(_ seed: String) -> Color {
+        let palette: [Color] = [
+            Color(red: 0x4f/255, green: 0xa3/255, blue: 0xff/255),
+            Color(red: 0xe1/255, green: 0x8e/255, blue: 0x5c/255),
+            Color(red: 0x8e/255, green: 0x6c/255, blue: 0xf0/255),
+            Color(red: 0x4f/255, green: 0xc4/255, blue: 0x8f/255),
+            Color(red: 0xf0/255, green: 0xa5/255, blue: 0x4f/255),
+            Color(red: 0xf0/255, green: 0x6c/255, blue: 0x9d/255),
+        ]
+        var h = 0
+        for b in seed.utf8 { h = (h &* 31 &+ Int(b)) & 0xFFFF }
+        return palette[h % palette.count]
+    }
+}
+
 /// Chat list + sidebar actions — parity with the PWA sidebar footer grid:
 ///   Пригласить друга ✉ | Вставить ссылку 📋
 ///   Скачать backup     | Восстановить backup
@@ -21,27 +51,35 @@ struct ChatListView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                if app.chats.isEmpty {
-                    ContentUnavailableView {
-                        Label("Пока нет чатов", systemImage: "bubble.left.and.bubble.right")
-                    } description: {
+            Group {
+                if filteredChats.isEmpty {
+                    VStack(spacing: 8) {
+                        Text("MurMur")
+                            .font(.title2.bold())
+                            .foregroundStyle(MurmurTheme.text)
                         Text("Пригласите друга или вставьте полученную ссылку для начала общения")
+                            .font(.footnote)
+                            .foregroundStyle(MurmurTheme.textMuted)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
                     }
-                }
-                ForEach(filteredChats) { chat in
-                    NavigationLink {
-                        ChatView(peer: chat.peer)
-                    } label: {
-                        row(chat)
-                    }
-                }
-                .onDelete { indexes in
-                    for i in indexes {
-                        app.deleteChat(peer: filteredChats[i].peer)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(filteredChats) { chat in
+                                NavigationLink {
+                                    ChatView(peer: chat.peer)
+                                } label: {
+                                    row(chat)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
                     }
                 }
             }
+            .background(MurmurTheme.bg)
             .searchable(text: $searchText, prompt: "поиск чатов…")
             .navigationTitle("MurMur")
             .toolbar {
@@ -85,50 +123,77 @@ struct ChatListView: View {
     private var sidebarFooter: some View {
         VStack(spacing: 8) {
             if let status = app.statusLine {
-                Text(status).font(.caption2).foregroundStyle(.secondary)
+                Text(status).font(.caption2).foregroundStyle(MurmurTheme.textMuted)
             }
-            VStack(spacing: 6) {
-                Button {
-                    showInvite = true
-                } label: {
-                    Label("Пригласить друга", systemImage: "envelope")
-                        .frame(maxWidth: .infinity)
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    Button {
+                        showInvite = true
+                    } label: {
+                        Text("Пригласить друга ✉")
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(MurmurTheme.green)
+                            .foregroundStyle(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        pasteInvite()
+                    } label: {
+                        Text("Вставить ссылку 📋")
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(MurmurTheme.gold)
+                            .foregroundStyle(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.borderedProminent)
-
-                HStack(spacing: 6) {
-                    actionTile("Вставить ссылку 📋") { pasteInvite() }
+                HStack(spacing: 8) {
                     actionTile("Скачать backup") { showBackupExport = true }
-                }
-                HStack(spacing: 6) {
                     actionTile("Восстановить backup") { showBackupImporter = true }
-                    actionTile("Мой ключ 🔑") { showKeyReveal = true }
                 }
-                Button(role: .destructive) {
+                Button {
                     showWipeConfirm = true
                 } label: {
-                    Label("Удалить все данные", systemImage: "trash")
-                        .font(.footnote)
+                    Text("Удалить все данные")
+                        .font(.system(size: 14))
                         .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(MurmurTheme.panel)
+                        .foregroundStyle(MurmurTheme.danger)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(MurmurTheme.danger, lineWidth: 1)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.plain)
             }
             Text(shortNpub(app.myNpub))
                 .font(.caption2.monospaced())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(MurmurTheme.textMuted)
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 4)
+        .padding(12)
+        .background(MurmurTheme.panel)
     }
 
     private func actionTile(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.footnote)
+                .font(.system(size: 14, weight: .medium))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(.vertical, 12)
+                .background(MurmurTheme.bubbleOut)   // #2b5278 tile
+                .foregroundStyle(Color(red: 0xed/255, green: 0xf6/255, blue: 0xff/255))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color(red: 0x7d/255, green: 0xbe/255, blue: 0xeb/255).opacity(0.4), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
     }
@@ -193,18 +258,51 @@ struct ChatListView: View {
     }
 
     private func row(_ chat: ChatSummary) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(app.displayName(for: chat.peer) ?? shortNpub(chat.peer))
-                .font(.headline)
-            if app.typingPeers.contains(chat.peer) {
-                Text("печатает…").font(.subheadline).foregroundStyle(.tertiary)
-            } else {
-                Text(Self.previewText(chat))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        let name = app.displayName(for: chat.peer) ?? shortNpub(chat.peer)
+        return HStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(MurmurTheme.avatarColor(chat.peer))
+                    .frame(width: 40, height: 40)
+                Text(String(app.displayName(for: chat.peer)?.first ?? Character(shortNpub(chat.peer).prefix(1).uppercased())))
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
             }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(MurmurTheme.text)
+                    .lineLimit(1)
+                if app.typingPeers.contains(chat.peer) {
+                    Text("печатает…").font(.system(size: 12)).foregroundStyle(MurmurTheme.accent)
+                } else {
+                    Text(Self.previewText(chat))
+                        .font(.system(size: 12))
+                        .foregroundStyle(MurmurTheme.textMuted)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            Text(Self.timeText(chat.lastTs))
+                .font(.system(size: 11))
+                .foregroundStyle(MurmurTheme.textMuted)
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(MurmurTheme.bg)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(MurmurTheme.border).frame(height: 0.5)
+        }
+        .contentShape(Rectangle())
+    }
+
+    /// PWA chat-item-time: HH:MM (24h) from unix seconds.
+    static func timeText(_ ts: Int) -> String {
+        let date = ts > 100_000_000_000 ? Date(timeIntervalSince1970: Double(ts) / 1000)
+                                        : Date(timeIntervalSince1970: Double(ts))
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f.string(from: date)
     }
 
     /// PWA preview parity: «📎 фото · текст», «📎 видео», strip 📎-lines from
