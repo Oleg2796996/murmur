@@ -17,6 +17,7 @@ struct ChatListView: View {
     @State private var showWipeConfirm = false
     @State private var searchText = ""
     @State private var pasteText = ""
+    @State private var selfLinkAlert = false
 
     var body: some View {
         NavigationStack {
@@ -67,6 +68,11 @@ struct ChatListView: View {
                     app.wipeEverything()
                 }
                 Button("Отмена", role: .cancel) {}
+            }
+            .alert("Это ваша собственная ссылка-приглашение", isPresented: $selfLinkAlert) {
+                Button("Понятно", role: .cancel) {}
+            } message: {
+                Text("Скопируйте ссылку из приложения СОБЕСЕДНИКА («Пригласить друга» у него), либо попросите его прислать вам его ссылку.")
             }
             .safeAreaInset(edge: .bottom) {
                 sidebarFooter
@@ -162,6 +168,14 @@ struct ChatListView: View {
     }
 
     private func openChat(with peer: String) {
+        // Guard (lesson 2026-11-05): pasting YOUR OWN invite link creates a
+        // self-chat — messages go to self, the push fires back at the sender,
+        // and the intended peer hears nothing. The PWA has the same trap.
+        if peer == app.myNpub {
+            if showNewChat { selfLinkAlert = true }
+            else { app.statusLine = "Это ваша собственная ссылка — вставьте ссылку СОБЕСЕДНИКА" }
+            return
+        }
         app.upsert(peer: peer, body: "", ts: Int(Date().timeIntervalSince1970),
                    direction: .incoming, hash: nil)
         app.statusLine = nil
