@@ -165,8 +165,9 @@ extension HistoryRow: Decodable {
         )
         // [[String: Any]] is not Decodable — re-decode the row as raw JSON.
         if let container = try? decoder.singleValueContainer(),
-           let raw = try? container.decode(FlexibleRow.self) {
-            self.attachments = raw.attachmentsArray
+           let raw = try? container.decode(FlexibleRow.self),
+           let atts = raw.attachments {
+            self.attachments = atts.attachmentsArray
         }
     }
 }
