@@ -47,7 +47,6 @@ enum Persistence {
                     peer: chat.peer,
                     lastBody: chat.lastBody,
                     lastTs: chat.lastTs,
-                    lastMimes: chat.lastMimes,
                     messages: chat.messages.map { m in
                         PersistedMessage(
                             id: m.id, peer: m.peer, body: m.body, ts: m.ts,
@@ -55,7 +54,8 @@ enum Persistence {
                             hash: m.hash,
                             attachmentsJSON: (try? JSONSerialization.data(withJSONObject: m.attachments))
                         )
-                    }
+                    },
+                    lastMimes: chat.lastMimes
                 )
             },
             contactNames: contactNames,
