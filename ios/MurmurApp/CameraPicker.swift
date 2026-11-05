@@ -5,7 +5,7 @@ import AVFoundation
 /// so the view shows a friendly notice there.
 struct CameraPicker: UIViewControllerRepresentable {
     var onCapture: (UIImage) -> Void
-    @Environment(\\.dismiss) private var dismiss
+    @Environment(\.dismiss) private var dismiss
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
