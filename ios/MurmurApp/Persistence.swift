@@ -21,6 +21,7 @@ enum Persistence {
         var lastBody: String
         var lastTs: Int
         var messages: [PersistedMessage]
+        var lastMimes: [String]?
     }
 
     struct PersistedState: Codable {
@@ -46,6 +47,7 @@ enum Persistence {
                     peer: chat.peer,
                     lastBody: chat.lastBody,
                     lastTs: chat.lastTs,
+                    lastMimes: chat.lastMimes,
                     messages: chat.messages.map { m in
                         PersistedMessage(
                             id: m.id, peer: m.peer, body: m.body, ts: m.ts,
@@ -67,7 +69,8 @@ enum Persistence {
     static func restoreChats() -> (chats: [ChatSummary], contactNames: [String: String])? {
         guard let state = load() else { return nil }
         let chats = state.chats.compactMap { chat -> ChatSummary? in
-            var summary = ChatSummary(peer: chat.peer, lastBody: chat.lastBody, lastTs: chat.lastTs)
+            var summary = ChatSummary(peer: chat.peer, lastBody: chat.lastBody, lastTs: chat.lastTs,
+                                      lastMimes: chat.lastMimes ?? [])
             summary.messages = chat.messages.map { m in
                 ChatMessage(
                     id: m.id, peer: m.peer, body: m.body, ts: m.ts,

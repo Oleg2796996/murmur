@@ -199,12 +199,45 @@ struct ChatListView: View {
             if app.typingPeers.contains(chat.peer) {
                 Text("печатает…").font(.subheadline).foregroundStyle(.tertiary)
             } else {
-                Text(chat.lastBody.isEmpty ? "…" : chat.lastBody)
+                Text(Self.previewText(chat))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
         }
+    }
+
+    /// PWA preview parity: «📎 фото · текст», «📎 видео», strip 📎-lines from
+    /// the body (they duplicate the attachment label).
+    static func previewText(_ chat: ChatSummary) -> String {
+        let kindOf: (String) -> String = { mime in
+            if mime.hasPrefix("image/") { return "фото" }
+            if mime.hasPrefix("video/") { return "видео" }
+            if mime.hasPrefix("audio/") { return "аудио" }
+            return "файл"
+        }
+        let attLabel: String?
+        if chat.lastMimes.isEmpty {
+            attLabel = nil
+        } else {
+            let base = "📎 " + kindOf(chat.lastMimes[0])
+            attLabel = chat.lastMimes.count > 1 ? base + " +" + String(chat.lastMimes.count - 1) : base
+        }
+        var t = chat.lastBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Raw envelope / attachment-lines are not useful in the preview.
+        if t.hasPrefix("{") { t = "" }
+        if !t.isEmpty {
+            t = t.components(separatedBy: "\n")
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("📎") }
+                .joined(separator: " ")
+                .replacingOccurrences(of: "  ", with: " ")
+                .trimmingCharacters(in: .whitespaces)
+        }
+        if !t.isEmpty {
+            return attLabel != nil ? attLabel! + " · " + t : t
+        }
+        if let attLabel { return attLabel }
+        return "…"
     }
 
     private var newChatSheet: some View {

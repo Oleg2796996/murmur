@@ -226,10 +226,12 @@ final class AppState: ObservableObject {
                     chats[i].lastBody = body
                 }
                 chats[i].lastTs = ts
+                chats[i].lastMimes = attachments.compactMap { $0["mime"] as? String }
             } else if chats[i].lastBody.isEmpty && !body.isEmpty {
                 // Older-than-placeholder rows still fill an empty preview
                 // (new chat upserted with ts=now shows "…" forever otherwise).
                 chats[i].lastBody = body
+                chats[i].lastMimes = attachments.compactMap { $0["mime"] as? String }
             }
             chats[i].messages.append(msg)
             chats[i].messages.removeDuplicates()
@@ -238,7 +240,8 @@ final class AppState: ObservableObject {
             chats[i].messages.sort { $0.ts < $1.ts }
             chats.sort { $0.lastTs > $1.lastTs }
         } else {
-            var summary = ChatSummary(peer: peer, lastBody: body, lastTs: ts)
+            var summary = ChatSummary(peer: peer, lastBody: body, lastTs: ts,
+                                      lastMimes: attachments.compactMap { $0["mime"] as? String })
             summary.messages = [msg]
             chats.append(summary)
             chats.sort { $0.lastTs > $1.lastTs }
@@ -271,6 +274,8 @@ struct ChatSummary: Identifiable {
     var lastBody: String
     var lastTs: Int
     var messages: [ChatMessage] = []
+    /// mimes of the newest message's attachments (preview label, PWA parity)
+    var lastMimes: [String] = []
 }
 
 private extension Array where Element == ChatMessage {
