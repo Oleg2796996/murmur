@@ -26,6 +26,12 @@ final class AppState: ObservableObject {
             authenticated = true
             myNpub = IdentityStore.shared.npub ?? ""
         }
+        // Local history (PWA IDB parity): restore before any network — the
+        // relay erases delivered envelopes, the device is the archive.
+        if let restored = Persistence.restoreChats() {
+            chats = restored.chats
+            contactNames = restored.contactNames
+        }
         loadContactNames()
         relay.onEnvelope = { [weak self] row in
             Task { @MainActor in self?.handleIncoming(row) }
@@ -158,14 +164,25 @@ final class AppState: ObservableObject {
         chats = []
         contactNames = [:]
         UserDefaults.standard.removeObject(forKey: contactNamesKey)
+        Persistence.wipe()
         authenticated = false
         myNpub = ""
+    }
+
+    /// Fire-and-forget save after any state change.
+    private func persist() {
+        let snapshot = chats
+        let names = contactNames
+        Task.detached(priority: .utility) {
+            Persistence.save(chats: snapshot, contactNames: names)
+        }
     }
 
     /// PWA parity: 🗑 delete chat — removes messages and the contact entry.
     func deleteChat(peer: String) {
         chats.removeAll { $0.peer == peer }
         contactNames.removeValue(forKey: peer)
+        persist()
     }
 
     func setDisplayName(_ name: String, for peer: String) {
@@ -223,6 +240,7 @@ final class AppState: ObservableObject {
             chats.append(summary)
             chats.sort { $0.lastTs > $1.lastTs }
         }
+        persist()
     }
 
     // MARK: - Contact names (murmur.contact_names parity)
@@ -240,6 +258,7 @@ final class AppState: ObservableObject {
     private func persistContactNames() {
         guard let data = try? JSONEncoder().encode(contactNames) else { return }
         UserDefaults.standard.set(data, forKey: contactNamesKey)
+        persist()
     }
 }
 
