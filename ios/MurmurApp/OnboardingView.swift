@@ -1,111 +1,87 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
-/// First-run flow: create / import `.murmur` backup.
-/// Styled with the app theme (PWA palette, ChatListView.swift MurmurTheme).
+/// First-run flow: landing with the site pitch + single "Create" button.
+/// Import of `.murmur` backups moved out of the first screen (per Oleg,
+/// 2026-11-06). Styled with the app theme (PWA palette, MurmurTheme).
 struct OnboardingView: View {
     @EnvironmentObject private var app: AppState
-    @State private var password = ""
-    @State private var showBackupImporter = false
     @State private var errorText: String?
     @State private var busy = false
 
-    /// The app forces the dark PWA palette; colorScheme env follows it.
     var body: some View {
-        NavigationStack {
-            ZStack {
-                MurmurTheme.bg.ignoresSafeArea()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("MurMur")
-                                .font(.largeTitle.bold())
-                                .foregroundStyle(MurmurTheme.text)
-                            Text("Приватный мессенджер. Сообщения шифруются на устройстве.")
-                                .font(.footnote)
-                                .foregroundStyle(MurmurTheme.textMuted)
-                        }
-                        .padding(.top, 8)
+        ZStack {
+            MurmurTheme.bg.ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 0) {
+                Spacer(minLength: 24)
 
-                        // MARK: - New identity
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Новая идентичность")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(MurmurTheme.textMuted)
-                            Button {
-                                createIdentity()
-                            } label: {
-                                Label("Создать", systemImage: "plus.circle.fill")
-                                    .font(.body.weight(.semibold))
-                                    .foregroundStyle(MurmurTheme.accent)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(16)
-                                    .background(MurmurTheme.panel)
-                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            }
-                            .disabled(busy)
-                        }
+                // MARK: - Header
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("MurMur")
+                        .font(.system(size: 40, weight: .bold))
+                        .foregroundStyle(MurmurTheme.text)
+                    Text("Приватный мессенджер без номеров, почт и слежки")
+                        .font(.body)
+                        .foregroundStyle(MurmurTheme.textMuted)
+                }
 
-                        // MARK: - Import .murmur backup
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Импорт файла .murmur")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(MurmurTheme.textMuted)
-                            HStack(spacing: 0) {
-                                SecureField("Пароль бэкапа", text: $password)
-                                    .textInputAutocapitalization(.never)
-                                    .autocorrectionDisabled()
-                                    .foregroundStyle(MurmurTheme.text)
-                                    .tint(MurmurTheme.accent)
-                                    .padding(16)
-                            }
-                            .background(MurmurTheme.panel)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                // MARK: - Feature list (from murmurchat.org)
+                VStack(alignment: .leading, spacing: 14) {
+                    feature("lock.shield",
+                            "Всё хранится на вашем устройстве — сервер видит только зашифрованные сообщения")
+                    feature("sparkles",
+                            "Переписка стирается с сервера через минуты после доставки")
+                    feature("eyeglasses",
+                            "Нам не нужно знать ваши имена, телефоны и почту")
+                    feature("hand.raised",
+                            "Просьба передать данные? Нам нечего передавать")
+                }
+                .padding(.top, 28)
 
-                            Button {
-                                showBackupImporter = true
-                            } label: {
-                                Label("Выбрать файл", systemImage: "doc")
-                                    .font(.body.weight(.semibold))
-                                    .foregroundStyle(password.isEmpty ? MurmurTheme.textMuted : MurmurTheme.accent)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(16)
-                                    .background(MurmurTheme.panel)
-                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            }
-                            .disabled(busy || password.isEmpty)
-                        }
+                Spacer()
 
-                        if let errorText {
-                            Text(errorText)
-                                .font(.footnote)
-                                .foregroundStyle(MurmurTheme.danger)
-                        }
-
+                // MARK: - Create button
+                Button {
+                    createIdentity()
+                } label: {
+                    HStack {
+                        Spacer()
                         if busy {
-                            HStack {
-                                Spacer()
-                                ProgressView().tint(MurmurTheme.accent)
-                                Spacer()
-                            }
+                            ProgressView().tint(MurmurTheme.bg)
+                        } else {
+                            Label("Создать", systemImage: "plus.circle.fill")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(MurmurTheme.bg)
                         }
+                        Spacer()
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 32)
+                    .padding(.vertical, 16)
+                    .background(MurmurTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .disabled(busy)
+
+                if let errorText {
+                    Text(errorText)
+                        .font(.footnote)
+                        .foregroundStyle(MurmurTheme.danger)
+                        .padding(.top, 12)
                 }
             }
-            .navigationTitle("Вход")
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .preferredColorScheme(.dark)
-            .fileImporter(
-                isPresented: $showBackupImporter,
-                // .item keeps .murmur selectable (it has no registered UTType);
-                // content-type filters grey it out on device.
-                allowedContentTypes: [.item],
-                allowsMultipleSelection: false
-            ) { result in
-                importBackup(result)
-            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 24)
+        }
+    }
+
+    private func feature(_ icon: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.body)
+                .foregroundStyle(MurmurTheme.accent)
+                .frame(width: 28)
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(MurmurTheme.text)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -119,24 +95,6 @@ struct OnboardingView: View {
                 errorText = error.localizedDescription
             }
             busy = false
-        }
-    }
-
-    private func importBackup(_ result: Result<[URL], Error>) {
-        busy = true; errorText = nil
-        Task { @MainActor in
-            defer { busy = false }
-            do {
-                guard let url = try result.get().first else { return }
-                let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                let data = try Data(contentsOf: url)
-                let info = try IdentityStore.shared.importBackup(data: data, password: password)
-                app.applyBackupIdentity(info)
-                app.didAuthenticate()
-            } catch {
-                errorText = error.localizedDescription
-            }
         }
     }
 }
