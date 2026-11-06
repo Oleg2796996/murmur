@@ -82,10 +82,6 @@ struct ChatListView: View {
             .background(MurmurTheme.bg)
             .searchable(text: $searchText, prompt: "поиск чатов…")
             .toolbarColorScheme(.dark, for: .navigationBar)
-            #if swift(>=5.9)
-            @available(iOS 17.0, *)
-            .navigationBarTitleDisplayMode(.minimized)
-            #endif
             .toolbarBackground(MurmurTheme.panel, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {

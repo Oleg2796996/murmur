@@ -56,7 +56,7 @@ final class AppState: ObservableObject {
         typingPeers.insert(from)
         let _ = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 4_000_000_000)
-            _ = await MainActor.run { self?.typingPeers.remove(from) }
+            let _ = await MainActor.run { self?.typingPeers.remove(from) }
         }
     }
 
