@@ -14,11 +14,10 @@ struct ChatView: View {
     @State private var renameText = ""
     @State private var showFileImporter = false
     @State private var showPhotoPicker = false
-    @State private var showVideoPicker = false
     @State private var showCamera = false
     @State private var cameraImage: UIImage?
+    @State private var cameraMovieURL: URL?
     @State private var pickedItem: PhotosPickerItem?
-    @State private var pickedVideoItem: PhotosPickerItem?
     @State private var attaching = false
 
     private var messages: [ChatMessage] {
@@ -139,19 +138,14 @@ struct ChatView: View {
             // Paperclip = attachment menu: фото из галереи / камера / файл.
             Menu {
                 Button {
-                    showPhotoPicker = true
-                } label: {
-                    Label("Фото из галереи", systemImage: "photo.on.rectangle")
-                }
-                Button {
-                    showVideoPicker = true
-                } label: {
-                    Label("Видео из галереи", systemImage: "video")
-                }
-                Button {
                     showCamera = true
                 } label: {
-                    Label("Сделать фото", systemImage: "camera")
+                    Label("Снять фото или видео", systemImage: "camera")
+                }
+                Button {
+                    showPhotoPicker = true
+                } label: {
+                    Label("Медиатека", systemImage: "photo.on.rectangle")
                 }
                 Button {
                     showFileImporter = true
@@ -165,12 +159,15 @@ struct ChatView: View {
             }
             .disabled(sending || attaching)
             .photosPicker(isPresented: $showPhotoPicker, selection: $pickedItem,
-                          matching: .images)
-            .photosPicker(isPresented: $showVideoPicker, selection: $pickedVideoItem,
-                          matching: .videos)
+                          matching: .any(of: [.images, .videos]))
             .fullScreenCover(isPresented: $showCamera) {
-                CameraPicker { image in cameraImage = image }
-                    .ignoresSafeArea()
+                CameraPicker { capture in
+                    switch capture {
+                    case .photo(let image): cameraImage = image
+                    case .movie(let url): cameraMovieURL = url
+                    }
+                }
+                .ignoresSafeArea()
             }
             .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item],
                           allowsMultipleSelection: false) { result in
@@ -181,15 +178,15 @@ struct ChatView: View {
                 pickedItem = nil
                 Task { await attachPicked(item) }
             }
-            .onChange(of: pickedVideoItem) {
-                guard let item = pickedVideoItem else { return }
-                pickedVideoItem = nil
-                Task { await attachPickedVideo(item) }
-            }
             .onChange(of: cameraImage) {
                 guard let image = cameraImage else { return }
                 cameraImage = nil
                 Task { await attachCameraPhoto(image) }
+            }
+            .onChange(of: cameraMovieURL) {
+                guard let url = cameraMovieURL else { return }
+                cameraMovieURL = nil
+                Task { await sendMovieFile(url, fallbackName: "video") }
             }
             TextField("Сообщение", text: $draft, axis: .vertical)
                 .lineLimit(1...5)
@@ -212,9 +209,13 @@ struct ChatView: View {
         .background(MurmurTheme.panel)
     }
 
-    /// Photo from gallery: PhotosPickerItem -> jpeg Data -> shared pipeline.
+    /// From media library: photo (jpeg) or video (movie file) — both into the shared pipeline.
     private func attachPicked(_ item: PhotosPickerItem) async {
         do {
+            if let movie = try await item.loadTransferable(type: MurmurMovie.self) {
+                await sendMovieFile(movie.url, fallbackName: "video")
+                return
+            }
             guard let data = try await item.loadTransferable(type: Data.self) else { return }
             await sendAttachment(data: data,
                                  fileName: "photo-\(Int(Date().timeIntervalSince1970)).jpg",
@@ -232,21 +233,17 @@ struct ChatView: View {
                              mime: "image/jpeg")
     }
 
-    /// Video from gallery: PhotosPickerItem -> movie file -> shared pipeline.
-    /// FileRepresentation copy works without full photo-library permission
-    /// (same privacy model as PHPicker images).
-    private func attachPickedVideo(_ item: PhotosPickerItem) async {
+    /// Movie file (from camera or media library) -> shared pipeline.
+    private func sendMovieFile(_ url: URL, fallbackName: String) async {
         do {
-            guard let movie = try await item.loadTransferable(type: MurmurMovie.self) else { return }
-            let url = movie.url
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             let data = try Data(contentsOf: url)
             guard !data.isEmpty else { return }
             let ext = url.pathExtension.lowercased()
             let mime = (ext == "mov") ? "video/quicktime" : "video/mp4"
-            let safeExt = ext.isEmpty ? "mp4" : ext
-            let name = "video-\(Int(Date().timeIntervalSince1970)).\(safeExt)"
+            let safeExt = (ext == "mov" || ext == "mp4") ? ext : "mp4"
+            let name = "\(fallbackName)-\(Int(Date().timeIntervalSince1970)).\(safeExt)"
             await sendAttachment(data: data, fileName: name, mime: mime)
         } catch {
             await MainActor.run { errorText = error.localizedDescription }
