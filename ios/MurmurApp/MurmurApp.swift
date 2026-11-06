@@ -28,6 +28,12 @@ struct MurmurApp: App {
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 UIApplication.shared.applicationIconBadgeNumber = 0
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                // Local badge while backgrounded (APNs pushes add server-side
+                // badge once keys are wired; this covers no-push case).
+                let unread = app.chats.reduce(0) { $0 + $1.messages.filter { $0.direction == .incoming }.count }
+                UIApplication.shared.applicationIconBadgeNumber = min(unread, 99)
+            }
         }
     }
 }

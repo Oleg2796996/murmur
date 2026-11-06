@@ -38,6 +38,14 @@ struct ChatView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                 }
+                // Swipe down dismisses the keyboard (messenger standard).
+                .scrollDismissesKeyboard(.interactively)
+                // Open chat → land at the newest message (bottom of the feed).
+                .onAppear {
+                    if let last = messages.last {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
                 .onChange(of: messages.count) {
                     if let last = messages.last {
                         withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }

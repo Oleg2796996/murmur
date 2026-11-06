@@ -328,6 +328,19 @@ function applyReceipts(peer, hashes) {
             } catch (e) {}
         }
     }
-    if (activePeer === peer) renderMessages();
+    // In-place tick patch (Lesson #230/#232): renderMessages скипает отрендеренные sig'и —
+    // глиф запечён в bubble-time. Патчим DOM напрямую по data-sig.
+    // v160y62-fix (Олег 06.11.2026 «в PWA ✓✓ только когда ответишь»): sig-ключ
+    // у исходящих из истории часто не совпадает с data-sig пузыря (_sig
+    // назначается на WS-пути, история-путь строит from+ts по-другому) — патч
+    // молча не находил пузырь и ✓✓ рисовался только на следующем полном
+    // перерендере (отправка сообщения). Надёжный путь: сбросить кэш
+    // отрисованных sig'ов и перерендерить чат целиком — глифы пересчитаются
+    // из свежего acks-снапшота.
+    if (activePeer === peer) {
+        window.__murmurRenderedSigs = new Set();
+        window.__murmurLastRenderedPeer = null;
+        renderMessages();
+    }
 }
 // ═══ конец v158 helpers ═══
