@@ -54,7 +54,7 @@ final class AppState: ObservableObject {
     func showTyping(_ from: String) {
         guard !from.isEmpty, from != myNpub else { return }
         typingPeers.insert(from)
-        Task { [weak self] in
+        let _ = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 4_000_000_000)
             await MainActor.run { self?.typingPeers.remove(from) }
         }

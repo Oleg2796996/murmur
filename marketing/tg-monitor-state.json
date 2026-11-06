@@ -1,0 +1,78 @@
+{
+  "created": "2026-10-25T22:20:00+03:00",
+  "watched_chats": [
+    {
+      "name": "vpGram / ЧАТ",
+      "id": "-1003986361271",
+      "lang": "ru",
+      "type": "competitor-support",
+      "policy": "value-first only, NO MurMur mention unless user explicitly asks 'what else can I use', answer fix-questions helpfully"
+    },
+    {
+      "name": "Чат AppleInsider.ru",
+      "id": "-1001073711747",
+      "lang": "ru",
+      "type": "neutral-tech",
+      "policy": "answer real blocking/messenger questions, variant A/C"
+    },
+    {
+      "name": "GrapheneOS",
+      "id": "-1001299141621",
+      "lang": "en",
+      "type": "privacy-community",
+      "policy": "privacy angle fits, variant B, no link spam"
+    },
+    {
+      "name": "Nostr rants and confusion",
+      "id": "-1001429492298",
+      "lang": "en",
+      "type": "nostr-community",
+      "policy": "npub identity angle fits, variant B"
+    },
+    {
+      "name": "Iran Unlocked - Group",
+      "id": "-1003861500481",
+      "lang": "fa",
+      "type": "intent-group",
+      "policy": "variant D only, needs native review, else pure-help answer"
+    },
+    {
+      "name": "AmneziaVPN Myanmar",
+      "id": "-1002034662973",
+      "lang": "my",
+      "type": "vpn-config",
+      "policy": "low priority, config audience, skip unless direct 'can't communicate' question"
+    },
+    {
+      "name": "Telegram中文交流群",
+      "handle": "@t_chinese_group",
+      "lang": "zh",
+      "type": "intent-group",
+      "public_page": "https://t.me/s/t_chinese_group",
+      "observed": "3,601 members, 142 online (2026-10-26)",
+      "policy": "value-first only: answer China access/communication questions; no VPN or MurMur link spam"
+    },
+    {
+      "name": "Outline VPN Group",
+      "handle": "@OutlineVpnGroup",
+      "lang": "en",
+      "type": "intent-group",
+      "public_page": "https://t.me/s/OutlineVpnGroup",
+      "observed": "5,703 members, 649 online (2026-10-26); group rules prohibit promotion/trading",
+      "policy": "help-first only, respect no-promo rule; no unsolicited MurMur mention"
+    }
+  ],
+  "daily_post_budget": 6,
+  "posted": [
+    {
+      "chat": "AppleInsider",
+      "ts": "2026-10-26T12:40+03:00",
+      "topic": "Молния 750₽/мессенджеры",
+      "text": "...тренд показательный... MurMur (murmurchat.org)..."
+    }
+  ],
+  "last_check": "2026-10-26T13:02:55+03:00",
+  "quiet_hours": "23:00-09:00 MSK (log only, no posting)",
+  "mode": "max-activity (Oleg 11:06 2026-10-26): отвечать БЕЗ ок Олега, ссылка murmurchat.org допустима в уместных ответах, лимиты: 1 коммент/чат/день, quiet hours остаются",
+  "last_action": "2026-10-26 12:40: пост в AppleInsider (тема Молния/альтернативы) — отправлен через CDP"
+}
