@@ -14,9 +14,11 @@ struct ChatView: View {
     @State private var renameText = ""
     @State private var showFileImporter = false
     @State private var showPhotoPicker = false
+    @State private var showVideoPicker = false
     @State private var showCamera = false
     @State private var cameraImage: UIImage?
     @State private var pickedItem: PhotosPickerItem?
+    @State private var pickedVideoItem: PhotosPickerItem?
     @State private var attaching = false
 
     private var messages: [ChatMessage] {
@@ -142,6 +144,11 @@ struct ChatView: View {
                     Label("Фото из галереи", systemImage: "photo.on.rectangle")
                 }
                 Button {
+                    showVideoPicker = true
+                } label: {
+                    Label("Видео из галереи", systemImage: "video")
+                }
+                Button {
                     showCamera = true
                 } label: {
                     Label("Сделать фото", systemImage: "camera")
@@ -159,6 +166,8 @@ struct ChatView: View {
             .disabled(sending || attaching)
             .photosPicker(isPresented: $showPhotoPicker, selection: $pickedItem,
                           matching: .images)
+            .photosPicker(isPresented: $showVideoPicker, selection: $pickedVideoItem,
+                          matching: .videos)
             .fullScreenCover(isPresented: $showCamera) {
                 CameraPicker { image in cameraImage = image }
                     .ignoresSafeArea()
@@ -171,6 +180,11 @@ struct ChatView: View {
                 guard let item = pickedItem else { return }
                 pickedItem = nil
                 Task { await attachPicked(item) }
+            }
+            .onChange(of: pickedVideoItem) {
+                guard let item = pickedVideoItem else { return }
+                pickedVideoItem = nil
+                Task { await attachPickedVideo(item) }
             }
             .onChange(of: cameraImage) {
                 guard let image = cameraImage else { return }
@@ -216,6 +230,27 @@ struct ChatView: View {
         await sendAttachment(data: data,
                              fileName: "camera-\(Int(Date().timeIntervalSince1970)).jpg",
                              mime: "image/jpeg")
+    }
+
+    /// Video from gallery: PhotosPickerItem -> movie file -> shared pipeline.
+    /// FileRepresentation copy works without full photo-library permission
+    /// (same privacy model as PHPicker images).
+    private func attachPickedVideo(_ item: PhotosPickerItem) async {
+        do {
+            guard let movie = try await item.loadTransferable(type: MurmurMovie.self) else { return }
+            let url = movie.url
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let data = try Data(contentsOf: url)
+            guard !data.isEmpty else { return }
+            let ext = url.pathExtension.lowercased()
+            let mime = (ext == "mov") ? "video/quicktime" : "video/mp4"
+            let safeExt = ext.isEmpty ? "mp4" : ext
+            let name = "video-\(Int(Date().timeIntervalSince1970)).\(safeExt)"
+            await sendAttachment(data: data, fileName: name, mime: mime)
+        } catch {
+            await MainActor.run { errorText = error.localizedDescription }
+        }
     }
 
     /// Shared attachment send path (used by all three pickers).
@@ -345,6 +380,24 @@ struct ChatView: View {
                 errorText = error.localizedDescription
                 sending = false
             }
+        }
+    }
+}
+
+/// PhotosUI has no built-in movie Transferable; this copies the original
+/// movie file into our temp space via FileRepresentation (no photo-library
+/// permission needed, same model as PHPicker images).
+struct MurmurMovie: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { movie in
+            SentTransferredFile(movie.url)
+        } importing: { received in
+            let dest = FileManager.default.temporaryDirectory
+                .appendingPathComponent("murmur-movie-\(UUID().uuidString).\(received.file.pathExtension)")
+            try FileManager.default.copyItem(at: received.file, to: dest)
+            return MurmurMovie(url: dest)
         }
     }
 }
