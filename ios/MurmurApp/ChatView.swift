@@ -365,7 +365,7 @@ struct ChatView: View {
         // v160y61 self-heal: our outgoing without ✓✓ older than 90s → receipt_req.
         let outgoing = app.chats.first(where: { $0.peer == peer })?.messages
             .filter { $0.direction == .outgoing }
-            .compactMap { (hash: $0.hash, ts: $0.ts) }
+            .map { (hash: $0.hash, ts: $0.ts) } ?? []
         await ReceiptManager.shared.requestMissingReceipts(peer: peer, outgoing: outgoing)
     }
 

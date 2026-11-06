@@ -99,7 +99,13 @@ final class ReceiptManager {
             return arr
         }
         guard !hashes.isEmpty else { return }
-        let ok = (try? await sendReceiptEnvelope(peer: peer, kind: "receipt", msgs: Array(hashes))) ?? false
+        var ok = false
+        do {
+            try await sendReceiptEnvelope(peer: peer, kind: "receipt", msgs: Array(hashes))
+            ok = true
+        } catch {
+            NSLog("murmur receipt flush failed: \(error)")
+        }
         if ok {
             queue.sync {
                 if var set = pending[peer] {
@@ -113,15 +119,15 @@ final class ReceiptManager {
     }
 
     /// v160y61: request missing ✓✓ for our outgoing older than 90s (1/10min/peer).
-    func requestMissingReceipts(peer: String, outgoing: [(hash: String, ts: Int)]) async {
+    func requestMissingReceipts(peer: String, outgoing: [(hash: String?, ts: Int)]) async {
         let now = Date()
         let last = queue.sync { receiptReqLast[peer] }
         if let last, now.timeIntervalSince(last) < reqMinInterval { return }
-        let missing = outgoing.filter {
-            guard let h = $0.hash, !h.isEmpty else { return false }
-            if isAcked(h) { return false }
-            return now.timeIntervalSince1970 - Double($0.ts) >= reqMinAge
-        }.map { $0.hash }
+        let missing = outgoing.compactMap { item -> String? in
+            guard let h = item.hash, !h.isEmpty, !isAcked(h) else { return nil }
+            guard now.timeIntervalSince1970 - Double(item.ts) >= reqMinAge else { return nil }
+            return h
+        }
         guard !missing.isEmpty else { return }
         queue.sync {
             receiptReqLast[peer] = now
@@ -178,7 +184,9 @@ final class ReceiptManager {
         guard let msgs = plain["msgs"] as? [String] else { return }
         if t == "receipt_req" {
             // Answer only for hashes we actually receipted before (honesty).
-            let known = msgs.filter { queue.sync { receipted.contains("\(peer)|\($0)") } }
+            let known = msgs.filter { h in
+                queue.sync { receipted.contains("\(peer)|\(h)") }
+            }
             if !known.isEmpty {
                 queueReceipts(peer: peer, hashes: known)
             }
