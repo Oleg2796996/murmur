@@ -115,9 +115,16 @@ struct ChatView: View {
                         }
                     }
                 }
-                Text(Self.timeString(m.ts))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 2) {
+                    Text(Self.timeString(m.ts))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    if m.direction == .outgoing {
+                        Text(app.isAcked(m.hash) ? "✓✓" : "✓")
+                            .font(.caption2)
+                            .foregroundStyle(app.isAcked(m.hash) ? MurmurTheme.accent : MurmurTheme.textMuted)
+                    }
+                }
             }
             if m.direction == .incoming { Spacer(minLength: 40) }
         }
@@ -355,6 +362,11 @@ struct ChatView: View {
         } catch {
             await MainActor.run { errorText = error.localizedDescription }
         }
+        // v160y61 self-heal: our outgoing without ✓✓ older than 90s → receipt_req.
+        let outgoing = app.chats.first(where: { $0.peer == peer })?.messages
+            .filter { $0.direction == .outgoing }
+            .compactMap { (hash: $0.hash, ts: $0.ts) }
+        await ReceiptManager.shared.requestMissingReceipts(peer: peer, outgoing: outgoing)
     }
 
     private func send() async {

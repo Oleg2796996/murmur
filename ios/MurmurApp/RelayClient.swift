@@ -213,6 +213,15 @@ final class RelayClient {
     /// which reads own messages from its outbox).
     func decryptMessage(row: HistoryRow) -> Decrypted? {
         if row.kind == "receipt" || row.kind == "group_invite" || row.kind == "group_key" {
+            // Receipt envelopes: decrypt the inner payload and feed the
+            // receipt pipeline (✓✓ on OUR outgoing). Group control: ignored.
+            if row.kind == "receipt", let ct = row.ct, let data = Data(base64Encoded: ct),
+               let identity = try? IdentityStore.shared.requireIdentity(),
+               let pt = try? identity.eciesDecrypt(sealed: data),
+               let obj = try? JSONSerialization.jsonObject(with: pt) as? [String: Any],
+               let peer = row.from_npub {
+                ReceiptManager.shared.consume(peer: peer, plain: obj)
+            }
             return Decrypted(body: "", attachments: [], isService: true)
         }
         guard let ct = row.ct, let data = Data(base64Encoded: ct) else { return nil }

@@ -109,6 +109,10 @@ final class AppState: ObservableObject {
                     (row.from_npub == myNpub || row.from_npub == nil) ? .outgoing : .incoming
                 upsert(peer: peer, body: dec.displayBody, ts: row.ts ?? 0,
                        direction: direction, hash: row.hash, attachments: dec.attachments)
+                // ✓✓ pipeline: incoming rows ack back to the sender.
+                if direction == .incoming, let h = row.hash {
+                    ReceiptManager.shared.queueReceipts(peer: peer, hashes: [h])
+                }
             }
         } catch {
             NSLog("murmur pollHistory failed: \(error)")
@@ -218,6 +222,10 @@ final class AppState: ObservableObject {
         let ts = row.ts ?? Int(Date().timeIntervalSince1970)
         upsert(peer: peer, body: dec.displayBody, ts: ts, direction: .incoming,
                hash: row.hash, attachments: dec.attachments)
+        // ✓✓ pipeline: received message → ack its envelope hash back to sender.
+        if let h = row.hash {
+            ReceiptManager.shared.queueReceipts(peer: peer, hashes: [h])
+        }
     }
 
     private func peerOf(_ row: HistoryRow) -> String? {
@@ -268,6 +276,10 @@ final class AppState: ObservableObject {
     }
 
     // MARK: - Contact names (murmur.contact_names parity)
+
+    func isAcked(_ hash: String?) -> Bool {
+        ReceiptManager.shared.isAcked(hash)
+    }
 
     func displayName(for peer: String) -> String? {
         contactNames[peer]

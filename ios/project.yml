@@ -34,6 +34,7 @@ targets:
           - "$(SRCROOT)/MurmurKit/Generated"
         SWIFT_INCLUDE_PATHS:
           - "$(SRCROOT)/MurmurKit/Generated"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     entitlements:
       path: MurmurApp/MurmurApp.entitlements
       properties:
