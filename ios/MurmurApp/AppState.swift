@@ -124,6 +124,22 @@ final class AppState: ObservableObject {
         Task { await loadContactList() }
     }
 
+    /// Apply profile data restored from a .murmur backup (name + contacts).
+    func applyBackupIdentity(_ info: BackupIdentity) {
+        if !info.name.isEmpty {
+            UserDefaults.standard.set(info.name, forKey: "murmur.name")
+        }
+        if let data = info.contactNamesJson.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+           !obj.isEmpty {
+            var merged = contactNames
+            for (k, v) in obj where k != myNpub && k != "system:relay" {
+                merged[k] = v
+            }
+            contactNames = merged
+        }
+    }
+
     /// Cold-start refresh for a Keychain-restored identity: `didAuthenticate`
     /// only fires after onboarding/backup import, so `loadContactList()` never
     /// ran on a normal launch — the chat list stayed empty until the first

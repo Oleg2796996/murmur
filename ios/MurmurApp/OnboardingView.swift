@@ -1,72 +1,107 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// First-run flow: create / import by hex / import `.murmur` backup.
-/// Mirrors the PWA onboarding options (spec section 5).
+/// First-run flow: create / import `.murmur` backup.
+/// Styled with the app theme (PWA palette, ChatListView.swift MurmurTheme).
 struct OnboardingView: View {
     @EnvironmentObject private var app: AppState
-    @State private var skHex = ""
     @State private var password = ""
     @State private var showBackupImporter = false
     @State private var errorText: String?
     @State private var busy = false
 
+    /// The app forces the dark PWA palette; colorScheme env follows it.
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    Text("MurMur")
-                        .font(.largeTitle.bold())
-                    Text("Приватный мессенджер. Сообщения шифруются на устройстве.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+            ZStack {
+                MurmurTheme.bg.ignoresSafeArea()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("MurMur")
+                                .font(.largeTitle.bold())
+                                .foregroundStyle(MurmurTheme.text)
+                            Text("Приватный мессенджер. Сообщения шифруются на устройстве.")
+                                .font(.footnote)
+                                .foregroundStyle(MurmurTheme.textMuted)
+                        }
+                        .padding(.top, 8)
 
-                Section("Новая идентичность") {
-                    Button {
-                        createIdentity()
-                    } label: {
-                        Label("Создать", systemImage: "plus.circle")
+                        // MARK: - New identity
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Новая идентичность")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(MurmurTheme.textMuted)
+                            Button {
+                                createIdentity()
+                            } label: {
+                                Label("Создать", systemImage: "plus.circle.fill")
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(MurmurTheme.accent)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(16)
+                                    .background(MurmurTheme.panel)
+                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            }
+                            .disabled(busy)
+                        }
+
+                        // MARK: - Import .murmur backup
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Импорт файла .murmur")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(MurmurTheme.textMuted)
+                            HStack(spacing: 0) {
+                                SecureField("Пароль бэкапа", text: $password)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .foregroundStyle(MurmurTheme.text)
+                                    .tint(MurmurTheme.accent)
+                                    .padding(16)
+                            }
+                            .background(MurmurTheme.panel)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                            Button {
+                                showBackupImporter = true
+                            } label: {
+                                Label("Выбрать файл", systemImage: "doc")
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(password.isEmpty ? MurmurTheme.textMuted : MurmurTheme.accent)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(16)
+                                    .background(MurmurTheme.panel)
+                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            }
+                            .disabled(busy || password.isEmpty)
+                        }
+
+                        if let errorText {
+                            Text(errorText)
+                                .font(.footnote)
+                                .foregroundStyle(MurmurTheme.danger)
+                        }
+
+                        if busy {
+                            HStack {
+                                Spacer()
+                                ProgressView().tint(MurmurTheme.accent)
+                                Spacer()
+                            }
+                        }
                     }
-                    .disabled(busy)
-                }
-
-                Section("Импорт из PWA (murmur.sk)") {
-                    TextField("64-байтовый hex ключ", text: $skHex, axis: .vertical)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .font(.system(.footnote, design: .monospaced))
-                    Button {
-                        importHex()
-                    } label: {
-                        Label("Импортировать ключ", systemImage: "key")
-                    }
-                    .disabled(busy || skHex.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-
-                Section("Импорт файла .murmur") {
-                    SecureField("Пароль бэкапа", text: $password)
-                    Button {
-                        showBackupImporter = true
-                    } label: {
-                        Label("Выбрать файл", systemImage: "doc")
-                    }
-                    .disabled(busy || password.isEmpty)
-                }
-
-                if let errorText {
-                    Section {
-                        Text(errorText).foregroundStyle(.red).font(.footnote)
-                    }
-                }
-
-                if busy {
-                    Section { ProgressView() }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 32)
                 }
             }
             .navigationTitle("Вход")
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .preferredColorScheme(.dark)
             .fileImporter(
                 isPresented: $showBackupImporter,
-                allowedContentTypes: [.data],
+                // .item keeps .murmur selectable (it has no registered UTType);
+                // content-type filters grey it out on device.
+                allowedContentTypes: [.item],
                 allowsMultipleSelection: false
             ) { result in
                 importBackup(result)
@@ -87,19 +122,6 @@ struct OnboardingView: View {
         }
     }
 
-    private func importHex() {
-        busy = true; errorText = nil
-        DispatchQueue.main.async {
-            do {
-                _ = try IdentityStore.shared.importHex(skHex)
-                app.didAuthenticate()
-            } catch {
-                errorText = error.localizedDescription
-            }
-            busy = false
-        }
-    }
-
     private func importBackup(_ result: Result<[URL], Error>) {
         busy = true; errorText = nil
         DispatchQueue.main.async {
@@ -109,7 +131,8 @@ struct OnboardingView: View {
                 let scoped = url.startAccessingSecurityScopedResource()
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 let data = try Data(contentsOf: url)
-                _ = try IdentityStore.shared.importBackup(data: data, password: password)
+                let info = try IdentityStore.shared.importBackup(data: data, password: password)
+                await MainActor.run { app.applyBackupIdentity(info) }
                 app.didAuthenticate()
             } catch {
                 errorText = error.localizedDescription
