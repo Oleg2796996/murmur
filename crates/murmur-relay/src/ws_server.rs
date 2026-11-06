@@ -277,6 +277,7 @@ mod tests {
             vapid_subject: "mailto:t@murmur.local".into(),
             static_dir: None,
             stats_basic_auth: None,
+            apns: crate::apns::ApnsConfig::default(),
         };
         let hub = SubscriberHub::new();
         let pending = PendingStore::new(&dir).unwrap();

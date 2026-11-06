@@ -1,7 +1,7 @@
 //! `murmur-relay` — WebSocket + iroh-direct relay daemon.
 
 use clap::Parser;
-use murmur_relay::{iroh_server, push, PushServer, PendingStore, RelayConfig, SubscriberHub, WsServer, MessageStore};
+use murmur_relay::{iroh_server, push, PushServer, PendingStore, RelayConfig, SubscriberHub, WsServer, MessageStore, apns};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,11 +45,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ref dir) = static_dir {
         info!(static_dir = %dir.display(), "PWA static dir enabled");
     }
+    // APNs provider for the native iOS client (no-op when not configured).
+    let apns_handle = if cfg.apns.is_configured() {
+        match apns::ApnsClient::from_config(&cfg.apns) {
+            Ok(Some(client)) => {
+                let store = apns::ApnsStore::new(&cfg.home_dir.join("messages.db"))
+                    .map(|s| Arc::new(s))
+                    .map_err(|e| warn!(err=%e, "apns store open failed"));
+                info!(topic = %cfg.apns.topic, "APNs enabled");
+                apns::ApnsHandle { client: Some(Arc::new(client)), store: store.ok() }
+            }
+            Ok(None) => apns::ApnsHandle::disabled(),
+            Err(e) => {
+                warn!(err=%e, "APNs config invalid — running without APNs");
+                apns::ApnsHandle::disabled()
+            }
+        }
+    } else {
+        apns::ApnsHandle::disabled()
+    };
     let push_server = Arc::new(
         push::PushServer::new(&cfg.home_dir, cfg.push_bind.clone(), vapid.clone())?
             .with_static_dir(static_dir.clone())
             .with_pending_hub(pending.clone(), hub.clone())
-            .with_stats_auth(cfg.stats_basic_auth.clone()),
+            .with_stats_auth(cfg.stats_basic_auth.clone())
+            .with_apns(apns_handle),
     );
     info!(vapid_pub = %vapid.public_b64url(), "VAPID ready");
 

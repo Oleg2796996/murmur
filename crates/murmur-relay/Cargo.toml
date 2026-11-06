@@ -56,6 +56,8 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 url = "2"
+# APNs provider API (native iOS client push): HTTP/2 POST /3/device/<token>.
+reqwest = { version = "0.12", default-features = false, features = ["http2", "rustls-tls", "json"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 

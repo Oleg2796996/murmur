@@ -34,6 +34,11 @@ targets:
           - "$(SRCROOT)/MurmurKit/Generated"
         SWIFT_INCLUDE_PATHS:
           - "$(SRCROOT)/MurmurKit/Generated"
+    entitlements:
+      path: MurmurApp/MurmurApp.entitlements
+      properties:
+        aps-environment: development
+        com.apple.developer.usernotifications.time-sensitive: true
     dependencies:
       - framework: MurmurKit/MurmurUniffi.xcframework
         embed: false

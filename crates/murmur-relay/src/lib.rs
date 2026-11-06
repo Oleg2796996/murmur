@@ -32,6 +32,7 @@ pub mod subscriber;
 pub mod ws_server;
 pub mod iroh_server;
 pub mod push;
+pub mod apns;
 pub mod storage;
 pub mod upload;
 

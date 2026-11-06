@@ -122,6 +122,8 @@ final class AppState: ObservableObject {
         registerAlias()
         connect()
         Task { await loadContactList() }
+        // Device token may have arrived before the identity did — register now.
+        PushManager.shared.registerTokenOnRelay(npub: myNpub)
     }
 
     /// Apply profile data restored from a .murmur backup (name + contacts).

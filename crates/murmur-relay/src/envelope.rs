@@ -299,12 +299,17 @@ pub fn accept_envelope(
         let push = push.clone();
         let payload = crate::push::PushPayload::from_entry(&entry, store, Some(badge_at_accept));
         let npub_for_log = recipient_npub.clone();
+        let apns = push.apns.clone();
+        let body_for_apns = payload.body.clone();
+        let badge_for_apns = payload.badge;
         tokio::spawn(async move {
             match push.deliver(&payload).await {
                 Ok(n) if n > 0 => info!(to=%npub_for_log, delivered=n, "push delivered"),
                 Ok(_) => {}
                 Err(e) => warn!(err=%e, "push deliver failed"),
             }
+            // Native iOS (APNs) delivery runs in parallel with Web Push.
+            apns.deliver_message_alert(&npub_for_log, &body_for_apns, badge_for_apns).await;
         });
         }
     }

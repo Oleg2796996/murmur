@@ -32,6 +32,9 @@ pub struct RelayConfig {
     /// so nginx-only basic_auth is not sufficient.
     #[serde(default)]
     pub stats_basic_auth: Option<String>,
+    /// APNs provider for the native iOS client (MurmurApp). Optional.
+    #[serde(default)]
+    pub apns: crate::apns::ApnsConfig,
 }
 
 fn default_ws_bind() -> String {

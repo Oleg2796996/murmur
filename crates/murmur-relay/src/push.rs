@@ -480,6 +480,8 @@ pub struct PushServer {
     pub(crate) store_db: Option<crate::storage::MessageStore>,
     /// v160s2: optional basic auth credentials ("user:password") for /api/stats.
     pub(crate) stats_auth: Option<String>,
+    /// APNs delivery for the native iOS client (disabled = no-op handle).
+    pub(crate) apns: crate::apns::ApnsHandle,
 }
 
 impl Clone for PushServer {
@@ -494,6 +496,7 @@ impl Clone for PushServer {
             hub: self.hub.clone(),
             store_db: self.store_db.clone(),
             stats_auth: self.stats_auth.clone(),
+            apns: self.apns.clone(),
         }
     }
 }
@@ -516,7 +519,14 @@ impl PushServer {
             hub: crate::SubscriberHub::new(),
             store_db: Some(db),
             stats_auth: None,
+            apns: crate::apns::ApnsHandle::disabled(),
         })
+    }
+
+    /// Wire the APNs handle (from murmur-relay.toml [apns] config).
+    pub fn with_apns(mut self, apns: crate::apns::ApnsHandle) -> Self {
+        self.apns = apns;
+        self
     }
 
     pub fn with_static_dir(mut self, dir: Option<PathBuf>) -> Self {
@@ -706,6 +716,29 @@ impl PushServer {
                             }
                             (Method::POST, "/push/register_subscribe") => {
                                 handle_register_subscribe(req, Arc::clone(&push_self), store.clone_handle()).await
+                            }
+                            // APNs registration for the native iOS client.
+                            (Method::POST, "/apns/register") => {
+                                let body = req.collect().await.unwrap().to_bytes();
+                                let (code, text) =
+                                    crate::apns::handle_register(&body, &push_self.apns).await?;
+                                Ok(Response::builder()
+                                    .status(StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR))
+                                    .header("content-type", "application/json")
+                                    .header("access-control-allow-origin", "*")
+                                    .body(Full::new(Bytes::from(text)))
+                                    .unwrap())
+                            }
+                            (Method::POST, "/apns/unregister") => {
+                                let body = req.collect().await.unwrap().to_bytes();
+                                let (code, text) =
+                                    crate::apns::handle_unregister(&body, &push_self.apns).await?;
+                                Ok(Response::builder()
+                                    .status(StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR))
+                                    .header("content-type", "application/json")
+                                    .header("access-control-allow-origin", "*")
+                                    .body(Full::new(Bytes::from(text)))
+                                    .unwrap())
                             }
                             (Method::GET, "/push/status") => {
                                 handle_push_status(req, store.clone_handle(), db.clone()).await
