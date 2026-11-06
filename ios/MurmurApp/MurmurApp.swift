@@ -16,7 +16,6 @@ struct MurmurApp: App {
             }
             .environmentObject(app)
             .onAppear {
-                AppStateHolder.shared.app = app
                 app.connect()
                 app.refreshOnLaunch()
                 PushManager.shared.bootstrap(app: app)

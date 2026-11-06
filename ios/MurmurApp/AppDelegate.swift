@@ -10,18 +10,11 @@ final class MurmurAppDelegate: NSObject, UIApplicationDelegate {
 
     func application(_ application: UIApplication,
                      didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        PushManager.shared.setDeviceToken(deviceToken, app: AppStateHolder.shared)
+        PushManager.shared.setDeviceToken(deviceToken)
     }
 
     func application(_ application: UIApplication,
                      didFailToRegisterForRemoteNotificationsWithError error: Error) {
         PushManager.shared.handleRegistrationFailure(error)
     }
-}
-
-/// Bridge so the app delegate can reach the live AppState without a global
-/// singleton owning the lifecycle (SwiftUI @StateObject stays authoritative).
-final class AppStateHolder {
-    static let shared = AppStateHolder()
-    weak var app: AppState?
 }

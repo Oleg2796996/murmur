@@ -41,7 +41,7 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: - Device token
 
-    func setDeviceToken(_ token: Data, app: AppState) {
+    func setDeviceToken(_ token: Data) {
         deviceToken = token
         let hex = token.map { String(format: "%02x", $0) }.joined()
         NSLog("murmur APNs device token: \(hex.prefix(16))…")
