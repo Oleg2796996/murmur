@@ -124,7 +124,7 @@ struct OnboardingView: View {
 
     private func importBackup(_ result: Result<[URL], Error>) {
         busy = true; errorText = nil
-        DispatchQueue.main.async {
+        Task { @MainActor in
             defer { busy = false }
             do {
                 guard let url = try result.get().first else { return }
@@ -132,7 +132,7 @@ struct OnboardingView: View {
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 let data = try Data(contentsOf: url)
                 let info = try IdentityStore.shared.importBackup(data: data, password: password)
-                await MainActor.run { app.applyBackupIdentity(info) }
+                app.applyBackupIdentity(info)
                 app.didAuthenticate()
             } catch {
                 errorText = error.localizedDescription
