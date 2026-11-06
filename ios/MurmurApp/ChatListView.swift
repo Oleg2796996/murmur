@@ -82,7 +82,7 @@ struct ChatListView: View {
             .background(MurmurTheme.bg)
             .searchable(text: $searchText, prompt: "поиск чатов…")
             .toolbarColorScheme(.dark, for: .navigationBar)
-            #if swift(>=5.9) && os(iOS)
+            #if swift(>=5.9)
             @available(iOS 17.0, *)
             .navigationBarTitleDisplayMode(.minimized)
             #endif
