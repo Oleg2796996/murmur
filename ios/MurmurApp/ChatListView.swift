@@ -30,6 +30,46 @@ enum MurmurTheme {
     }
 }
 
+
+/// Glass pill button (2026-11-09, Олег: «кнопки сделай стеклянные»).
+/// iOS 26+: native Liquid Glass (.glassEffect). iOS 17–25 fallback:
+/// ultraThinMaterial capsule + faint white stroke + soft shadow.
+/// Params per design consult: height 32, hPadding 12, footnote 13 semibold,
+/// accent text #4fa3ff (≈5:1 on dark glass, encodes "action").
+struct GlassPillButton: View {
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(MurmurTheme.accent)
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .background {
+                    if #available(iOS 26.0, *) {
+                        AnyView(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(.clear)
+                                .glassEffect(.regular.tint(.white.opacity(0.08)), in: .capsule)
+                        )
+                    } else {
+                        AnyView(
+                            Capsule()
+                                .fill(.ultraThinMaterial)
+                                .overlay(Capsule().stroke(.white.opacity(0.10), lineWidth: 0.5))
+                                .shadow(color: .black.opacity(0.25), radius: 4, y: 1)
+                        )
+                    }
+                }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+}
+
 /// Chat list + sidebar actions — parity with the PWA sidebar footer grid:
 ///   Пригласить друга ✉ | Вставить ссылку 📋
 ///   Скачать backup     | Восстановить backup
@@ -81,29 +121,19 @@ struct ChatListView: View {
             }
             .background(MurmurTheme.bg)
             .searchable(text: $searchText, prompt: "поиск чатов…")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbarBackground(MurmurTheme.panel, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
-                // 2026-11-09 (Олег, v4 — финал): «Пригласить» + «Ссылка»
-                // текстом, остальное — в «…» (backup, восстановление,
-                // удаление данных). Заголовок не задаём — навигейшн-бар
-                // отдаёт место кнопкам.
+                // 2026-11-09 (Олег, v5): стеклянные капсулы — «Пригласить
+                // друга» и «Вставить ссылку» (полные подписи, fixedSize —
+                // без сокращений), отдельная компактная стеклянная «…»
+                // с backup/удалением. Inline-тайтл обязателен (large title
+                // съедает ширину и подписи обрежутся).
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        showInvite = true
-                    } label: {
-                        Text("Пригласить")
-                            .foregroundStyle(MurmurTheme.accent)
-                    }
-                    .fixedSize()
-                    Button {
-                        showNewChat = true
-                    } label: {
-                        Text("Ссылка")
-                            .foregroundStyle(MurmurTheme.accent)
-                    }
-                    .fixedSize()
+                    GlassPillButton(title: "Пригласить друга") { showInvite = true }
+                    GlassPillButton(title: "Вставить ссылку") { showNewChat = true }
                     Menu {
                         Button {
                             showBackupExport = true
@@ -117,8 +147,20 @@ struct ChatListView: View {
                         } label: { Label("Удалить все данные", systemImage: "trash") }
                     } label: {
                         Image(systemName: "ellipsis.circle")
-                            .font(.title3)
-                            .foregroundStyle(MurmurTheme.text)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(MurmurTheme.accent)
+                            .frame(width: 32, height: 32)
+                            .background {
+                                if #available(iOS 26.0, *) {
+                                    AnyView(Circle().fill(.clear)
+                                        .glassEffect(.regular.tint(.white.opacity(0.08)), in: .circle))
+                                } else {
+                                    AnyView(Circle().fill(.ultraThinMaterial)
+                                        .overlay(Circle().stroke(.white.opacity(0.10), lineWidth: 0.5))
+                                        .shadow(color: .black.opacity(0.25), radius: 4, y: 1))
+                                }
+                            }
+                            .contentShape(Circle())
                     }
                 }
             }
