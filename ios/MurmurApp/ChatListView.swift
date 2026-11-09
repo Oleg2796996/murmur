@@ -88,6 +88,9 @@ struct ChatListView: View {
     @State private var searchText = ""
     @State private var pasteText = ""
     @State private var selfLinkAlert = false
+    /// Keyboard focus on the search field — lets a downward swipe dismiss
+    /// the keyboard (same UX as inside a chat, Олег 2026-11-09 23:14).
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -117,6 +120,17 @@ struct ChatListView: View {
                             }
                         }
                     }
+                    // Олег: свайп вниз по списку — закрыть клавиатуру поиска
+                    // (как внутри чата). simultaneousGesture не мешает скроллу.
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 30)
+                            .onEnded { value in
+                                if value.translation.height > 40 {
+                                    searchFocused = false
+                                }
+                            }
+                    )
+                    .scrollDismissesKeyboard(.interactively)
                 }
             }
             .background(MurmurTheme.bg)
@@ -142,6 +156,7 @@ struct ChatListView: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(MurmurTheme.textMuted)
                 TextField("поиск чатов…", text: $searchText)
+                    .focused($searchFocused)
                     .foregroundStyle(MurmurTheme.text)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
@@ -164,13 +179,6 @@ struct ChatListView: View {
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar(.hidden, for: .navigationBar)  // v9: empty navbar row removed
             .toolbarBackground(MurmurTheme.panel, for: .navigationBar)
-            .toolbar {
-                // 2026-11-09 (Олег, v5): стеклянные капсулы — «Пригласить
-                // друга» и «Вставить ссылку» (полные подписи, fixedSize —
-                // без сокращений), отдельная компактная стеклянная «…»
-                // с backup/удалением. Inline-тайтл обязателен (large title
-                // съедает ширину и подписи обрежутся).
-            }
             .sheet(isPresented: $showNewChat) { newChatSheet }
             .sheet(isPresented: $showInvite) {
                 InviteView(myNpub: app.myNpub)
