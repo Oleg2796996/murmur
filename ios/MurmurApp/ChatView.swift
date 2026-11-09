@@ -3,6 +3,7 @@ import PhotosUI
 
 /// 1:1 chat. Sending path mirrors pwa/app.js sendMessage():
 /// encrypt in Rust -> sign `from|to|ts|ct` -> POST /envelope.
+@MainActor
 struct ChatView: View {
     @EnvironmentObject private var app: AppState
     let peer: String

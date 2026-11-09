@@ -47,7 +47,7 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
         NSLog("murmur APNs device token: \(hex.prefix(16))…")
         if let npub = IdentityStore.shared.npub {
             registeredNpub = npub
-            Task { await Self.registerToken(hex: hex, npub: npub) }
+            registerTokenOnRelay(npub: npub)
         }
     }
 
@@ -60,18 +60,18 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
         guard let token = deviceToken else { return }
         let hex = token.map { String(format: "%02x", $0) }.joined()
         registeredNpub = npub
-        Task { await Self.registerToken(hex: hex, npub: npub) }
+        let identity = try? IdentityStore.shared.requireIdentity()
+        let payload = Data("apns-register".utf8)
+        // Sign on main-adjacent serial crypto path, send from background.
+        Task { @MainActor in
+            guard let identity else { return }
+            let sig = try? await IdentityStore.shared.cryptoSignEnvelopeAsync(identity, senderNpub: npub, payload: payload)
+            guard let sig else { NSLog("murmur apns register: sign failed"); return }
+            await Self.postRegistration(hex: hex, npub: npub, sig: sig)
+        }
     }
 
-    /// POST /apns/register — proof-of-key: sign "apns-register" with the
-    /// identity key (relay verifies the same way as push-register).
-    private static func registerToken(hex: String, npub: String) async {
-        guard let identity = try? IdentityStore.shared.requireIdentity(),
-              let sig = try? await IdentityStore.shared.cryptoSignEnvelopeAsync(
-                identity, senderNpub: npub, payload: Data("apns-register".utf8)) else {
-            NSLog("murmur apns register: sign failed")
-            return
-        }
+    private static func postRegistration(hex: String, npub: String, sig: String) async {
         guard let url = URL(string: RelayConfig.defaultBaseURL + "/apns/register") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -91,25 +91,6 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
             NSLog("murmur apns register status=\(status) resp=\(text.prefix(120))")
         } catch {
             NSLog("murmur apns register failed: \(error)")
-        }
-    }
-
-    // MARK: - Foreground presentation
-
-    func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        // In foreground the app is live over WS; show a subtle banner only.
-        return [.banner, .sound]
-    }
-
-    // MARK: - Tap handling
-
-    func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                didReceive response: UNNotificationResponse) async {
-        // Push tap → wake and poll. The relay stores the envelope with a TTL,
-        // so the poll after wake finds the message like any WS push does.
-        await MainActor.run {
-            NotificationCenter.default.post(name: .murmurPushWake, object: nil)
         }
     }
 }
