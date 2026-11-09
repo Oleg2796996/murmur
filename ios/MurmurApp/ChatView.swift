@@ -24,6 +24,10 @@ struct ChatView: View {
     /// gesture dismiss the keyboard (scrollDismissesKeyboard only works
     /// when the ScrollView itself is focusable-linked on iOS 27).
     @FocusState private var draftFocused: Bool
+    /// Bumped on every history apply for this chat — used to force the feed
+    /// to the bottom even when the last message id is unchanged (re-poll
+    /// dedup) — 2026-11-09 "open at bottom" robustness fix.
+    @State private var historyVersion = 0
 
     private var messages: [ChatMessage] {
         app.chats.first(where: { $0.peer == peer })?.messages ?? []
@@ -70,10 +74,19 @@ struct ChatView: View {
                 .onDisappear {
                     if app.openChatPeer == peer { app.openChatPeer = nil }
                 }
+                .onChange(of: historyVersion) {
+                    // Fires on every history apply for this chat (new rows,
+                    // re-poll, echo) — the feed always lands on the newest.
+                    if let last = messages.last {
+                        // Small delay lets LazyVStack materialize the row
+                        // before scrolling (bare scrollTo can fire early).
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 80_000_000)
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
+                    }
+                }
                 .onChange(of: messages.last?.id) {
-                    // Fires on count change AND when the last message is
-                    // replaced by a different one (re-poll/echo) — the feed
-                    // must always land on the newest message.
                     if let last = messages.last {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
@@ -389,7 +402,12 @@ struct ChatView: View {
                       !dec.body.isEmpty || !dec.attachments.isEmpty else { return nil }
                 return (pair.row, dec)
             }
-            app.applyHistory(peer: peer, incoming: incoming)
+            if incoming.count > 0 {
+                app.applyHistory(peer: peer, incoming: incoming)
+                // Force the feed to the bottom after the batch lands
+                // (onChange(historyVersion) does the scroll).
+                historyVersion += 1
+            }
         } catch {
             errorText = error.localizedDescription
         }
