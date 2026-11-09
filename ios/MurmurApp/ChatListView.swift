@@ -217,22 +217,33 @@ struct ChatListView: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(name)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 14, weight: app.unreadCount(for: chat.peer) > 0 ? .bold : .semibold))
                     .foregroundStyle(MurmurTheme.text)
                     .lineLimit(1)
                 if app.typingPeers.contains(chat.peer) {
                     Text("печатает…").font(.system(size: 12)).foregroundStyle(MurmurTheme.accent)
                 } else {
                     Text(Self.previewText(chat))
-                        .font(.system(size: 12))
-                        .foregroundStyle(MurmurTheme.textMuted)
+                        .font(.system(size: 12, weight: app.unreadCount(for: chat.peer) > 0 ? .semibold : .regular))
+                        .foregroundStyle(app.unreadCount(for: chat.peer) > 0 ? MurmurTheme.text : MurmurTheme.textMuted)
                         .lineLimit(1)
                 }
             }
             Spacer(minLength: 8)
-            Text(Self.timeText(chat.lastTs))
-                .font(.system(size: 11))
-                .foregroundStyle(MurmurTheme.textMuted)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(Self.timeText(chat.lastTs))
+                    .font(.system(size: 11))
+                    .foregroundStyle(MurmurTheme.textMuted)
+                // Unread sticker (PWA parity): hidden when 0.
+                if app.unreadCount(for: chat.peer) > 0 {
+                    Text("\(min(app.unreadCount(for: chat.peer), 99))\(app.unreadCount(for: chat.peer) > 99 ? "+" : "")")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.red))
+                }
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)

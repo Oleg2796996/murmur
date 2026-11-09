@@ -245,6 +245,11 @@ final class AppState: ObservableObject {
         updateBadge()
     }
 
+    /// Current unread count for a chat row (0 = read).
+    func unreadCount(for peer: String) -> Int {
+        unreadByPeer[peer] ?? 0
+    }
+
     /// Chat opened (or incoming arrived while it is open) — clear its unread.
     func markChatRead(peer: String) {
         guard unreadByPeer[peer] != nil, unreadByPeer[peer] != 0 else { return }
