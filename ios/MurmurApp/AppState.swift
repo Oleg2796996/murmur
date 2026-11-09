@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UserNotifications
 
 /// Root state: identity presence, relay client, chat list.
 @MainActor
@@ -235,11 +236,10 @@ final class AppState: ObservableObject {
     /// "Call must be made on main thread" if any caller lands off-main.
     func updateBadge() {
         let total = min(max(unreadByPeer.values.reduce(0, +), 0), 99)
-        if Thread.isMainThread {
-            UIApplication.shared.applicationIconBadgeNumber = total
-        } else {
-            DispatchQueue.main.async { UIApplication.shared.applicationIconBadgeNumber = total }
-        }
+        // UNUserNotificationCenter.setBadgeCount is thread-safe and is the
+        // modern API (UIApplication.applicationIconBadgeNumber asserts when
+        // reached from background tasks — the 2026-11-09 Task-111 abort).
+        UNUserNotificationCenter.current().setBadgeCount(total) { _ in }
     }
 
     /// Incoming message arrived for peer. Bumps unread unless the chat is
