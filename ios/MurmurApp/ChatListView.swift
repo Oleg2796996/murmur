@@ -201,6 +201,41 @@ struct ChatListView: View {
         return nil
     }
 
+    /// «…» menu (backup / restore / wipe) as its own view — keeps the
+    /// toolbar expression small (Swift type-checker timeout fix).
+    private var moreMenu: some View {
+        Menu {
+            Button {
+                showBackupExport = true
+            } label: { Label("Скачать backup", systemImage: "square.and.arrow.down") }
+            Button {
+                showBackupImporter = true
+            } label: { Label("Восстановить из backup", systemImage: "square.and.arrow.up.on.square") }
+            Divider()
+            Button(role: .destructive) {
+                showWipeConfirm = true
+            } label: { Label("Удалить все данные", systemImage: "trash") }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(MurmurTheme.accent)
+                .frame(width: 32, height: 32)
+                .background { glassCircleBackground }
+                .contentShape(Circle())
+        }
+    }
+
+    @ViewBuilder private var glassCircleBackground: some View {
+        if #available(iOS 26.0, *) {
+            Circle().fill(.clear)
+                .glassEffect(.regular.tint(.white.opacity(0.08)), in: .circle)
+        } else {
+            Circle().fill(.ultraThinMaterial)
+                .overlay(Circle().stroke(.white.opacity(0.10), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.25), radius: 4, y: 1)
+        }
+    }
+
     private func openChat(with peer: String) {
         // Guard (lesson 2026-11-05): pasting YOUR OWN invite link creates a
         // self-chat — messages go to self, the push fires back at the sender,
