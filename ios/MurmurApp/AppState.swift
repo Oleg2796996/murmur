@@ -112,10 +112,10 @@ final class AppState: ObservableObject {
             // mutation: per-row upsert caused 100 re-renders + 100 disk
             // writes per poll (2026-11-09 lag fix).
             let pairs = await relay.decryptRows(rows)
-            let incoming = pairs.filter { pair in
+            let incoming: [(row: HistoryRow, dec: RelayClient.Decrypted)] = pairs.compactMap { pair in
                 guard let dec = pair.dec, !dec.isService,
-                      !dec.body.isEmpty || !dec.attachments.isEmpty else { return false }
-                return true
+                      !dec.body.isEmpty || !dec.attachments.isEmpty else { return nil }
+                return (pair.row, dec)
             }
             applyHistory(peer: peer, incoming: incoming)
         } catch {
