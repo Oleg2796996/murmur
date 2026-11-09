@@ -137,11 +137,33 @@ struct ChatListView: View {
                 .padding(.top, 0)
                 .padding(.bottom, 6)
             }
-            .searchable(text: $searchText, prompt: "поиск чатов…")
+            // v9: own search field (searchable needs a navbar — hidden now)
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(MurmurTheme.textMuted)
+                TextField("поиск чатов…", text: $searchText)
+                    .foregroundStyle(MurmurTheme.text)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(MurmurTheme.textMuted)
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(MurmurTheme.bubbleIn)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
             .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar(.hidden, for: .navigationBar)  // v9: empty navbar row removed
             .toolbarBackground(MurmurTheme.panel, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 // 2026-11-09 (Олег, v5): стеклянные капсулы — «Пригласить
                 // друга» и «Вставить ссылку» (полные подписи, fixedSize —
