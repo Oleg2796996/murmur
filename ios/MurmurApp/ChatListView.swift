@@ -120,6 +120,23 @@ struct ChatListView: View {
                 }
             }
             .background(MurmurTheme.bg)
+            // 2026-11-09 (Олег, v7): ряд кнопок ВЫРОВНЕН ПО ШИРИНЕ экрана
+            // («как в Word по краям»): левая кнопка у левого края, правая у
+            // правого, средняя по центру. safeAreaInset вместо toolbar —
+            // iOS 26 рендерил только первый principal-элемент и сваривал
+            // остальные в общую капсулу.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                HStack(spacing: 8) {
+                    GlassPillButton(title: "Пригласить друга") { showInvite = true }
+                    Spacer(minLength: 0)
+                    GlassPillButton(title: "Вставить ссылку") { showNewChat = true }
+                    Spacer(minLength: 0)
+                    moreMenu
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 2)
+                .padding(.bottom, 6)
+            }
             .searchable(text: $searchText, prompt: "поиск чатов…")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
@@ -131,15 +148,6 @@ struct ChatListView: View {
                 // без сокращений), отдельная компактная стеклянная «…»
                 // с backup/удалением. Inline-тайтл обязателен (large title
                 // съедает ширину и подписи обрежутся).
-                ToolbarItem(placement: .principal) {
-                    GlassPillButton(title: "Пригласить друга") { showInvite = true }
-                }
-                ToolbarItem(placement: .principal) {
-                    GlassPillButton(title: "Вставить ссылку") { showNewChat = true }
-                }
-                ToolbarItem(placement: .principal) {
-                    moreMenu
-                }
             }
             .sheet(isPresented: $showNewChat) { newChatSheet }
             .sheet(isPresented: $showInvite) {
