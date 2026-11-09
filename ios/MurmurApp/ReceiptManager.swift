@@ -85,7 +85,11 @@ final class ReceiptManager {
     private func scheduleFlush(peer: String) {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.timers.removeValue(forKey: peer)
+            // 2026-11-09 EXC_BAD_ACCESS fix: timers is queue-protected state;
+            // the work item runs on a global queue thread — ALL access to the
+            // dictionary must go through queue.sync (the bare removeValue
+            // here raced the queue and corrupted the dictionary).
+            self.queue.sync { self.timers.removeValue(forKey: peer) }
             Task { await self.flush(peer: peer) }
         }
         queue.sync { timers[peer] = work }
