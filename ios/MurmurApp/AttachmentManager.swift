@@ -57,7 +57,7 @@ enum AttachmentManager {
         let quotedKey = "\"\(keyB64)\""
         let identity = try IdentityStore.shared.requireIdentity()
         let wrapOne: (String) throws -> String = { npub in
-            let sealed = try identity.eciesEncrypt(recipientNpub: npub, plaintext: Data(quotedKey.utf8))
+            let sealed = try IdentityStore.shared.cryptoEncrypt(identity, recipientNpub: npub, plaintext: Data(quotedKey.utf8))
             return sealed.base64EncodedString()
         }
         let r = try wrapOne(peerNpub)
@@ -162,7 +162,7 @@ enum AttachmentManager {
         guard let sealed = Data(base64Encoded: pick) else {
             throw RelayError.make("bad wrapped_key")
         }
-        var keyBytes = try identity.eciesDecrypt(sealed: sealed)
+        var keyBytes = try IdentityStore.shared.cryptoDecrypt(identity, sealed: sealed)
         // PWA chain: encryptForRecipient JSON.stringifies the plaintext, so the
         // sealed payload is "\"<b64-of-key>\"" (46B = 2 quotes + 44 b64 chars —
         // verified against a live prod envelope); decryptEnvelope JSON.parses

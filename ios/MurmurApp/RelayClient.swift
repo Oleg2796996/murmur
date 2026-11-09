@@ -135,10 +135,7 @@ final class RelayClient {
         // and JSON.parses after decrypt — raw text breaks the peer's client
         // ("не удалось расшифровать"). Always send the JSON shape.
         let plainBytes = try JSONSerialization.data(withJSONObject: plainObj)
-        let sealed = try identity.eciesEncrypt(
-            recipientNpub: peer,
-            plaintext: plainBytes
-        )
+        let sealed = try IdentityStore.shared.cryptoEncrypt(identity, recipientNpub: peer, plaintext: plainBytes)
         let ct = sealed.base64EncodedString()
 
         // 2. Sign `from|to|ts|ct` exactly like pwa/app.js.
@@ -221,7 +218,7 @@ final class RelayClient {
             // receipt pipeline (✓✓ on OUR outgoing). Group control: ignored.
             if row.kind == "receipt", let ct = row.ct, let data = Data(base64Encoded: ct),
                let identity = try? IdentityStore.shared.requireIdentity(),
-               let pt = try? identity.eciesDecrypt(sealed: data),
+               let pt = try? IdentityStore.shared.cryptoDecrypt(identity, sealed: data),
                let obj = try? JSONSerialization.jsonObject(with: pt) as? [String: Any],
                let peer = row.from_npub {
                 ReceiptManager.shared.consume(peer: peer, plain: obj)
@@ -230,7 +227,7 @@ final class RelayClient {
         }
         guard let ct = row.ct, let data = Data(base64Encoded: ct) else { return nil }
         guard let identity = try? IdentityStore.shared.requireIdentity() else { return nil }
-        guard let pt = try? identity.eciesDecrypt(sealed: data) else { return nil }
+        guard let pt = try? IdentityStore.shared.cryptoDecrypt(identity, sealed: data) else { return nil }
         // PWA wire format: JSON {body, reply_to, attachments}; receipts carry
         // _kind:"receipt" (or rt:1) and must be swallowed, not rendered
         // (pwa/receipts.js isReceiptRow parity).

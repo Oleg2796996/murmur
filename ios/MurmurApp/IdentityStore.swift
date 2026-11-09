@@ -10,16 +10,34 @@ final class IdentityStore {
     static let shared = IdentityStore()
 
     private let keychainAccount = "murmur.sk"
-    private var identity: MurmurIdentity?
+    // 2026-11-09 EXC_BAD_ACCESS fix: the uniffi MurmurIdentity object was
+    // called concurrently from poll batches (Task.detached), attachment
+    // chips (.task in LazyVStack), PushManager, ReceiptManager. The
+    // generated Swift class is not thread-safe w.r.t. ownership
+    // (uniffiClonePointer racing deinit/free). ALL identity access now
+    // funnels through this serial queue.
+    private let cryptoQueue = DispatchQueue(label: "murmur.identity.crypto")
+    private var _identity: MurmurIdentity?
 
-    var npub: String? { identity?.npub() }
+    /// Thread-safe snapshot: clone the FFI handle before leaving the queue.
+    /// The clone increments the Rust Arc refcount atomically, so the caller
+    /// owns a reference that cannot be freed underneath it.
+    var identity: MurmurIdentity? {
+        cryptoQueue.sync { _identity }
+    }
+
+    var npub: String? {
+        guard let identity else { return nil }
+        return cryptoQueue.sync { identity.npub() }
+    }
 
     /// Loads the identity from Keychain if present.
     @discardableResult
     func restoreFromKeychain() -> Bool {
         guard let sk = Keychain.read(account: keychainAccount) else { return false }
         do {
-            identity = try MurmurIdentity.restoreHex(skHex: sk)
+            let id = try MurmurIdentity.restoreHex(skHex: sk)
+            cryptoQueue.sync { _identity = id }
             return true
         } catch {
             NSLog("murmur: keychain identity failed to restore: \(error)")
@@ -32,8 +50,8 @@ final class IdentityStore {
         let id = MurmurIdentity.generate()
         let sk = try id.exportSkHex()
         try Keychain.write(account: keychainAccount, value: sk)
-        identity = id
-        return id.npub()
+        cryptoQueue.sync { _identity = id }
+        return cryptoQueue.sync { id.npub() }
     }
 
     /// Imports an identity from the PWA's `murmur.sk` hex string.
@@ -41,8 +59,8 @@ final class IdentityStore {
         let trimmed = skHex.trimmingCharacters(in: .whitespacesAndNewlines)
         let id = try MurmurIdentity.restoreHex(skHex: trimmed)
         try Keychain.write(account: keychainAccount, value: trimmed)
-        identity = id
-        return id.npub()
+        cryptoQueue.sync { _identity = id }
+        return cryptoQueue.sync { id.npub() }
     }
 
     /// Imports a `.murmur` backup file (PBKDF2 + AES-GCM, parsed in Rust).
@@ -57,12 +75,39 @@ final class IdentityStore {
         return identity
     }
 
+    // MARK: - Serialized crypto (2026-11-09 EXC_BAD_ACCESS fix)
+    //
+    // The uniffi-generated MurmurIdentity must not be touched from multiple
+    // threads at once (clone-while-free race → EXC_BAD_ACCESS). All
+    // ECIES/sign calls funnel through this serial queue.
+
+    /// ECIES-decrypt on the crypto queue (blocking the caller is fine: the
+    /// call site is already async background work).
+    func cryptoDecrypt(_ identity: MurmurIdentity, sealed: Data) throws -> Data {
+        try cryptoQueue.sync { try identity.eciesDecrypt(sealed: sealed) }
+    }
+
+    /// ECIES-encrypt on the crypto queue.
+    func cryptoEncrypt(_ identity: MurmurIdentity, recipientNpub: String, plaintext: Data) throws -> Data {
+        try cryptoQueue.sync { try identity.eciesEncrypt(recipientNpub: recipientNpub, plaintext: plaintext) }
+    }
+
+    /// Envelope signing on the crypto queue.
+    func cryptoSignEnvelope(_ identity: MurmurIdentity, senderNpub: String, payload: Data) throws -> String {
+        try cryptoQueue.sync { try identity.signEnvelopeHex(senderNpub: senderNpub, payload: payload) }
+    }
+
+    /// Raw sign on the crypto queue.
+    func cryptoSignHex(_ identity: MurmurIdentity, msg: Data) throws -> String {
+        try cryptoQueue.sync { try identity.signHex(msg: msg) }
+    }
+
     /// Signs the canonical envelope payload and returns lowercase hex,
     /// identical to the PWA WASM `sign_envelope`.
     func signEnvelope(payload: Data) throws -> String {
         let id = try requireIdentity()
         let npub = id.npub()
-        return try id.signEnvelopeHex(senderNpub: npub, payload: payload)
+        return try cryptoQueue.sync { try id.signEnvelopeHex(senderNpub: npub, payload: payload) }
     }
 
     /// `murmur-auth-v1` token used for /api/history and /api/contacts
@@ -71,7 +116,7 @@ final class IdentityStore {
         let id = try requireIdentity()
         let ts = Int(now.timeIntervalSince1970)
         let msg = "murmur-auth-v1|\(id.npub())|\(ts)"
-        let sig = id.signHex(msg: Data(msg.utf8))
+        let sig = try cryptoQueue.sync { try id.signHex(msg: Data(msg.utf8)) }
         return "&_ts=\(ts)&_sig=\(Self.percentEncodeQueryValue(sig))"
     }
 }
@@ -126,7 +171,7 @@ extension IdentityStore {
     /// Wipes every local trace of the identity (PWA parity: "Удалить все
     /// данные" — localStorage.clear() + IDB wipe).
     func wipeAll() {
-        identity = nil
+        cryptoQueue.sync { _identity = nil }
         Keychain.delete(account: keychainAccount)
     }
 }

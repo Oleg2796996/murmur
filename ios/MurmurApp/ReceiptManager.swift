@@ -151,7 +151,7 @@ final class ReceiptManager {
         let pad = String(repeating: "0123456789abcdef".map { $0 }.randomElement()!, count: padLen)
         let plain: [String: Any] = ["v": 1, "_t": kind, "msgs": msgs, "pad": pad]
         let plainBytes = try JSONSerialization.data(withJSONObject: plain)
-        let sealed = try identity.eciesEncrypt(recipientNpub: peer, plaintext: plainBytes)
+        let sealed = try IdentityStore.shared.cryptoEncrypt(identity, recipientNpub: peer, plaintext: plainBytes)
         let ct = sealed.base64EncodedString()
 
         let ts = Int(Date().timeIntervalSince1970)
