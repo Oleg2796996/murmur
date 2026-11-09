@@ -85,38 +85,40 @@ struct ChatListView: View {
             .toolbarBackground(MurmurTheme.panel, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
-                // 2026-11-09 (Олег, v2): «Новый чат» убран (кнопка есть в
-                // футере сайдбара), кнопки — с ТЕКСТОВЫМИ названиями:
-                // по иконкам не всегда понятно.
-                ToolbarItem(placement: .topBarLeading) {
-                    Text("MurMur")
-                        .font(.headline)
-                        .foregroundStyle(MurmurTheme.text)
-                }
+                // 2026-11-09 (Олег, v4 — финал): «Пригласить» + «Ссылка»
+                // текстом, остальное — в «…» (backup, восстановление,
+                // удаление данных). Заголовок не задаём — навигейшн-бар
+                // отдаёт место кнопкам.
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        showNewChat = true
-                    } label: {
-                        Text("Ссылка")
-                    }
                     Button {
                         showInvite = true
                     } label: {
                         Text("Пригласить")
+                            .foregroundStyle(MurmurTheme.accent)
                     }
+                    .fixedSize()
+                    Button {
+                        showNewChat = true
+                    } label: {
+                        Text("Ссылка")
+                            .foregroundStyle(MurmurTheme.accent)
+                    }
+                    .fixedSize()
                     Menu {
                         Button {
                             showBackupExport = true
                         } label: { Label("Скачать backup", systemImage: "square.and.arrow.down") }
                         Button {
                             showBackupImporter = true
-                        } label: { Label("Восстановить backup", systemImage: "square.and.arrow.up.on.square") }
+                        } label: { Label("Восстановить из backup", systemImage: "square.and.arrow.up.on.square") }
                         Divider()
                         Button(role: .destructive) {
                             showWipeConfirm = true
                         } label: { Label("Удалить все данные", systemImage: "trash") }
                     } label: {
-                        Text("Ещё")
+                        Image(systemName: "ellipsis.circle")
+                            .font(.title3)
+                            .foregroundStyle(MurmurTheme.text)
                     }
                 }
             }
