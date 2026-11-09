@@ -44,7 +44,6 @@ enum Persistence {
 
     static func save(chats: [ChatSummary], contactNames: [String: String], unreadMap: [String: Int]) {
         let state = PersistedState(
-            unreadMap: unreadMap,
             chats: chats.map { chat in
                 PersistedChat(
                     peer: chat.peer,
@@ -62,7 +61,8 @@ enum Persistence {
                 )
             },
             contactNames: contactNames,
-            savedAt: Int(Date().timeIntervalSince1970)
+            savedAt: Int(Date().timeIntervalSince1970),
+            unreadMap: unreadMap
         )
         guard let data = try? JSONEncoder().encode(state) else { return }
         // Atomic write; failures are non-fatal (cache, not source of truth).
