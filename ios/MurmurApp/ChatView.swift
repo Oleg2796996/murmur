@@ -20,6 +20,10 @@ struct ChatView: View {
     @State private var cameraMovieURL: URL?
     @State private var pickedItem: PhotosPickerItem?
     @State private var attaching = false
+    /// True while the message field has keyboard focus — lets the drag
+    /// gesture dismiss the keyboard (scrollDismissesKeyboard only works
+    /// when the ScrollView itself is focusable-linked on iOS 27).
+    @FocusState private var draftFocused: Bool
 
     private var messages: [ChatMessage] {
         app.chats.first(where: { $0.peer == peer })?.messages ?? []
@@ -45,6 +49,17 @@ struct ChatView: View {
                 .defaultScrollAnchor(.bottom)
                 // Swipe down dismisses the keyboard (messenger standard).
                 .scrollDismissesKeyboard(.interactively)
+                // Belt & suspenders: a plain downward drag anywhere on the
+                // feed also ends editing (works even when the scroll gesture
+                // is consumed by rubber-banding at the bottom).
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 30)
+                        .onEnded { value in
+                            if value.translation.height > 40 {
+                                draftFocused = false
+                            }
+                        }
+                )
                 .onAppear {
                     if let last = messages.last {
                         proxy.scrollTo(last.id, anchor: .bottom)
@@ -216,6 +231,7 @@ struct ChatView: View {
                 Task { await sendMovieFile(url, fallbackName: "video") }
             }
             TextField("Сообщение", text: $draft, axis: .vertical)
+                .focused($draftFocused)
                 .lineLimit(1...5)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
