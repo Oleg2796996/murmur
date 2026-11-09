@@ -55,9 +55,12 @@ struct ChatView: View {
                 .onDisappear {
                     if app.openChatPeer == peer { app.openChatPeer = nil }
                 }
-                .onChange(of: messages.count) {
+                .onChange(of: messages.last?.id) {
+                    // Fires on count change AND when the last message is
+                    // replaced by a different one (re-poll/echo) — the feed
+                    // must always land on the newest message.
                     if let last = messages.last {
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                        proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
             }

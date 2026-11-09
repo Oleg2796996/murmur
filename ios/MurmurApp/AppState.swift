@@ -48,6 +48,13 @@ final class AppState: ObservableObject {
             persist()
         }
         loadContactNames()
+        // 2026-11-09 preview/sticker fix #2: WS pushes are the ONLY live
+        // signal for chat-list updates. During a reconnect gap (backoff up
+        // to 60s) pushes are lost; reconcile on every (re)connect so the
+        // list always catches up with the server.
+        relay.onConnected = { [weak self] in
+            Task { @MainActor in self?.reconcileAfterConnect() }
+        }
         relay.onEnvelope = { [weak self] row in
             Task { @MainActor in await self?.handleIncoming(row) }
         }
@@ -103,6 +110,21 @@ final class AppState: ObservableObject {
 
     /// Debounced history re-poll for all known peers (answer to a WS push).
     private var pollTask: Task<Void, Never>?
+    /// Light reconciliation after WS (re)connect: poll every known peer with
+    /// the short depth (25). Cheap now (batched apply + dedup), catches up
+    /// pushes lost during the disconnect gap.
+    func reconcileAfterConnect() {
+        guard authenticated else { return }
+        pollTask?.cancel()
+        pollTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard let self, !Task.isCancelled else { return }
+            for chat in self.chats {
+                await self.pollHistory(peer: chat.peer)
+            }
+        }
+    }
+
     func pollAllPeers() {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
