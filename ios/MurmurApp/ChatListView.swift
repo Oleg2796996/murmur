@@ -43,10 +43,10 @@ struct GlassPillButton: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(MurmurTheme.accent)
-                .padding(.horizontal, 12)
-                .frame(height: 32)
+                .padding(.horizontal, 16)
+                .frame(height: 40)
                 .background {
                     if #available(iOS 26.0, *) {
                         AnyView(
@@ -134,7 +134,7 @@ struct ChatListView: View {
                     moreMenu
                 }
                 .padding(.horizontal, 12)
-                .padding(.top, 2)
+                .padding(.top, 0)
                 .padding(.bottom, 6)
             }
             .searchable(text: $searchText, prompt: "поиск чатов…")
@@ -227,7 +227,7 @@ struct ChatListView: View {
             Image(systemName: "ellipsis.circle")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(MurmurTheme.accent)
-                .frame(width: 32, height: 32)
+                .frame(width: 40, height: 40)
                 .background { glassCircleBackground }
                 .contentShape(Circle())
         }
