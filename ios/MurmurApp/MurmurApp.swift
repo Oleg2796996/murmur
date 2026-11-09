@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct MurmurApp: App {
     @UIApplicationDelegateAdaptor(MurmurAppDelegate.self) private var appDelegate
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var app = AppState()
 
     var body: some Scene {
