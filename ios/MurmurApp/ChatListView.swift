@@ -67,20 +67,6 @@ struct GlassPillButton: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
-        .toolbarSharedBackgroundHidden()
-    }
-}
-
-extension View {
-    /// iOS 26+: opt OUT of the system Liquid Glass "pod" that groups toolbar
-    /// items into one big capsule (Олег: «убери подложку из под кнопок»).
-    /// No-op on iOS 17–25 (system didn't group there anyway).
-    @ViewBuilder func toolbarSharedBackgroundHidden() -> some View {
-        if #available(iOS 26.0, *) {
-            self.sharedBackgroundVisibility(.hidden)
-        } else {
-            self
-        }
     }
 }
 
@@ -146,41 +132,14 @@ struct ChatListView: View {
                 // с backup/удалением. Inline-тайтл обязателен (large title
                 // съедает ширину и подписи обрежутся).
                 ToolbarItem(placement: .principal) {
-                    HStack(spacing: 6) {
                     GlassPillButton(title: "Пригласить друга") { showInvite = true }
-                    GlassPillButton(title: "Вставить ссылку") { showNewChat = true }
-                    Menu {
-                        Button {
-                            showBackupExport = true
-                        } label: { Label("Скачать backup", systemImage: "square.and.arrow.down") }
-                        Button {
-                            showBackupImporter = true
-                        } label: { Label("Восстановить из backup", systemImage: "square.and.arrow.up.on.square") }
-                        Divider()
-                        Button(role: .destructive) {
-                            showWipeConfirm = true
-                        } label: { Label("Удалить все данные", systemImage: "trash") }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(MurmurTheme.accent)
-                            .frame(width: 32, height: 32)
-                            .background {
-                                if #available(iOS 26.0, *) {
-                                    AnyView(Circle().fill(.clear)
-                                        .glassEffect(.regular.tint(.white.opacity(0.08)), in: .circle))
-                                } else {
-                                    AnyView(Circle().fill(.ultraThinMaterial)
-                                        .overlay(Circle().stroke(.white.opacity(0.10), lineWidth: 0.5))
-                                        .shadow(color: .black.opacity(0.25), radius: 4, y: 1))
-                                }
-                            }
-                            .contentShape(Circle())
-                    }
-                    .toolbarSharedBackgroundHidden()
-                    }
                 }
-                .toolbarSharedBackgroundHidden()
+                ToolbarItem(placement: .principal) {
+                    GlassPillButton(title: "Вставить ссылку") { showNewChat = true }
+                }
+                ToolbarItem(placement: .principal) {
+                    moreMenu
+                }
             }
             .sheet(isPresented: $showNewChat) { newChatSheet }
             .sheet(isPresented: $showInvite) {
