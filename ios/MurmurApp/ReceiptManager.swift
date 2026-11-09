@@ -151,12 +151,12 @@ final class ReceiptManager {
         let pad = String(repeating: "0123456789abcdef".map { $0 }.randomElement()!, count: padLen)
         let plain: [String: Any] = ["v": 1, "_t": kind, "msgs": msgs, "pad": pad]
         let plainBytes = try JSONSerialization.data(withJSONObject: plain)
-        let sealed = try IdentityStore.shared.cryptoEncrypt(identity, recipientNpub: peer, plaintext: plainBytes)
+        let sealed = try await IdentityStore.shared.cryptoEncryptAsync(identity, recipientNpub: peer, plaintext: plainBytes)
         let ct = sealed.base64EncodedString()
 
         let ts = Int(Date().timeIntervalSince1970)
         let signedPayload = "\(npub)|\(peer)|\(ts)|\(ct)"
-        let sig = try store.signEnvelope(payload: Data(signedPayload.utf8))
+        let sig = try await store.cryptoSignEnvelopeAsync(identity, senderNpub: npub, payload: Data(signedPayload.utf8))
 
         let wire: [String: Any] = [
             "from": npub, "to": peer, "ct": ct, "ts": ts,

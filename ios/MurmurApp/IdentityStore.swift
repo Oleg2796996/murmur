@@ -102,6 +102,35 @@ final class IdentityStore {
         try cryptoQueue.sync { try identity.signHex(msg: msg) }
     }
 
+    // MARK: Async wrappers — MUST be used from MainActor call sites.
+    // 2026-11-09 second-freeze fix: sync cryptoQueue.sync on the main thread
+    // blocked the UI whenever the queue was busy with a decrypt batch.
+
+    func cryptoDecryptAsync(_ identity: MurmurIdentity, sealed: Data) async throws -> Data {
+        try await Task.detached(priority: .userInitiated) {
+            try IdentityStore.shared.cryptoQueue.sync { try identity.eciesDecrypt(sealed: sealed) }
+        }.value
+    }
+
+    func cryptoEncryptAsync(_ identity: MurmurIdentity, recipientNpub: String, plaintext: Data) async throws -> Data {
+        try await Task.detached(priority: .userInitiated) {
+            try IdentityStore.shared.cryptoQueue.sync { try identity.eciesEncrypt(recipientNpub: recipientNpub, plaintext: plaintext) }
+        }.value
+    }
+
+    func cryptoSignEnvelopeAsync(_ identity: MurmurIdentity, senderNpub: String, payload: Data) async throws -> String {
+        try await Task.detached(priority: .userInitiated) {
+            try IdentityStore.shared.cryptoQueue.sync { try identity.signEnvelopeHex(senderNpub: senderNpub, payload: payload) }
+        }.value
+    }
+
+    /// Auth token computed off-main (async call sites only).
+    func authQueryAsync(now: Date = Date()) async throws -> String {
+        try await Task.detached(priority: .userInitiated) {
+            try IdentityStore.shared.authQuery(now: now)
+        }.value
+    }
+
     /// Signs the canonical envelope payload and returns lowercase hex,
     /// identical to the PWA WASM `sign_envelope`.
     func signEnvelope(payload: Data) throws -> String {

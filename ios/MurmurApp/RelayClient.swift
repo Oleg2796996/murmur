@@ -42,7 +42,7 @@ final class RelayClient {
     func history(peer: String, limit: Int = 25) async throws -> [HistoryRow] {
         let store = IdentityStore.shared
         guard let npub = store.npub else { throw RelayError.make("no identity") }
-        let auth = try store.authQuery()
+        let auth = try await store.authQueryAsync()
         var comps = URLComponents(string: baseURL + "/api/history")!
         comps.queryItems = [
             .init(name: "npub", value: npub),
@@ -72,7 +72,7 @@ final class RelayClient {
     func contacts() async throws -> [(peer: String, lastTs: Int, preview: String)] {
         let store = IdentityStore.shared
         guard let npub = store.npub else { throw RelayError.make("no identity") }
-        let auth = try store.authQuery()
+        let auth = try await store.authQueryAsync()
         guard let url = URL(string: baseURL + "/api/contacts?npub=\(npub)&_t=\(Int(Date().timeIntervalSince1970 * 1000))" + auth) else {
             throw RelayError.make("bad contacts url")
         }
@@ -135,14 +135,14 @@ final class RelayClient {
         // and JSON.parses after decrypt — raw text breaks the peer's client
         // ("не удалось расшифровать"). Always send the JSON shape.
         let plainBytes = try JSONSerialization.data(withJSONObject: plainObj)
-        let sealed = try IdentityStore.shared.cryptoEncrypt(identity, recipientNpub: peer, plaintext: plainBytes)
+        let sealed = try await IdentityStore.shared.cryptoEncryptAsync(identity, recipientNpub: peer, plaintext: plainBytes)
         let ct = sealed.base64EncodedString()
 
         // 2. Sign `from|to|ts|ct` exactly like pwa/app.js.
         let ts = Int(Date().timeIntervalSince1970)
         let signedPayload = "\(npub)|\(peer)|\(ts)|\(ct)"
         let payloadBytes = Data(signedPayload.utf8)
-        let sig = try store.signEnvelope(payload: payloadBytes)
+        let sig = try await store.cryptoSignEnvelopeAsync(identity, senderNpub: npub, payload: payloadBytes)
 
         let env = WireEnvelope(
             from: npub,
@@ -179,6 +179,13 @@ final class RelayClient {
         _ = try? IdentityStore.shared.requireIdentity()
         return await Task.detached(priority: .userInitiated) { [self] in
             rows.map { (row: $0, dec: self.decryptMessage(row: $0)) }
+        }.value
+    }
+
+    /// Single-row decrypt off the main actor (WS live incoming).
+    func decryptRowAsync(row: HistoryRow) async -> Decrypted? {
+        await Task.detached(priority: .userInitiated) { [self] in
+            self.decryptMessage(row: row)
         }.value
     }
 

@@ -56,12 +56,12 @@ enum AttachmentManager {
         let keyB64 = keyBytes.base64EncodedString()
         let quotedKey = "\"\(keyB64)\""
         let identity = try IdentityStore.shared.requireIdentity()
-        let wrapOne: (String) throws -> String = { npub in
-            let sealed = try IdentityStore.shared.cryptoEncrypt(identity, recipientNpub: npub, plaintext: Data(quotedKey.utf8))
+        let wrapOne: (String) async throws -> String = { npub in
+            let sealed = try await IdentityStore.shared.cryptoEncryptAsync(identity, recipientNpub: npub, plaintext: Data(quotedKey.utf8))
             return sealed.base64EncodedString()
         }
-        let r = try wrapOne(peerNpub)
-        let s = (selfNpub == peerNpub) ? r : try wrapOne(selfNpub)
+        let r = try await wrapOne(peerNpub)
+        let s = (selfNpub == peerNpub) ? r : try await wrapOne(selfNpub)
         let wrapJSON = try JSONSerialization.data(withJSONObject: ["r": r, "s": s])
         let wrappedKey = wrapJSON.base64EncodedString()
 

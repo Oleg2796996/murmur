@@ -66,7 +66,9 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
     /// POST /apns/register — proof-of-key: sign "apns-register" with the
     /// identity key (relay verifies the same way as push-register).
     private static func registerToken(hex: String, npub: String) async {
-        guard let sig = try? IdentityStore.shared.signEnvelope(payload: Data("apns-register".utf8)) else {
+        guard let identity = try? IdentityStore.shared.requireIdentity(),
+              let sig = try? await IdentityStore.shared.cryptoSignEnvelopeAsync(
+                identity, senderNpub: npub, payload: Data("apns-register".utf8)) else {
             NSLog("murmur apns register: sign failed")
             return
         }

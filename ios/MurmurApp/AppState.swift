@@ -48,7 +48,7 @@ final class AppState: ObservableObject {
         }
         loadContactNames()
         relay.onEnvelope = { [weak self] row in
-            Task { @MainActor in self?.handleIncoming(row) }
+            Task { @MainActor in await self?.handleIncoming(row) }
         }
         // WS push = metadata only (like the PWA) -> re-poll history.
         relay.onPushMetadata = { [weak self] row in
@@ -269,10 +269,11 @@ final class AppState: ObservableObject {
         contactNames[peer] = name
     }
 
-    private func handleIncoming(_ row: HistoryRow) {
+    private func handleIncoming(_ row: HistoryRow) async {
         guard let peer = peerOf(row), peer != "system:relay" else { return }
         // Service envelopes (✓✓ receipts) are swallowed, not rendered.
-        guard let dec = relay.decryptMessage(row: row), !dec.isService,
+        // 2026-11-09 second-freeze fix: decrypt moved OFF the main actor.
+        guard let dec = await relay.decryptRowAsync(row: row), !dec.isService,
               !dec.body.isEmpty || !dec.attachments.isEmpty else { return }
         let ts = row.ts ?? Int(Date().timeIntervalSince1970)
         upsert(peer: peer, body: dec.displayBody, ts: ts, direction: .incoming,
