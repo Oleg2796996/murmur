@@ -212,7 +212,7 @@ impl ApnsStore {
 /// Push notification content for APNs.
 pub struct ApnsAlert {
     pub body: String,
-    pub badge: u32,
+    pub badge: Option<u32>,
     /// For the (future) VoIP path: custom JSON passed next to `aps`.
     pub custom: serde_json::Value,
 }
@@ -253,9 +253,15 @@ impl ApnsClient {
         let url = format!("{}/3/device/{}", self.base_url, token);
         let mut aps = json!({
             "alert": { "title": "MurMur", "body": alert.body },
-            "badge": alert.badge,
             "sound": "default",
         });
+        // 2026-11-09: badge is managed by the iOS app itself (unreadByPeer).
+        // The server-side count (live envelopes) disagrees with the device's
+        // unread map and the aps.badge write visibly "flickers" the sticker
+        // (correct N → 1). Only stamp badge when explicitly requested.
+        if let Some(b) = alert.badge {
+            aps["badge"] = json!(b);
+        }
         if alert.custom.get("content_available") == Some(&json!(1)) {
             aps["content-available"] = json!(1);
         }
@@ -327,14 +333,15 @@ impl ApnsHandle {
     pub async fn deliver_message_alert(&self, npub: &str, body: &str, badge: u32) {
         let Some(client) = &self.client else { return };
         let Some(store) = &self.store else { return };
+        let _ = badge; // 2026-11-09: badge managed by the iOS app itself; aps.badge omitted.
         for reg in store.tokens_for(npub, "alert") {
             let alert = ApnsAlert {
                 body: body.to_string(),
-                badge,
+                badge: None,
                 custom: json!({}),
             };
             match client.send(&reg.token, &alert).await {
-                Ok(true) => info!(npub = %npub, badge, "APNs alert delivered"),
+                Ok(true) => info!(npub = %npub, "APNs alert delivered (no aps.badge)"),
                 Ok(false) => {
                     warn!(npub = %npub, "APNs token rejected, unregistering");
                     store.remove(npub, "alert");
