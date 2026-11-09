@@ -354,21 +354,16 @@ struct ChatView: View {
             // Decrypt off the MainActor (Rust ECIES per row; on-main decrypt
             // froze the UI on poll bursts — same class of bug as 12fe19e).
             let pairs = await app.relay.decryptRows(rows)
-            for (row, decOpt) in pairs {
-                // Skip undecryptable rows (own outgoing echo — sealed to the
-                // peer's key) and service envelopes (✓✓ receipts).
-                guard let dec = decOpt,
-                      !dec.isService, !dec.body.isEmpty || !dec.attachments.isEmpty else { continue }
-                let direction: ChatMessage.Direction =
-                    (row.from_npub == app.myNpub) ? .outgoing : .incoming
-                await MainActor.run {
-                    app.upsert(peer: peer, body: dec.displayBody, ts: row.ts ?? 0,
-                               direction: direction, hash: row.hash,
-                               attachments: dec.attachments)
-                }
+            // Batch-apply in ONE mutation (2026-11-09 lag fix): per-row upsert
+            // re-rendered the whole list and re-wrote the store per message.
+            let incoming = pairs.compactMap { pair -> (row: HistoryRow, dec: RelayClient.Decrypted)? in
+                guard let dec = pair.dec, !dec.isService,
+                      !dec.body.isEmpty || !dec.attachments.isEmpty else { return nil }
+                return (pair.row, dec)
             }
+            app.applyHistory(peer: peer, incoming: incoming)
         } catch {
-            await MainActor.run { errorText = error.localizedDescription }
+            errorText = error.localizedDescription
         }
         // v160y61 self-heal: our outgoing without ✓✓ older than 90s → receipt_req.
         let outgoing = app.chats.first(where: { $0.peer == peer })?.messages

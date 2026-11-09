@@ -35,7 +35,11 @@ final class RelayClient {
 
     // MARK: - HTTP
 
-    func history(peer: String, limit: Int = 100) async throws -> [HistoryRow] {
+    /// Default poll depth: 25. History polls fire on every WS push and on every
+    /// chat open; each row is a full ECIES decrypt + snapshot diff on-device
+    /// (2026-11-09 lag fix). The device keeps its own archive (Persistence),
+    /// so a deep server poll is redundant anyway.
+    func history(peer: String, limit: Int = 25) async throws -> [HistoryRow] {
         let store = IdentityStore.shared
         guard let npub = store.npub else { throw RelayError.make("no identity") }
         let auth = try store.authQuery()

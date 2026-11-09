@@ -73,11 +73,21 @@ final class AppState: ObservableObject {
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard let self, !Task.isCancelled else { return }
             if let newPeer { await self.pollHistory(peer: newPeer) }
-            for chat in self.chats where chat.peer != newPeer {
-                await self.pollHistory(peer: chat.peer)
+            // 2026-11-09 lag fix: poll ONLY peers touched by recent WS pushes.
+            // The old loop re-polled EVERY chat on EVERY push — each poll was
+            // a 100-row fetch + decrypt + full re-render (now batched, but
+            // still N×HTTP for no reason). Pushes carry from_npub; trust it.
+            var targets = self.pushTouchedPeers
+            if let newPeer { targets.insert(newPeer) }
+            if let from = row?.from_npub, from != self.myNpub { targets.insert(from) }
+            self.pushTouchedPeers.removeAll()
+            for peer in targets where peer != "system:relay" {
+                await self.pollHistory(peer: peer)
             }
         }
     }
+    /// Peers seen in recent WS pushes (metadata-only) — poll targets.
+    private var pushTouchedPeers: Set<String> = []
 
     /// Debounced history re-poll for all known peers (answer to a WS push).
     private var pollTask: Task<Void, Never>?
@@ -97,23 +107,17 @@ final class AppState: ObservableObject {
         guard !peer.isEmpty, peer != "system:relay" else { return }
         do {
             let rows = try await relay.history(peer: peer)
-            // Decrypt OFF the main actor: 12fe19e moved only the JSON decode
-            // off-main, but decryptMessage still ran sync Rust ECIES per row
-            // on the MainActor — a 100-row poll burst starved the UI again.
-            for (row, decOpt) in await relay.decryptRows(rows) {
-                // Content guard parity with handleIncoming/loadHistory: skip
-                // decryptable-but-empty rows so they can't render as "…" pills.
-                guard let dec = decOpt, !dec.isService,
-                      !dec.body.isEmpty || !dec.attachments.isEmpty else { continue }
-                let direction: ChatMessage.Direction =
-                    (row.from_npub == myNpub || row.from_npub == nil) ? .outgoing : .incoming
-                upsert(peer: peer, body: dec.displayBody, ts: row.ts ?? 0,
-                       direction: direction, hash: row.hash, attachments: dec.attachments)
-                // ✓✓ pipeline: incoming rows ack back to the sender.
-                if direction == .incoming, let h = row.hash {
-                    ReceiptManager.shared.queueReceipts(peer: peer, hashes: [h])
-                }
+            // Decrypt OFF the main actor (Rust ECIES per row on-main starved
+            // the UI — 12fe19e). Apply the whole batch in ONE @Published
+            // mutation: per-row upsert caused 100 re-renders + 100 disk
+            // writes per poll (2026-11-09 lag fix).
+            let pairs = await relay.decryptRows(rows)
+            let incoming = pairs.filter { pair in
+                guard let dec = pair.dec, !dec.isService,
+                      !dec.body.isEmpty || !dec.attachments.isEmpty else { return false }
+                return true
             }
+            applyHistory(peer: peer, incoming: incoming)
         } catch {
             NSLog("murmur pollHistory failed: \(error)")
         }
@@ -196,12 +200,20 @@ final class AppState: ObservableObject {
 
     /// Fire-and-forget save after any state change.
     private func persist() {
+        // Debounce: coalesce bursts (poll batches, receipt flushes) into one
+        // JSON snapshot instead of one write per message (2026-11-09 lag fix:
+        // a 100-row poll fired 100 detached encodes of the whole chat store).
+        persistTask?.cancel()
         let snapshot = chats
         let names = contactNames
-        Task.detached(priority: .utility) {
+        persistTask = Task.detached(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled else { return }
             Persistence.save(chats: snapshot, contactNames: names)
         }
     }
+
+    private var persistTask: Task<Void, Never>?
 
     /// PWA parity: 🗑 delete chat — removes messages and the contact entry.
     func deleteChat(peer: String) {
@@ -235,6 +247,65 @@ final class AppState: ObservableObject {
         let to = row.to
         if let to, to != me { return to }
         return nil
+    }
+
+    /// Apply a whole poll batch in one @Published mutation (one objectWillChange,
+    /// one re-sort, one persist) — 2026-11-09 lag fix: per-row upsert on a
+    /// 100-row poll caused 100 full list re-renders + 100 disk writes.
+    /// Skips rows already present (dedup by id) so repeated polls are cheap.
+    func applyHistory(peer: String, incoming: [(row: HistoryRow, dec: RelayClient.Decrypted)]) {
+        guard !incoming.isEmpty, !myNpub.isEmpty else { return }
+        var rows: [(body: String, ts: Int, hash: String?, attachments: [[String: Any]], outgoing: Bool)] = []
+        var receipts: [String] = []
+        for (row, dec) in incoming {
+            let outgoing = (row.from_npub == myNpub || row.from_npub == nil)
+            rows.append((dec.displayBody, row.ts ?? 0, row.hash, dec.attachments, outgoing))
+            if !outgoing, let h = row.hash { receipts.append(h) }
+        }
+        applyRows(peer: peer, rows: rows)
+        if !receipts.isEmpty {
+            ReceiptManager.shared.queueReceipts(peer: peer, hashes: receipts)
+        }
+    }
+
+    /// Batch core: merge decoded history rows into the chat, mutate @Published
+    /// state exactly once.
+    private func applyRows(peer: String, rows: [(body: String, ts: Int, hash: String?, attachments: [[String: Any]], outgoing: Bool)]) {
+        let existing = chats.first(where: { $0.peer == peer })
+        var seen = Set(existing?.messages.map(\.id) ?? [])
+        var fresh: [ChatMessage] = []
+        for r in rows {
+            let id = r.hash ?? "\(peer)-\(r.ts)"
+            guard !seen.contains(id) else { continue }
+            seen.insert(id)
+            fresh.append(ChatMessage(id: id, peer: peer, body: r.body, ts: r.ts,
+                                     direction: r.outgoing ? .outgoing : .incoming,
+                                     status: .sent,
+                                     hash: r.hash, attachments: r.attachments))
+        }
+        let maxTs = rows.map(\.ts).max() ?? 0
+        let lastBody = rows.last(where: { $0.ts == maxTs })?.body ?? ""
+        let lastMimes = rows.last(where: { $0.ts == maxTs })?.attachments.compactMap { $0["mime"] as? String } ?? []
+
+        if let i = chats.firstIndex(where: { $0.peer == peer }) {
+            if maxTs >= chats[i].lastTs {
+                if !lastBody.isEmpty || chats[i].lastBody.isEmpty { chats[i].lastBody = lastBody }
+                chats[i].lastTs = max(maxTs, chats[i].lastTs)
+                chats[i].lastMimes = lastMimes
+            }
+            var msgs = chats[i].messages
+            msgs.append(contentsOf: fresh)
+            msgs.removeDuplicates()
+            msgs.sort { $0.ts < $1.ts }
+            chats[i].messages = msgs
+            chats.sort { $0.lastTs > $1.lastTs }
+        } else {
+            var summary = ChatSummary(peer: peer, lastBody: lastBody, lastTs: maxTs, lastMimes: lastMimes)
+            summary.messages = fresh.sorted { $0.ts < $1.ts }
+            chats.append(summary)
+            chats.sort { $0.lastTs > $1.lastTs }
+        }
+        persist()
     }
 
     func upsert(peer: String, body: String, ts: Int, direction: ChatMessage.Direction,
