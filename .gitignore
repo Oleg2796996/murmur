@@ -16,3 +16,7 @@ crates/*/gen/schemas/
 pwa/cloudflared.log
 data/
 simulation/
+
+# APNs / secrets (never commit)
+secrets/
+*.p8
