@@ -175,10 +175,25 @@ final class AppState: ObservableObject {
     func loadContactList() async {
         do {
             let contacts = try await relay.contacts()
+            var stalePeers: [String] = []
             for c in contacts where c.peer != myNpub && c.peer != "system:relay" {
-                if !chats.contains(where: { $0.peer == c.peer }) {
+                if let existing = chats.first(where: { $0.peer == c.peer }) {
+                    // 2026-11-09 preview/sticker fix: a suspended app loses WS
+                    // pushes; on wake the contacts API is the only signal that
+                    // messages were missed. Server last_ts newer than local →
+                    // poll that peer (fills messages, preview, sticker).
+                    if c.lastTs > existing.lastTs + 2 {
+                        stalePeers.append(c.peer)
+                    }
+                } else {
                     upsert(peer: c.peer, body: "", ts: c.lastTs,
                            direction: .incoming, hash: nil)
+                }
+            }
+            if !stalePeers.isEmpty {
+                NSLog("murmur contacts: \(stalePeers.count) peers with newer server ts, polling")
+                for peer in stalePeers {
+                    await pollHistory(peer: peer)
                 }
             }
         } catch {

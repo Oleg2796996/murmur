@@ -39,9 +39,12 @@ struct ChatView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                 }
+                // 2026-11-09 open-at-bottom fix: defaultScrollAnchor pins the
+                // feed to the newest message on open (LazyVStack + onAppear
+                // scrollTo raced history loading and sometimes landed mid-list).
+                .defaultScrollAnchor(.bottom)
                 // Swipe down dismisses the keyboard (messenger standard).
                 .scrollDismissesKeyboard(.interactively)
-                // Open chat → land at the newest message (bottom of the feed).
                 .onAppear {
                     if let last = messages.last {
                         proxy.scrollTo(last.id, anchor: .bottom)
