@@ -231,9 +231,15 @@ final class AppState: ObservableObject {
     // MARK: - Unread badge (2026-11-09 fix)
 
     /// Icon badge = total unseen. Called after every unread mutation.
+    /// 2026-11-09: hop to main defensively — the runtime aborts with
+    /// "Call must be made on main thread" if any caller lands off-main.
     func updateBadge() {
-        let total = unreadByPeer.values.reduce(0, +)
-        UIApplication.shared.applicationIconBadgeNumber = min(max(total, 0), 99)
+        let total = min(max(unreadByPeer.values.reduce(0, +), 0), 99)
+        if Thread.isMainThread {
+            UIApplication.shared.applicationIconBadgeNumber = total
+        } else {
+            DispatchQueue.main.async { UIApplication.shared.applicationIconBadgeNumber = total }
+        }
     }
 
     /// Incoming message arrived for peer. Bumps unread unless the chat is

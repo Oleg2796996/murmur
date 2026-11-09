@@ -102,8 +102,9 @@ struct AttachmentChip: View {
                 let ext = mime == "video/quicktime" ? "mov" : (mime == "video/webm" ? "webm" : "mp4")
                 let url = dir.appendingPathComponent("\(att["blob_id"] as? String ?? "v").\(ext)")
                 try plain.write(to: url)
-                let p = AVPlayer(url: url)
+                // AVPlayer creation on main (runtime asserts otherwise).
                 await MainActor.run {
+                    let p = AVPlayer(url: url)
                     player = p
                     p.play()   // autoplay inline, like the PWA <video> chip
                 }

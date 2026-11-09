@@ -18,6 +18,9 @@ final class IdentityStore {
     // funnels through this serial queue.
     private let cryptoQueue = DispatchQueue(label: "murmur.identity.crypto")
     private var _identity: MurmurIdentity?
+    /// npub is immutable per identity — cache the string so the hot path
+    /// (chat list rows, every send) never crosses the queue or the FFI.
+    private var _npubCache: String?
 
     /// Thread-safe snapshot: clone the FFI handle before leaving the queue.
     /// The clone increments the Rust Arc refcount atomically, so the caller
@@ -27,8 +30,11 @@ final class IdentityStore {
     }
 
     var npub: String? {
+        if let cached = _npubCache { return cached }
         guard let identity else { return nil }
-        return cryptoQueue.sync { identity.npub() }
+        let v = cryptoQueue.sync { identity.npub() }
+        _npubCache = v
+        return v
     }
 
     /// Loads the identity from Keychain if present.
@@ -37,7 +43,7 @@ final class IdentityStore {
         guard let sk = Keychain.read(account: keychainAccount) else { return false }
         do {
             let id = try MurmurIdentity.restoreHex(skHex: sk)
-            cryptoQueue.sync { _identity = id }
+            cryptoQueue.sync { _identity = id; _npubCache = id.npub() }
             return true
         } catch {
             NSLog("murmur: keychain identity failed to restore: \(error)")
@@ -50,8 +56,8 @@ final class IdentityStore {
         let id = MurmurIdentity.generate()
         let sk = try id.exportSkHex()
         try Keychain.write(account: keychainAccount, value: sk)
-        cryptoQueue.sync { _identity = id }
-        return cryptoQueue.sync { id.npub() }
+        cryptoQueue.sync { _identity = id; _npubCache = id.npub() }
+        return _npubCache ?? ""
     }
 
     /// Imports an identity from the PWA's `murmur.sk` hex string.
@@ -59,8 +65,8 @@ final class IdentityStore {
         let trimmed = skHex.trimmingCharacters(in: .whitespacesAndNewlines)
         let id = try MurmurIdentity.restoreHex(skHex: trimmed)
         try Keychain.write(account: keychainAccount, value: trimmed)
-        cryptoQueue.sync { _identity = id }
-        return cryptoQueue.sync { id.npub() }
+        cryptoQueue.sync { _identity = id; _npubCache = id.npub() }
+        return _npubCache ?? ""
     }
 
     /// Imports a `.murmur` backup file (PBKDF2 + AES-GCM, parsed in Rust).
@@ -193,14 +199,17 @@ enum Keychain {
 extension IdentityStore {
     /// Full sk hex export for the "Мой ключ" reveal (PWA parity: btnShowKey).
     func exportSkHex() -> String? {
-        if let identity, let sk = try? identity.exportSkHex() { return sk }
+        // Serialized: exportSkHex is an FFI call and must not race the queue.
+        if let identity, let sk = try? cryptoQueue.sync({ try identity.exportSkHex() }) {
+            return sk
+        }
         return Keychain.read(account: keychainAccount)
     }
 
     /// Wipes every local trace of the identity (PWA parity: "Удалить все
     /// данные" — localStorage.clear() + IDB wipe).
     func wipeAll() {
-        cryptoQueue.sync { _identity = nil }
+        cryptoQueue.sync { _identity = nil; _npubCache = nil }
         Keychain.delete(account: keychainAccount)
     }
 }
