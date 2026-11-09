@@ -141,7 +141,9 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func pollHistory(peer: String) async {
+    /// Poll history for one peer (batched apply + dedup). Public: MurmurApp
+    /// calls it for the resync path when backgrounding with an open chat.
+    func pollHistory(peer: String) async {
         guard !peer.isEmpty, peer != "system:relay" else { return }
         do {
             let rows = try await relay.history(peer: peer)
