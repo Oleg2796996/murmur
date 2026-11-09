@@ -200,7 +200,7 @@ extension IdentityStore {
     /// Full sk hex export for the "Мой ключ" reveal (PWA parity: btnShowKey).
     func exportSkHex() -> String? {
         // Serialized: exportSkHex is an FFI call and must not race the queue.
-        if let identity, let sk = try? cryptoQueue.sync({ try identity.exportSkHex() }) {
+        if let identity, let sk = try? cryptoQueue.sync(execute: { try identity.exportSkHex() }) {
             return sk
         }
         return Keychain.read(account: keychainAccount)
