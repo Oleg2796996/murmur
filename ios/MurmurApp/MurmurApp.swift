@@ -26,13 +26,16 @@ struct MurmurApp: App {
                 app.refreshOnLaunch()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                UIApplication.shared.applicationIconBadgeNumber = 0
+                // 2026-11-09 badge fix: unread now tracked per-peer in
+                // AppState.unreadByPeer (cleared by opening the chat). While
+                // the app is foreground the icon badge is not visible, and
+                // incoming to the OPEN chat is auto-read; for other chats the
+                // badge stays truthful via updateBadge().
+                app.updateBadge()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-                // Local badge while backgrounded (APNs pushes add server-side
-                // badge once keys are wired; this covers no-push case).
-                let unread = app.chats.reduce(0) { $0 + $1.messages.filter { $0.direction == .incoming }.count }
-                UIApplication.shared.applicationIconBadgeNumber = min(unread, 99)
+                // Recompute from the unread map (not total incoming ever).
+                app.updateBadge()
             }
         }
     }

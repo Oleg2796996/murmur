@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Root state: identity presence, relay client, chat list.
 @MainActor
@@ -17,6 +18,15 @@ final class AppState: ObservableObject {
         didSet { persistContactNames() }
     }
 
+    /// peer -> unseen incoming count (PWA unreadMap parity). Drives the icon
+    /// badge and (future) chat-list badges. 2026-11-09: the old badge logic
+    /// counted ALL incoming messages ever, so the sticker never went to 0.
+    @Published var unreadByPeer: [String: Int] = [:]
+
+    /// Chat currently open on screen (set by ChatView onAppear/onDisappear).
+    /// Incoming messages for this peer do not bump unread.
+    var openChatPeer: String?
+
     let relay = RelayClient()
 
     private let contactNamesKey = "murmur.contact_names"
@@ -33,6 +43,7 @@ final class AppState: ObservableObject {
             // chats before the filter existed (undelivered notices).
             chats = restored.chats.filter { $0.peer != "system:relay" }
             contactNames = restored.contactNames
+            unreadByPeer = restored.unreadMap
             persist()
         }
         loadContactNames()
@@ -192,6 +203,9 @@ final class AppState: ObservableObject {
         relay.disconnect()
         chats = []
         contactNames = [:]
+        unreadByPeer = [:]
+        openChatPeer = nil
+        updateBadge()
         UserDefaults.standard.removeObject(forKey: contactNamesKey)
         Persistence.wipe()
         authenticated = false
@@ -206,11 +220,36 @@ final class AppState: ObservableObject {
         persistTask?.cancel()
         let snapshot = chats
         let names = contactNames
+        let unread = unreadByPeer
         persistTask = Task.detached(priority: .utility) {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard !Task.isCancelled else { return }
-            Persistence.save(chats: snapshot, contactNames: names)
+            Persistence.save(chats: snapshot, contactNames: names, unreadMap: unread)
         }
+    }
+
+    // MARK: - Unread badge (2026-11-09 fix)
+
+    /// Icon badge = total unseen. Called after every unread mutation.
+    func updateBadge() {
+        let total = unreadByPeer.values.reduce(0, +)
+        UIApplication.shared.applicationIconBadgeNumber = min(max(total, 0), 99)
+    }
+
+    /// Incoming message arrived for peer. Bumps unread unless the chat is
+    /// open on screen right now.
+    func bumpUnread(peer: String, count: Int = 1) {
+        guard peer != myNpub, peer != "system:relay", count > 0 else { return }
+        guard openChatPeer != peer else { return }
+        unreadByPeer[peer, default: 0] += count
+        updateBadge()
+    }
+
+    /// Chat opened (or incoming arrived while it is open) — clear its unread.
+    func markChatRead(peer: String) {
+        guard unreadByPeer[peer] != nil, unreadByPeer[peer] != 0 else { return }
+        unreadByPeer[peer] = 0
+        updateBadge()
     }
 
     private var persistTask: Task<Void, Never>?
@@ -219,6 +258,10 @@ final class AppState: ObservableObject {
     func deleteChat(peer: String) {
         chats.removeAll { $0.peer == peer }
         contactNames.removeValue(forKey: peer)
+        if unreadByPeer[peer] != nil {
+            unreadByPeer[peer] = nil
+            updateBadge()
+        }
         persist()
     }
 
@@ -234,6 +277,7 @@ final class AppState: ObservableObject {
         let ts = row.ts ?? Int(Date().timeIntervalSince1970)
         upsert(peer: peer, body: dec.displayBody, ts: ts, direction: .incoming,
                hash: row.hash, attachments: dec.attachments)
+        bumpUnread(peer: peer)
         // ✓✓ pipeline: received message → ack its envelope hash back to sender.
         if let h = row.hash {
             ReceiptManager.shared.queueReceipts(peer: peer, hashes: [h])
@@ -262,7 +306,10 @@ final class AppState: ObservableObject {
             rows.append((dec.displayBody, row.ts ?? 0, row.hash, dec.attachments, outgoing))
             if !outgoing, let h = row.hash { receipts.append(h) }
         }
-        applyRows(peer: peer, rows: rows)
+        let freshCount = applyRows(peer: peer, rows: rows)
+        if freshCount > 0 {
+            bumpUnread(peer: peer, count: freshCount)
+        }
         if !receipts.isEmpty {
             ReceiptManager.shared.queueReceipts(peer: peer, hashes: receipts)
         }
@@ -270,7 +317,8 @@ final class AppState: ObservableObject {
 
     /// Batch core: merge decoded history rows into the chat, mutate @Published
     /// state exactly once.
-    private func applyRows(peer: String, rows: [(body: String, ts: Int, hash: String?, attachments: [[String: Any]], outgoing: Bool)]) {
+    @discardableResult
+    private func applyRows(peer: String, rows: [(body: String, ts: Int, hash: String?, attachments: [[String: Any]], outgoing: Bool)]) -> Int {
         let existing = chats.first(where: { $0.peer == peer })
         var seen = Set(existing?.messages.map(\.id) ?? [])
         var fresh: [ChatMessage] = []
@@ -306,6 +354,7 @@ final class AppState: ObservableObject {
             chats.sort { $0.lastTs > $1.lastTs }
         }
         persist()
+        return fresh.filter { $0.direction == .incoming }.count
     }
 
     func upsert(peer: String, body: String, ts: Int, direction: ChatMessage.Direction,

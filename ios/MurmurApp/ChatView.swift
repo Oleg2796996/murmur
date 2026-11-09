@@ -45,6 +45,11 @@ struct ChatView: View {
                     if let last = messages.last {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
+                    app.openChatPeer = peer
+                    app.markChatRead(peer: peer)
+                }
+                .onDisappear {
+                    if app.openChatPeer == peer { app.openChatPeer = nil }
                 }
                 .onChange(of: messages.count) {
                     if let last = messages.last {

@@ -28,6 +28,8 @@ enum Persistence {
         var chats: [PersistedChat]
         var contactNames: [String: String]
         var savedAt: Int
+        /// peer -> unseen count (PWA unreadMap parity); optional for upgrade.
+        var unreadMap: [String: Int]? = nil
     }
 
     static var fileURL: URL {
@@ -40,8 +42,9 @@ enum Persistence {
         return try? JSONDecoder().decode(PersistedState.self, from: data)
     }
 
-    static func save(chats: [ChatSummary], contactNames: [String: String]) {
+    static func save(chats: [ChatSummary], contactNames: [String: String], unreadMap: [String: Int]) {
         let state = PersistedState(
+            unreadMap: unreadMap,
             chats: chats.map { chat in
                 PersistedChat(
                     peer: chat.peer,
@@ -66,8 +69,9 @@ enum Persistence {
         try? data.write(to: fileURL, options: .atomic)
     }
 
-    static func restoreChats() -> (chats: [ChatSummary], contactNames: [String: String])? {
+    static func restoreChats() -> (chats: [ChatSummary], contactNames: [String: String], unreadMap: [String: Int])? {
         guard let state = load() else { return nil }
+        let unread = state.unreadMap ?? [:]
         let chats = state.chats.compactMap { chat -> ChatSummary? in
             var summary = ChatSummary(peer: chat.peer, lastBody: chat.lastBody, lastTs: chat.lastTs,
                                       lastMimes: chat.lastMimes ?? [])
@@ -89,7 +93,7 @@ enum Persistence {
             if summary.messages.isEmpty { return nil }
             return summary
         }
-        return (chats, state.contactNames)
+        return (chats, state.contactNames, unread)
     }
 
     static func wipe() {
