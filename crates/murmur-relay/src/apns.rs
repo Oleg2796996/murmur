@@ -80,6 +80,11 @@ pub struct ApnsKey {
     key_pair: ES256KeyPair,
     key_id: String,
     team_id: String,
+    /// Cached provider JWT + its mint time. Apple rate-limits provider token
+    /// refreshes (APNs 429 TooManyProviderTokenUpdates); a fresh JWT per
+    /// send gets throttled after a few pushes ("works every other time").
+    /// Reuse one token for ~50 minutes (Apple validity is 1 hour).
+    cached_token: Mutex<Option<(String, u64)>>,
 }
 
 impl ApnsKey {
@@ -104,21 +109,33 @@ impl ApnsKey {
             key_pair,
             key_id: cfg.key_id.clone(),
             team_id: cfg.team_id.clone(),
+            cached_token: Mutex::new(None),
         }))
     }
 
     /// Build the provider JWT (ES256 with kid header).
-    /// Apple: iss = team id, iat = now. Token valid ~1 hour, we mint per send
-    /// (cheap ES256 sign) — simpler than a cached-token invalidation dance.
+    /// Apple: iss = team id, iat = now. Token valid ~1 hour.
+    /// v-apns-cache (2026-11-09): mint at most once per 50 min. Minting per
+    /// send tripped Apple's provider-token-update rate limit (429
+    /// TooManyProviderTokenUpdates) — pushes worked "every other time".
     fn provider_token(&self) -> anyhow::Result<String> {
+        const TOKEN_TTL: u64 = 50 * 60; // 50 min (Apple honors ~1h)
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        let mut cache = self.cached_token.lock();
+        if let Some((token, minted_at)) = cache.as_ref() {
+            if now.saturating_sub(*minted_at) < TOKEN_TTL {
+                return Ok(token.clone());
+            }
+        }
         let mut claims = jwt_simple::prelude::Claims::with_custom_claims(
             json!({}),
             jwt_simple::prelude::Duration::from_secs(3600),
         );
         claims.issuer = Some(self.team_id.clone());
         claims.issued_at = Some(jwt_simple::prelude::UnixTimeStamp::from_secs(now));
-        Ok(self.key_pair.sign(claims)?)
+        let token = self.key_pair.sign(claims)?;
+        *cache = Some((token.clone(), now));
+        Ok(token)
     }
 }
 
