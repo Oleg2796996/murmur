@@ -25,12 +25,23 @@ struct MurmurApp: App {
                 app.connect()
                 app.refreshOnLaunch()
             }
+            .onChange(of: scenePhase) { _, phase in
+                // Track foreground state for the unread logic: incoming to
+                // the open chat counts toward the badge when not active.
+                app.appState = (phase == .active) ? .active : .background
+                if phase == .background, let peer = app.openChatPeer {
+                    // Re-entering background with a chat open: the last poll
+                    // may have been suppressed by openChatPeer — resync.
+                    Task { @MainActor in await app.pollHistory(peer: peer) }
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                // 2026-11-09 badge fix: unread now tracked per-peer in
-                // AppState.unreadByPeer (cleared by opening the chat). While
-                // the app is foreground the icon badge is not visible, and
-                // incoming to the OPEN chat is auto-read; for other chats the
-                // badge stays truthful via updateBadge().
+                // Back to foreground with the chat open: everything that
+                // accumulated while backgrounded is about to be visible in
+                // the open feed → clear its unread.
+                if let peer = app.openChatPeer {
+                    app.markChatRead(peer: peer)
+                }
                 app.updateBadge()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in

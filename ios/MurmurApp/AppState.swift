@@ -28,6 +28,10 @@ final class AppState: ObservableObject {
     /// Incoming messages for this peer do not bump unread.
     var openChatPeer: String?
 
+    /// Foreground state (driven by MurmurApp scenePhase). While inactive/
+    /// backgrounded, incoming to the OPEN chat bumps unread (badge must grow).
+    var appState: UIApplication.State = .active
+
     let relay = RelayClient()
 
     private let contactNamesKey = "murmur.contact_names"
@@ -283,7 +287,11 @@ final class AppState: ObservableObject {
     /// open on screen right now.
     func bumpUnread(peer: String, count: Int = 1) {
         guard peer != myNpub, peer != "system:relay", count > 0 else { return }
-        guard openChatPeer != peer else { return }
+        // 2026-11-09 badge fix: "open chat" suppresses the LIST sticker only
+        // while the app is foreground. When the app is backgrounded with the
+        // chat open, incoming messages MUST count (the old guard swallowed
+        // them forever → sticker stuck at the last foreground value).
+        if appState == .active, openChatPeer == peer { return }
         unreadByPeer[peer, default: 0] += count
         updateBadge()
     }
