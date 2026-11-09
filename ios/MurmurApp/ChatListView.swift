@@ -67,6 +67,20 @@ struct GlassPillButton: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
+        .toolbarSharedBackgroundHidden()
+    }
+}
+
+extension View {
+    /// iOS 26+: opt OUT of the system Liquid Glass "pod" that groups toolbar
+    /// items into one big capsule (Олег: «убери подложку из под кнопок»).
+    /// No-op on iOS 17–25 (system didn't group there anyway).
+    @ViewBuilder func toolbarSharedBackgroundHidden() -> some View {
+        if #available(iOS 26.0, *) {
+            self.sharedBackgroundVisibility(.hidden)
+        } else {
+            self
+        }
     }
 }
 
@@ -131,7 +145,8 @@ struct ChatListView: View {
                 // без сокращений), отдельная компактная стеклянная «…»
                 // с backup/удалением. Inline-тайтл обязателен (large title
                 // съедает ширину и подписи обрежутся).
-                ToolbarItemGroup(placement: .topBarTrailing) {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 6) {
                     GlassPillButton(title: "Пригласить друга") { showInvite = true }
                     GlassPillButton(title: "Вставить ссылку") { showNewChat = true }
                     Menu {
@@ -162,7 +177,10 @@ struct ChatListView: View {
                             }
                             .contentShape(Circle())
                     }
+                    .toolbarSharedBackgroundHidden()
+                    }
                 }
+                .toolbarSharedBackgroundHidden()
             }
             .sheet(isPresented: $showNewChat) { newChatSheet }
             .sheet(isPresented: $showInvite) {
