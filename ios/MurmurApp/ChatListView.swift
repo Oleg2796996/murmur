@@ -85,55 +85,39 @@ struct ChatListView: View {
             .toolbarBackground(MurmurTheme.panel, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
-                // 2026-11-09 (Олег): действия из «…» — отдельными иконками
-                // сверху; «Мой ключ» убран (остался в PWA-паритете меню,
-                // сюда не выносился).
-                ToolbarItem(placement: .topBarTrailing) {
+                // 2026-11-09 (Олег, v2): «Новый чат» убран (кнопка есть в
+                // футере сайдбара), кнопки — с ТЕКСТОВЫМИ названиями:
+                // по иконкам не всегда понятно.
+                ToolbarItem(placement: .topBarLeading) {
+                    Text("MurMur")
+                        .font(.headline)
+                        .foregroundStyle(MurmurTheme.text)
+                }
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
                         showNewChat = true
                     } label: {
-                        Image(systemName: "square.and.pencil")
+                        Text("Ссылка")
                     }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        pasteInvite()
-                    } label: {
-                        Image(systemName: "doc.on.clipboard")
-                    }
-                    .accessibilityLabel("Вставить ссылку")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showInvite = true
                     } label: {
-                        Image(systemName: "envelope")
+                        Text("Пригласить")
                     }
-                    .accessibilityLabel("Пригласить друга")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showBackupImporter = true
+                    Menu {
+                        Button {
+                            showBackupExport = true
+                        } label: { Label("Скачать backup", systemImage: "square.and.arrow.down") }
+                        Button {
+                            showBackupImporter = true
+                        } label: { Label("Восстановить backup", systemImage: "square.and.arrow.up.on.square") }
+                        Divider()
+                        Button(role: .destructive) {
+                            showWipeConfirm = true
+                        } label: { Label("Удалить все данные", systemImage: "trash") }
                     } label: {
-                        Image(systemName: "square.and.arrow.up.on.square")
+                        Text("Ещё")
                     }
-                    .accessibilityLabel("Восстановить backup")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showBackupExport = true
-                    } label: {
-                        Image(systemName: "square.and.arrow.down")
-                    }
-                    .accessibilityLabel("Скачать backup")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(role: .destructive) {
-                        showWipeConfirm = true
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .accessibilityLabel("Удалить все данные")
                 }
             }
             .sheet(isPresented: $showNewChat) { newChatSheet }
