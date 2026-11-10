@@ -324,12 +324,12 @@ final class CallManager: NSObject, ObservableObject {
         let formats = RTCCameraVideoCapturer.supportedFormats(for: back)
         let target = CGSize(width: 640, height: 480)
         let format = formats.min(by: { a, b in
-            let d1 = abs((CMVideoFormatDescriptionGetDimensions(a.formatDescription).width) - target.width)
-            let d2 = abs((CMVideoFormatDescriptionGetDimensions(b.formatDescription).width) - target.width)
+            let d1 = abs(CGFloat(CMVideoFormatDescriptionGetDimensions(a.formatDescription).width) - target.width)
+            let d2 = abs(CGFloat(CMVideoFormatDescriptionGetDimensions(b.formatDescription).width) - target.width)
             return d1 < d2
         })!
         let fps = format.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 30
-        capturer.startCapture(with: back, format: format, fps: Int32(min(fps, 30)))
+        capturer.startCapture(with: back, format: format, fps: Int(min(fps, 30)))
     }
 
     // MARK: - Controls
