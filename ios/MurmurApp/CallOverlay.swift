@@ -16,7 +16,7 @@ struct CallOverlay: View {
     var body: some View {
         ZStack {
             // Remote video full background (video calls) or dark gradient.
-            if cm.phase == .connected, cm.activeCallIsVideo, let track = cm.remoteVideoTrack {
+            if case .connected = cm.phase, cm.activeCallIsVideo, let track = cm.remoteVideoTrack {
                 RemoteVideoView(track: track)
                     .ignoresSafeArea()
             } else {
@@ -105,6 +105,12 @@ struct CallOverlay: View {
         }
     }
 
+    /// True when the current call is connected (controls become active).
+    private var ifCaseIsConnected: Double {
+        if case .connected = cm.phase { return 1 }
+        return 0
+    }
+
     private func callControls() -> some View {
         HStack(spacing: 56) {
             controlButton(system: "mic.fill", active: cm.micMuted, color: .white) {
@@ -115,7 +121,7 @@ struct CallOverlay: View {
                 cm.toggleCamera()
             }
         }
-        .opacity(cm.phase == .connected ? 1 : 0)
+        .opacity(ifCaseIsConnected) 
     }
 
     private func controlButton(system: String, active: Bool, color: Color, action: @escaping () -> Void) -> some View {
@@ -131,9 +137,9 @@ struct CallOverlay: View {
         }
     }
 
+    @ViewBuilder
     private func callTargetButton() -> some View {
-        switch cm.phase {
-        case .incoming:
+        if case .incoming = cm.phase {
             Button(action: onAccept) {
                 ZStack {
                     Circle()
@@ -144,7 +150,7 @@ struct CallOverlay: View {
                         .foregroundColor(.white)
                 }
             }
-        case .outgoing:
+        } else if case .outgoing = cm.phase {
             Button(action: onDecline) {
                 ZStack {
                     Circle()
@@ -155,7 +161,7 @@ struct CallOverlay: View {
                         .foregroundColor(.white)
                 }
             }
-        default:
+        } else {
             // connecting: keep empty space for symmetry.
             EmptyView()
         }
@@ -181,11 +187,11 @@ struct RemoteVideoView: UIViewRepresentable {
     func makeUIView(context: Context) -> RTCMTLVideoView {
         let view = RTCMTLVideoView()
         view.videoContentMode = .scaleAspectFill
-        track.addRenderer(view)
+        track.add(view)
         return view
     }
 
     func updateUIView(_ uiView: RTCMTLVideoView, context: Context) {
-        track.addRenderer(uiView)
+        track.add(uiView)
     }
 }
