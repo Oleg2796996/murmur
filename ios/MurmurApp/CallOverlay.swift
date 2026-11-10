@@ -74,6 +74,7 @@ struct CallOverlay: View {
         .onDisappear {
             // Overlay closed = end any active/pending call (PWA parity:
             // closing the call UI hangs up).
+            NSLog("murmur call: overlay onDisappear, phase=\(cm.phase)")
             switch cm.phase {
             case .idle: break
             case .incoming: cm.decline()
