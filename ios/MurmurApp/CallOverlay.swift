@@ -37,14 +37,9 @@ struct CallOverlay: View {
 
                 Spacer()
 
-                // Controls
-                callControls()
-
-                Spacer()
-
-                // Phase-dependent bottom controls:
-                // incoming → Accept + Decline; outgoing → Cancel;
-                // connected → mic/camera + hangup.
+                // Phase-dependent bottom controls (mic/camera live here in
+                // connected — do NOT also render callControls() middle row,
+                // it duplicated the buttons).
                 callBottomControls()
             }
 
@@ -148,14 +143,13 @@ struct CallOverlay: View {
             VStack(spacing: 24) {
                 if case .connected = cm.phase {
                     HStack(spacing: 56) {
-                        controlButton(system: "mic.fill", active: cm.micMuted, color: .white) {
+                        controlButton(system: "mic.fill", active: cm.micMuted) {
                             cm.toggleMic()
                         }
-                        controlButton(system: "camera.fill", active: cm.cameraOff, color: .white) {
+                        controlButton(system: "video.fill", active: cm.cameraOff) {
                             cm.toggleCamera()
                         }
                     }
-                    .opacity(ifCaseIsConnected)
                 }
                 Button(action: onHangup) {
                     ZStack {
@@ -174,27 +168,14 @@ struct CallOverlay: View {
         }
     }
 
-    private func callControls() -> some View {
-        HStack(spacing: 56) {
-            controlButton(system: "mic.fill", active: cm.micMuted, color: .white) {
-                cm.toggleMic()
-            }
-            controlButton(system: "camera.fill", active: cm.cameraOff, color: .white) {
-                cm.toggleCamera()
-            }
-        }
-        .opacity(ifCaseIsConnected)
-        .allowsHitTesting(ifCaseIsConnected == 1)
-    }
-
-    private func controlButton(system: String, active: Bool, color: Color, action: @escaping () -> Void) -> some View {
+    private func controlButton(system: String, active: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             ZStack {
                 Circle()
-                    .fill(active ? color.opacity(0.5) : color)
+                    .fill(active ? Color.white.opacity(0.85) : Color.white.opacity(0.25))
                     .frame(width: 68, height: 68)
                 Image(systemName: system)
-                    .font(.system(size: 26))
+                    .font(.system(size: 24))
                     .foregroundColor(.white)
             }
         }
