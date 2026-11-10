@@ -201,9 +201,16 @@ final class CallManager: NSObject, ObservableObject {
               let sdpType = sdpDict["type"] as? String,
               let sdpText = sdpDict["sdp"] as? String else {
             NSLog("murmur call: accept without SDP — falling back to fresh offer")
+            // call59b: go straight incoming → outgoing WITHOUT passing .idle —
+            // the overlay binding (phase != .idle) closes fullScreenCover on
+            // .idle, and its onDisappear hangs the call up immediately
+            // (observed: ice:checking → ice:closed right after accept).
             pendingOffer = nil
-            phase = .idle
-            startCall(peer: peer, video: video)
+            phase = .outgoing(peer: peer, video: video)
+            stateText = "звоним…"
+            callMode = video ? "video" : "audio"
+            remotePeer = peer
+            Task { await setupAndOffer(peer: peer, video: video) }
             return
         }
         do {
