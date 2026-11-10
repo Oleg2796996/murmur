@@ -254,6 +254,15 @@ final class CallManager: NSObject, ObservableObject {
         do {
             if let sdpDict = signal["sdp"] as? [String: Any],
                let sdpText = sdpDict["sdp"] as? String {
+                // call61: PERFECT NEGOTIATION — we are in have-local-offer
+                // (our fallback offer is out, re-offered every 2s). Accepting
+                // the peer's offer WITHOUT rollback leaves native libwebrtc in
+                // a poisoned state (no implicit rollback in native!) → both
+                // sides stuck in ice:checking. Polite side rolls back first.
+                if pc.signalingState == .haveLocalOffer {
+                    try await pc.setLocalDescription(RTCSessionDescription(type: .rollback, sdp: ""))
+                    NSLog("murmur call: glare rollback done → answering peer offer")
+                }
                 try await pc.setRemoteDescription(RTCSessionDescription(type: .offer, sdp: sdpText))
                 for candidate in pendingRemoteCandidates { try? await pc.add(candidate) }
                 pendingRemoteCandidates.removeAll()
