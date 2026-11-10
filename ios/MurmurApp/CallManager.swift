@@ -416,7 +416,9 @@ final class CallManager: NSObject, ObservableObject {
     }
 
     private func sdpJSON(_ sdp: RTCSessionDescription) -> [String: Any] {
-        ["type": sdp.type, "sdp": sdp.sdp]
+        // sdp.type is RTCSdpType (enum) — JSONSerialization crashes on it
+        // ("Invalid type in JSON write (__SwiftValue)"); rawValue is the string.
+        ["type": sdp.type.rawValue, "sdp": sdp.sdp]
     }
 
     private func startTimer() {
@@ -515,7 +517,7 @@ extension CallManager: RTCPeerConnectionDelegate {
                 let json: [String: Any] = [
                     "candidate": candidate.sdp,
                     "sdpMid": candidate.sdpMid ?? "0",
-                    "sdpMLineIndex": candidate.sdpMLineIndex,
+                    "sdpMLineIndex": Int(candidate.sdpMLineIndex),
                 ]
                 self.relayClient?.sendCallSignal(to: peer, signal: ["kind": "ice", "candidate": json], push: false)
             }
