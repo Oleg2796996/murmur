@@ -418,7 +418,13 @@ final class CallManager: NSObject, ObservableObject {
     private func sdpJSON(_ sdp: RTCSessionDescription) -> [String: Any] {
         // sdp.type is RTCSdpType (enum) — JSONSerialization crashes on it
         // ("Invalid type in JSON write (__SwiftValue)"); rawValue is the string.
-        ["type": sdp.type.rawValue, "sdp": sdp.sdp]
+        // Also strip a=extmap-allow-mixed — Safari cannot parse it (TypeError
+        // on setRemoteDescription); fix at the source, PWA also sanitizes.
+        let cleaned = sdp.sdp
+            .components(separatedBy: "\r\n")
+            .filter { !$0.hasPrefix("a=extmap-allow-mixed") }
+            .joined(separator: "\r\n")
+        return ["type": sdp.type.rawValue, "sdp": cleaned]
     }
 
     private func startTimer() {

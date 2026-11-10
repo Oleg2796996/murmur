@@ -363,7 +363,9 @@
     ov.hidden = false;
     const el = ov.querySelector("#call-error");
     el.hidden = false;
-    el.textContent = "Не удалось подключить микрофон: " + ((err && err.message) || err || "проверьте разрешение браузера");
+    el.textContent = "call57b·Не удалось подключить микрофон: " + ((err && err.message) || err || "проверьте разрешение браузера");
+    // call57b: дамп проблемного SDP в консоль — видно, что именно Safari не смог.
+    try { console.warn("[MurmurCall] sdp offer from caller:\n" + JSON.stringify(iceDiag.lastOfferSdp || "")); } catch (_) {}
   }
   function closeCall(reason) {
     // Notify the callee when the outgoing caller cancels before connection.
@@ -660,6 +662,7 @@
       // Стандартный интероп-фикс (Jitsi/LiveKit): вычистить строку из SDP.
       // call57b: sanitizeSdp — на уровне модуля, применяется во всех путях.
       const compatSdp = { type: call.signal.sdp.type, sdp: sanitizeSdp(call.signal.sdp.sdp) };
+      iceDiag.lastOfferSdp = call.signal.sdp.sdp; // диагностика: дамп в консоль при ошибке
       try { await pc.setRemoteDescription(compatSdp); } catch (err) { throw new Error("удалённый SDP (offer от звонящего): " + ((err && err.message) || err)); }
       remoteDescriptionReady = true;
       for (const candidate of pendingRemoteCandidates.splice(0)) {
