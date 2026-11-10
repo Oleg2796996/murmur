@@ -86,7 +86,7 @@ struct CallOverlay: View {
         switch cm.phase {
         case .incoming(_, let video): return video ? "Видеозвонок" : "Аудиозвонок"
         case .outgoing(_, let video): return video ? "Видеозвонок" : "Аудиозвонок"
-        case .connecting: return "На связи"
+        case .connecting: return "Соединение"
         case .connected: return "На связи"
         case .idle: return ""
         }
