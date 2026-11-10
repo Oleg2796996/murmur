@@ -186,11 +186,14 @@ final class CallManager: NSObject, ObservableObject {
                 relayClient?.sendCallSignal(to: from, signal: ["kind": "bye"], push: false)
                 return
             }
-            // call59: same peer re-offering — answer ONLY until our own
-            // negotiation completes; repeated re-offers after that (iOS
-            // sends every 2s until answer) must not re-answer/re-glare.
+            // call59/call61: same peer re-offering. PERFECT NEGOTIATION
+            // (agent-researched): iOS is the INITIATOR = impolite peer —
+            // on a colliding offer IGNORE it (and its candidates) and keep
+            // waiting for the answer to our own offer. Never rollback,
+            // never re-answer: both-answer deadlock = ice:checking forever.
             if case .connected = phase { return }
-            if let pc, pc.signalingState == .stable, pc.remoteDescription != nil { return }
+            if let pc, pc.signalingState != .stable { return } // colliding offer → ignore (impolite)
+            if let pc, pc.remoteDescription != nil { return }  // already negotiated
             Task { await answerOffer(from: from, signal: signal) }
         }
     }

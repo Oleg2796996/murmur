@@ -746,18 +746,20 @@
       if (pc) {
         if (remotePeer && remotePeer !== from) return;
         if (callState !== "connecting") return;
-        // call59: НЕ пере-отвечаем, если уже ответили этому пиру — повторные
-        // re-offers (iOS шлёт каждые 2с до answer) не должны рвать связь.
-        // Нужен ре-glare только когда у нас ещё НЕТ remote description.
+        // call59/call61: PERFECT NEGOTIATION — PWA is the POLITE peer:
+        // on a colliding offer (both sides sent offers) roll back our own
+        // and answer the peer's (Chrome has implicit rollback, but explicit
+        // is safe across engines). iOS is impolite and ignores ours.
         if (remoteDescriptionReady && remotePeer === from) return;
-        // glare: закрываем старую полу-открытую связь БЕЗ промежуточной записи
-        // (финальный completed с длительностью запишется по завершении).
         if (glare) callRecorded = true;
         closeCall();
         if (glare) callRecorded = false;
         try {
           setCallState("connecting", from);
           await setup(from);
+          if (pc.signalingState === "have-local-offer") {
+            try { await pc.setLocalDescription({ type: "rollback" }); diagLog("glare", "rollback done"); } catch (_) {}
+          }
           await pc.setRemoteDescription({ type: s.sdp.type, sdp: sanitizeSdp(s.sdp.sdp) });
           remoteDescriptionReady = true;
           for (const candidate of pendingRemoteCandidates.splice(0)) {
