@@ -351,6 +351,12 @@
     }, t));
     callState = "idle";
   }
+  // call57b: нативный libwebrtc (iOS/Android) кладёт в SDP a=extmap-allow-mixed,
+  // Safari/WebKit его не парсит → setRemoteDescription падает «Type error».
+  // Стандартный интероп-фикс (Jitsi/LiveKit): вычистить строку из SDP.
+  function sanitizeSdp(sdp) {
+    return sdp ? sdp.split(/\r\n/).filter(l => !/^a=extmap-allow-mixed/.test(l)).join("\r\n") : sdp;
+  }
   function showCallError(err) {
     const ov = ensureOverlay();
     stopRingback();
@@ -649,7 +655,12 @@
       if (!call.signal) return await startCallTo(call.from, { push: false, responseToIncoming: true });
       setCallState("connecting", call.from);
       try { await setup(call.from); } catch (err) { throw new Error("медиа: " + ((err && err.message) || err)); }
-      try { await pc.setRemoteDescription(call.signal.sdp); } catch (err) { throw new Error("удалённый SDP (offer от звонящего): " + ((err && err.message) || err)); }
+      // call57b: нативный libwebrtc (iOS/Android) кладёт в оффер a=extmap-allow-mixed,
+      // Safari/WebKit его не парсит → setRemoteDescription падает «Type error».
+      // Стандартный интероп-фикс (Jitsi/LiveKit): вычистить строку из SDP.
+      // call57b: sanitizeSdp — на уровне модуля, применяется во всех путях.
+      const compatSdp = { type: call.signal.sdp.type, sdp: sanitizeSdp(call.signal.sdp.sdp) };
+      try { await pc.setRemoteDescription(compatSdp); } catch (err) { throw new Error("удалённый SDP (offer от звонящего): " + ((err && err.message) || err)); }
       remoteDescriptionReady = true;
       for (const candidate of pendingRemoteCandidates.splice(0)) {
         try { await pc.addIceCandidate(candidate); } catch (err) { diagLog("error", "queued ICE: " + err.message); }
@@ -722,7 +733,7 @@
         try {
           setCallState("connecting", from);
           await setup(from);
-          await pc.setRemoteDescription(s.sdp);
+          await pc.setRemoteDescription({ type: s.sdp.type, sdp: sanitizeSdp(s.sdp.sdp) });
           remoteDescriptionReady = true;
           for (const candidate of pendingRemoteCandidates.splice(0)) {
             try { await pc.addIceCandidate(candidate); } catch (err) { diagLog("error", "queued ICE: " + err.message); }
@@ -785,7 +796,8 @@
     }
     if (!pc || remotePeer !== from) return;
     if (s.kind === "answer") {
-      await pc.setRemoteDescription(s.sdp);
+      // call57b: answer от нативного пира тоже может нести extmap-allow-mixed.
+      await pc.setRemoteDescription({ type: s.sdp.type, sdp: sanitizeSdp(s.sdp.sdp) });
       remoteDescriptionReady = true;
       // call53: answer получен — re-offer цикл больше не нужен, а кандидаты,
       // отправленные в офлайн-окно пира, дозируем повторно. Дубликаты

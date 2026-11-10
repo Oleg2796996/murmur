@@ -125,7 +125,7 @@ struct CallOverlay: View {
                         Circle()
                             .fill(Color.green)
                             .frame(width: 76, height: 76)
-                        Image(systemName: "phone.up.fill")
+                        Image(systemName: "phone.fill")
                             .font(.system(size: 30))
                             .foregroundColor(.white)
                     }
