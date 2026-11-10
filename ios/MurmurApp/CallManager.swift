@@ -180,8 +180,11 @@ final class CallManager: NSObject, ObservableObject {
                 relayClient?.sendCallSignal(to: from, signal: ["kind": "bye"], push: false)
                 return
             }
-            // Our peer re-offering mid-call (cold-start glare): handled by
-            // answer path below when connecting.
+            // call59: same peer re-offering — answer ONLY until our own
+            // negotiation completes; repeated re-offers after that (iOS
+            // sends every 2s until answer) must not re-answer/re-glare.
+            if case .connected = phase { return }
+            if let pc, pc.signalingState == .stable, pc.remoteDescription != nil { return }
             Task { await answerOffer(from: from, signal: signal) }
         }
     }

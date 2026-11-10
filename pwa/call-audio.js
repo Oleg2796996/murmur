@@ -746,6 +746,10 @@
       if (pc) {
         if (remotePeer && remotePeer !== from) return;
         if (callState !== "connecting") return;
+        // call59: НЕ пере-отвечаем, если уже ответили этому пиру — повторные
+        // re-offers (iOS шлёт каждые 2с до answer) не должны рвать связь.
+        // Нужен ре-glare только когда у нас ещё НЕТ remote description.
+        if (remoteDescriptionReady && remotePeer === from) return;
         // glare: закрываем старую полу-открытую связь БЕЗ промежуточной записи
         // (финальный completed с длительностью запишется по завершении).
         if (glare) callRecorded = true;
