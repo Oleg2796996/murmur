@@ -34,10 +34,13 @@ final class CallManager: NSObject, ObservableObject {
     private var pc: RTCPeerConnection?
     private var factory: RTCPeerConnectionFactory?
     private var localAudioTrack: RTCAudioTrack?
-    private var localVideoTrack: RTCVideoTrack?
     private var localCapturer: RTCCameraVideoCapturer?
+    /// Local camera preview — read by CallOverlay PiP (PWA call-local-video).
+    private(set) var localVideoTrack: RTCVideoTrack?
     /// Remote video track — read by CallOverlay for the fullscreen background.
     private(set) var remoteVideoTrack: RTCVideoTrack?
+    /// Front camera default; tap on PiP flips (call54 parity).
+    private(set) var camFacing: String = "user"
 
     private var remotePeer: String?
     /// Wired by AppState at init — AppState owns the only RelayClient.
@@ -325,18 +328,37 @@ final class CallManager: NSObject, ObservableObject {
     }
 
     private func startCamera(_ capturer: RTCCameraVideoCapturer) {
+        camFacing = "user"
+        switchCamera(to: .front)
+    }
+
+    /// call54 parity: PiP tap flips front ↔ back. The old capturer must be
+    /// STOPPED before starting the new one — otherwise the device lock keeps
+    /// returning the same camera.
+    func flipCamera() {
+        guard let capturer = localCapturer else { return }
+        camFacing = (camFacing == "user") ? "environment" : "user"
+        switchCamera(to: camFacing == "user" ? .front : .back)
+        NSLog("murmur call: camflip → \(camFacing)")
+    }
+
+    private func switchCamera(to position: AVCaptureDevice.Position) {
+        guard let capturer = localCapturer else { return }
+        capturer.stopCapture()
         let devices = RTCCameraVideoCapturer.captureDevices()
-        guard let back = devices.first(where: { $0.position == .front }) ?? devices.first else { return }
+        guard let device = devices.first(where: { $0.position == position })
+                ?? devices.first(where: { $0.position == .front })
+                ?? devices.first else { return }
         // Pick a mid-range format ≈ 640×480 for battery/latency (PWA parity).
-        let formats = RTCCameraVideoCapturer.supportedFormats(for: back)
+        let formats = RTCCameraVideoCapturer.supportedFormats(for: device)
         let target = CGSize(width: 640, height: 480)
-        let format = formats.min(by: { a, b in
+        guard let format = formats.min(by: { a, b in
             let d1 = abs(CGFloat(CMVideoFormatDescriptionGetDimensions(a.formatDescription).width) - target.width)
             let d2 = abs(CGFloat(CMVideoFormatDescriptionGetDimensions(b.formatDescription).width) - target.width)
             return d1 < d2
-        })!
+        }) else { return }
         let fps = format.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 30
-        capturer.startCapture(with: back, format: format, fps: Int(min(fps, 30)))
+        capturer.startCapture(with: device, format: format, fps: Int(min(fps, 30)))
     }
 
     // MARK: - Controls

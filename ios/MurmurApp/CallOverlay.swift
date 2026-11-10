@@ -19,6 +19,20 @@ struct CallOverlay: View {
             if case .connected = cm.phase, cm.activeCallIsVideo, let track = cm.remoteVideoTrack {
                 RemoteVideoView(track: track)
                     .ignoresSafeArea()
+                // Self-view PiP (PWA call-local-video parity): top-right,
+                // tap flips front/back camera (call54).
+                if let local = cm.localVideoTrack {
+                    RemoteVideoView(track: local)
+                        .frame(width: 110, height: 150)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.white.opacity(0.4), lineWidth: 1))
+                        .shadow(radius: 6)
+                        .padding(.top, 8)
+                        .padding(.trailing, 14)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .onTapGesture { cm.flipCamera() }
+                }
             } else {
                 Color.black.ignoresSafeArea()
             }
