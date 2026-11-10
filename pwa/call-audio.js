@@ -661,9 +661,19 @@
       // Safari/WebKit его не парсит → setRemoteDescription падает «Type error».
       // Стандартный интероп-фикс (Jitsi/LiveKit): вычистить строку из SDP.
       // call57b: sanitizeSdp — на уровне модуля, применяется во всех путях.
-      const compatSdp = { type: call.signal.sdp.type, sdp: sanitizeSdp(call.signal.sdp.sdp) };
-      iceDiag.lastOfferSdp = call.signal.sdp.sdp; // диагностика: дамп в консоль при ошибке
-      try { await pc.setRemoteDescription(compatSdp); } catch (err) { throw new Error("удалённый SDP (offer от звонящего): " + ((err && err.message) || err)); }
+      // call57d: дамп формы SDP прямо в текст ошибки — видно по скриншоту.
+      const rawSdpObj = call.signal.sdp;
+      const sdInfo = "sdp:" + typeof rawSdpObj +
+        " type:" + (rawSdpObj ? (typeof rawSdpObj.type + "=" + JSON.stringify(rawSdpObj.type)) : "-") +
+        " body:" + (rawSdpObj ? (typeof rawSdpObj.sdp) + "/" + (rawSdpObj.sdp ? String(rawSdpObj.sdp).length : "null") : "-") +
+        "/\"" + String((rawSdpObj && rawSdpObj.sdp) || "").slice(0, 20).replace(/\n/g, "|") + "\"";
+      console.warn("[MurmurCall] offer sdp form:", sdInfo, rawSdpObj);
+      const rawSdp = rawSdpObj && typeof rawSdpObj.sdp === "string" ? rawSdpObj.sdp : null;
+      const sdpType = rawSdpObj && typeof rawSdpObj.type === "string" ? rawSdpObj.type : "offer";
+      if (!rawSdp) throw new Error("SDP оффера не строка (" + sdInfo + ")");
+      const compatSdp = { type: sdpType, sdp: sanitizeSdp(rawSdp) };
+      iceDiag.lastOfferSdp = rawSdp; // диагностика: дамп в консоль при ошибке
+      try { await pc.setRemoteDescription(new RTCSessionDescription(compatSdp)); } catch (err) { throw new Error("удалённый SDP (" + sdInfo + "): " + ((err && err.message) || err)); }
       remoteDescriptionReady = true;
       for (const candidate of pendingRemoteCandidates.splice(0)) {
         try { await pc.addIceCandidate(candidate); } catch (err) { diagLog("error", "queued ICE: " + err.message); }
