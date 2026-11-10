@@ -455,7 +455,15 @@
       if (["failed", "disconnected", "closed"].includes(pc.connectionState)) closeCall();
     };
     camFacing = "user"; camFlipBusy = false; // call54: новый звонок стартует с фронтальной
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: callMode === "video" });
+    // call58b: Safari иногда бросает TypeError на ПЕРВОМ getUserMedia после
+    // загрузки страницы (permission prompt race); повторный вызов проходит.
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: callMode === "video" });
+    } catch (err1) {
+      if (!/typeerror/i.test(String(err1 && err1.message))) throw err1;
+      await new Promise(r => setTimeout(r, 300));
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: callMode === "video" });
+    }
     // call52 (settle-then-show): PiP-<video> НЕ рендерим в DOM в момент
     // getUserMedia — enterFs()+fsFitStage() уже отработали (setCallState
     // идёт раньше setup), stage в финальной геометрии. Слой нативного

@@ -190,14 +190,21 @@ final class CallManager: NSObject, ObservableObject {
     func accept() async {
         guard case let .incoming(peer, video) = phase else { return }
         ringTimeoutTask?.cancel()
+        // Cold-start push path (PWA call-audio.js parity): the ring card may
+        // have no SDP yet — accepting then acts as a fresh outgoing call
+        // (we create the offer, callee-turned-caller answers).
+        guard let signal = pendingOffer?.signal,
+              let sdpDict = signal["sdp"] as? [String: Any],
+              let sdpType = sdpDict["type"] as? String,
+              let sdpText = sdpDict["sdp"] as? String else {
+            NSLog("murmur call: accept without SDP — falling back to fresh offer")
+            pendingOffer = nil
+            phase = .idle
+            startCall(peer: peer, video: video)
+            return
+        }
         do {
             try await setupPeerConnection(peer: peer, video: video)
-            guard let signal = pendingOffer?.signal,
-                  let sdpDict = signal["sdp"] as? [String: Any],
-                  let sdpType = sdpDict["type"] as? String,
-                  let sdpText = sdpDict["sdp"] as? String else {
-                throw CallError.negotiation("нет SDP во входящем offer")
-            }
             let remote = RTCSessionDescription(type: .offer, sdp: sdpText)
             try await pc?.setRemoteDescription(remote)
             for candidate in pendingRemoteCandidates {

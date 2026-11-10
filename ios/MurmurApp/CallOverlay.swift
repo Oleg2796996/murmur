@@ -154,17 +154,12 @@ struct CallOverlay: View {
             }
             .padding(.bottom, 40)
         case .connecting, .connected:
-            VStack(spacing: 24) {
-                if case .connected = cm.phase {
-                    HStack(spacing: 56) {
-                        controlButton(system: "mic.fill", active: cm.micMuted) {
-                            cm.toggleMic()
-                        }
-                        controlButton(system: "video.fill", active: cm.cameraOff) {
-                            cm.toggleCamera()
-                        }
-                    }
+            HStack(spacing: 40) {
+                controlButton(system: "mic.fill", active: cm.micMuted) {
+                    cm.toggleMic()
                 }
+                .opacity(ifCaseIsConnected)
+                .allowsHitTesting(ifCaseIsConnected == 1)
                 Button(action: onHangup) {
                     ZStack {
                         Circle()
@@ -175,6 +170,11 @@ struct CallOverlay: View {
                             .foregroundColor(.white)
                     }
                 }
+                controlButton(system: "video.fill", active: cm.cameraOff) {
+                    cm.toggleCamera()
+                }
+                .opacity(ifCaseIsConnected)
+                .allowsHitTesting(ifCaseIsConnected == 1)
             }
             .padding(.bottom, 40)
         case .idle:
