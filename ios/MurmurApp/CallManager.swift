@@ -311,6 +311,12 @@ final class CallManager: NSObject, ObservableObject {
             let config = RTCConfiguration()
             config.iceServers = iceServers
             config.sdpSemantics = .unifiedPlan
+            // call58d: gather continuously + all network types — in LTE the
+            // direct path is a black hole, only TURN works. Without this the
+            // iOS side nominates srflx/host and dies on ice:FAILED even
+            // though TURN allocation succeeded (observed 2026-11-10).
+            config.continualGatheringPolicy = .gatherContinually
+            config.candidateNetworkPolicy = .all
             let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
             pc = factory?.peerConnection(with: config, constraints: constraints, delegate: self)
 
