@@ -42,18 +42,10 @@ struct CallOverlay: View {
 
                 Spacer()
 
-                // Bottom: hangup
-                Button(action: onHangup) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.red)
-                            .frame(width: 76, height: 76)
-                        Image(systemName: "phone.down.fill")
-                            .font(.system(size: 30))
-                            .foregroundColor(.white)
-                    }
-                }
-                .padding(.bottom, 40)
+                // Phase-dependent bottom controls:
+                // incoming → Accept + Decline; outgoing → Cancel;
+                // connected → mic/camera + hangup.
+                callBottomControls()
             }
 
             // Error toast
@@ -111,17 +103,88 @@ struct CallOverlay: View {
         return 0
     }
 
+    @ViewBuilder
+    private func callBottomControls() -> some View {
+        switch cm.phase {
+        case .incoming:
+            // Accept (green) + Decline (red) side by side — both visible
+            // BEFORE connection (bug: accept was hidden until connected).
+            HStack(spacing: 64) {
+                Button(action: onDecline) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 76, height: 76)
+                        Image(systemName: "phone.down.fill")
+                            .font(.system(size: 30))
+                            .foregroundColor(.white)
+                    }
+                }
+                Button(action: onAccept) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 76, height: 76)
+                        Image(systemName: "phone.up.fill")
+                            .font(.system(size: 30))
+                            .foregroundColor(.white)
+                    }
+                }
+            }
+            .padding(.bottom, 40)
+        case .outgoing:
+            Button(action: onHangup) {
+                ZStack {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 76, height: 76)
+                    Image(systemName: "phone.down.fill")
+                        .font(.system(size: 30))
+                        .foregroundColor(.white)
+                }
+            }
+            .padding(.bottom, 40)
+        case .connecting, .connected:
+            VStack(spacing: 24) {
+                if case .connected = cm.phase {
+                    HStack(spacing: 56) {
+                        controlButton(system: "mic.fill", active: cm.micMuted, color: .white) {
+                            cm.toggleMic()
+                        }
+                        controlButton(system: "camera.fill", active: cm.cameraOff, color: .white) {
+                            cm.toggleCamera()
+                        }
+                    }
+                    .opacity(ifCaseIsConnected)
+                }
+                Button(action: onHangup) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 76, height: 76)
+                        Image(systemName: "phone.down.fill")
+                            .font(.system(size: 30))
+                            .foregroundColor(.white)
+                    }
+                }
+            }
+            .padding(.bottom, 40)
+        case .idle:
+            EmptyView()
+        }
+    }
+
     private func callControls() -> some View {
         HStack(spacing: 56) {
             controlButton(system: "mic.fill", active: cm.micMuted, color: .white) {
                 cm.toggleMic()
             }
-            callTargetButton()
             controlButton(system: "camera.fill", active: cm.cameraOff, color: .white) {
                 cm.toggleCamera()
             }
         }
-        .opacity(ifCaseIsConnected) 
+        .opacity(ifCaseIsConnected)
+        .allowsHitTesting(ifCaseIsConnected == 1)
     }
 
     private func controlButton(system: String, active: Bool, color: Color, action: @escaping () -> Void) -> some View {
@@ -134,36 +197,6 @@ struct CallOverlay: View {
                     .font(.system(size: 26))
                     .foregroundColor(.white)
             }
-        }
-    }
-
-    @ViewBuilder
-    private func callTargetButton() -> some View {
-        if case .incoming = cm.phase {
-            Button(action: onAccept) {
-                ZStack {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 76, height: 76)
-                    Image(systemName: "phone.up.fill")
-                        .font(.system(size: 30))
-                        .foregroundColor(.white)
-                }
-            }
-        } else if case .outgoing = cm.phase {
-            Button(action: onDecline) {
-                ZStack {
-                    Circle()
-                        .fill(Color.red)
-                        .frame(width: 76, height: 76)
-                    Image(systemName: "phone.down.fill")
-                        .font(.system(size: 30))
-                        .foregroundColor(.white)
-                }
-            }
-        } else {
-            // connecting: keep empty space for symmetry.
-            EmptyView()
         }
     }
 
