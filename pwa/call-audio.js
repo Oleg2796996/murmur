@@ -746,19 +746,16 @@
       if (pc) {
         if (remotePeer && remotePeer !== from) return;
         if (callState !== "connecting") return;
-        // call59/call61: PERFECT NEGOTIATION — PWA is the POLITE peer:
-        // on a colliding offer (both sides sent offers) roll back our own
-        // and answer the peer's (Chrome has implicit rollback, but explicit
-        // is safe across engines). iOS is impolite and ignores ours.
+        // call59/call63: PERFECT NEGOTIATION — PWA is the POLITE peer.
+        // call63: rollback ON THE SAME pc WITHOUT teardown. The previous
+        // closeCall()+setup() destroyed the buffered ICE candidates of the
+        // iOS offer and created a dead window for re-offers (candidates
+        // were lost → checking forever). Chrome has implicit rollback, but
+        // explicit + same-pc is the canonical polite path.
         if (remoteDescriptionReady && remotePeer === from) return;
-        if (glare) callRecorded = true;
-        closeCall();
-        if (glare) callRecorded = false;
         try {
-          setCallState("connecting", from);
-          await setup(from);
           if (pc.signalingState === "have-local-offer") {
-            try { await pc.setLocalDescription({ type: "rollback" }); diagLog("glare", "rollback done"); } catch (_) {}
+            try { await pc.setLocalDescription({ type: "rollback" }); diagLog("glare", "rollback done (same pc)"); } catch (_) {}
           }
           await pc.setRemoteDescription({ type: s.sdp.type, sdp: sanitizeSdp(s.sdp.sdp) });
           remoteDescriptionReady = true;
@@ -768,6 +765,7 @@
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           send(from, { kind: "answer", sdp: pc.localDescription });
+          diagLog("glare", "answered peer offer after rollback (no pc teardown)");
         } catch (err) {
           showCallError(err);
           closeCall();
