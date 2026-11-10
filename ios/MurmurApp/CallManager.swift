@@ -54,6 +54,13 @@ final class CallManager: NSObject, ObservableObject {
     private var callStartedAt: TimeInterval = 0
     private var iceServers: [RTCIceServer] = [
         RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"]),
+        // TURN fallback for symmetric NAT / mobile networks — coturn on the
+        // prod relay host. P2P stays preferred; TURN is only used when direct
+        // ICE fails.
+        RTCIceServer(urlStrings: [
+            "turn:murmurchat.org:3478?transport=udp",
+            "turn:murmurchat.org:3478?transport=tcp"
+        ], username: "murmur-prod", credential: "murmurchat"),
     ]
 
     override private init() {

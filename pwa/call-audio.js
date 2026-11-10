@@ -2,17 +2,17 @@
 (function () {
   "use strict";
   // P2P remains preferred; TURN is a fallback for symmetric NAT/mobile
-  // networks. Credentials are test-only and this file is never copied to prod
-  // with the test endpoint.
+  // networks. coturn on the prod relay (murmurchat.org) — test VPS 2.27.1.2
+  // was decommissioned 2026-11-06, its TURN endpoint no longer exists.
   const ICE = [
     { urls: "stun:stun.l.google.com:19302" },
     {
       urls: [
-        "turn:2.27.1.2:3478?transport=udp",
-        "turn:2.27.1.2:3478?transport=tcp"
+        "turn:murmurchat.org:3478?transport=udp",
+        "turn:murmurchat.org:3478?transport=tcp"
       ],
-      username: "murmur-test",
-      credential: "645d64995e5670fdc8a5722aae7d7b339e0920c6"
+      username: "murmur-prod",
+      credential: "murmurchat"
     }
   ];
   let pc = null;
