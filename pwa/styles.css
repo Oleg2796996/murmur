@@ -754,7 +754,13 @@ body:not(.keyboard-visible) .kb-back-btn { display: none !important; }
     border-radius: 10px;
     object-fit: cover;
     box-shadow: 0 4px 14px rgba(0,0,0,.4);
+    background: transparent;
+    /* call52: PiP невидим до первого отрисованного кадра (rVFC), затем
+       fade-in. До вставки элемента в DOM слоя вообще не существует. */
+    opacity: 0;
+    transition: opacity .18s ease-out;
 }
+.call-video-stage #call-local-video.is-live { opacity: 1; }
 /* v160g4-call12: круглые кнопки-иконки (WhatsApp/FaceTime style) */
 .call-media-action {
     flex: 0 0 auto;
@@ -842,11 +848,7 @@ body:not(.keyboard-visible) .kb-back-btn { display: none !important; }
     background: var(--bubble-out);
     color: var(--text);
     border-bottom-right-radius: 4px;
-    /* v160z24 (Олег 13:14 «Да»): text-align:left как в Telegram. Раньше
-       right: бабл шириной max-content длинной строки + перенос текста
-       прижимал строки вправо → пустая «половина пузыря» слева.
-       bubble-time остаётся справа (свой text-align:right). */
-    text-align: left;
+    text-align: right;
 }
 .bubble.in {
     align-self: flex-start;
@@ -1807,6 +1809,7 @@ html.call-fs-active body {
     height: auto;
     aspect-ratio: 3 / 4;
     border-radius: 12px;
+    background: transparent;
 }
 @media (orientation: landscape) {
     /* call31: Олег — сдвинуть второстепенное окно (PiP) к границе экрана

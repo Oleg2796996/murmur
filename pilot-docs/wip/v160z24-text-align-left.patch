@@ -1,0 +1,18 @@
+756a757,761
+>     background: transparent;
+>     /* call52: PiP невидим до первого отрисованного кадра (rVFC), затем
+>        fade-in. До вставки элемента в DOM слоя вообще не существует. */
+>     opacity: 0;
+>     transition: opacity .18s ease-out;
+757a763
+> .call-video-stage #call-local-video.is-live { opacity: 1; }
+845,849c851
+<     /* v160z24 (Олег 13:14 «Да»): text-align:left как в Telegram. Раньше
+<        right: бабл шириной max-content длинной строки + перенос текста
+<        прижимал строки вправо → пустая «половина пузыря» слева.
+<        bubble-time остаётся справа (свой text-align:right). */
+<     text-align: left;
+---
+>     text-align: right;
+1809a1812
+>     background: transparent;
