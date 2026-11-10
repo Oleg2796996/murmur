@@ -128,6 +128,12 @@ final class CallManager: NSObject, ObservableObject {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 guard !Task.isCancelled else { return }
                 if let pc = self.pc, let sdp = pc.localDescription {
+                    // call60: re-offer ONLY while localDescription is actually
+                    // an OFFER. After a glare answer the localDescription holds
+                    // an ANSWER — sending it labeled "offer" poisons the
+                    // peer's signaling state (observed: PWA→iOS ice:checking
+                    // then peer bye / dead ICE).
+                    guard sdp.type == .offer else { break }
                     // push:false — the APNs wake already went with offer #1.
                     self.sendOffer(peer, mode: self.callMode, sdp: sdp, push: false)
                 }
@@ -241,6 +247,9 @@ final class CallManager: NSObject, ObservableObject {
         // Only used in the glare path (we are connecting with this peer and
         // they replaced the connection). Simplified: if we have no remote
         // description yet, treat it as a fresh accept flow.
+        offerRetryTask?.cancel() // call60: stop the outgoing re-offer loop —
+        // after glare-answer localDescription is an ANSWER; the retry loop
+        // would keep sending it as "offer" and poison the peer's state.
         guard let pc, pc.remoteDescription == nil else { return }
         do {
             if let sdpDict = signal["sdp"] as? [String: Any],
