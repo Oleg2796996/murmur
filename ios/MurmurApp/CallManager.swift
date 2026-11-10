@@ -304,7 +304,7 @@ final class CallManager: NSObject, ObservableObject {
     private func handleBye(from: String) {
         guard remotePeer == from || pendingOffer?.from == from else { return }
         NSLog("murmur call: bye from \(prefix(from))")
-        close()
+        close("bye from peer")
     }
 
     // MARK: - Peer connection setup
@@ -400,19 +400,20 @@ final class CallManager: NSObject, ObservableObject {
         if let peer = remotePeer {
             relayClient?.sendCallSignal(to: peer, signal: ["kind": "bye"], push: false)
         }
-        close()
+        close("hangup")
     }
 
     func decline() {
         if let peer = pendingOffer?.from ?? remotePeer {
             relayClient?.sendCallSignal(to: peer, signal: ["kind": "bye"], push: false)
         }
-        close()
+        close("decline")
     }
 
     // MARK: - Teardown
 
-    private func close() {
+    private func close(_ reason: String = "unspecified") {
+        NSLog("murmur call: close(\(reason))")
         offerRetryTask?.cancel(); offerRetryTask = nil
         ringTimeoutTask?.cancel(); ringTimeoutTask = nil
         timerTask?.cancel(); timerTask = nil
@@ -441,7 +442,7 @@ final class CallManager: NSObject, ObservableObject {
             relayClient?.sendCallSignal(to: peer, signal: ["kind": "bye"], push: false)
         }
         self.errorText = errorText
-        close()
+        close("error")
     }
 
     // MARK: - Helpers
@@ -453,7 +454,7 @@ final class CallManager: NSObject, ObservableObject {
             guard let self, !Task.isCancelled else { return }
             if case .incoming = self.phase {
                 self.relayClient?.sendCallSignal(to: from, signal: ["kind": "bye"], push: false)
-                self.close()
+                self.close("ring timeout")
             }
         }
     }
@@ -567,7 +568,7 @@ extension CallManager: RTCPeerConnectionDelegate {
                 self.stateText = "На связи"
                 self.startTimer()
             case .failed, .closed, .disconnected:
-                if self.phase != .idle { self.close() }
+                if self.phase != .idle { self.close("ice \(newState.rawValue)") }
             default:
                 break
             }
