@@ -648,14 +648,15 @@
       // Push can wake the app without SDP. In that case Accept starts a fresh offer.
       if (!call.signal) return await startCallTo(call.from, { push: false, responseToIncoming: true });
       setCallState("connecting", call.from);
-      await setup(call.from);
-      await pc.setRemoteDescription(call.signal.sdp);
+      try { await setup(call.from); } catch (err) { throw new Error("медиа: " + ((err && err.message) || err)); }
+      try { await pc.setRemoteDescription(call.signal.sdp); } catch (err) { throw new Error("удалённый SDP (offer от звонящего): " + ((err && err.message) || err)); }
       remoteDescriptionReady = true;
       for (const candidate of pendingRemoteCandidates.splice(0)) {
         try { await pc.addIceCandidate(candidate); } catch (err) { diagLog("error", "queued ICE: " + err.message); }
       }
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
+      let answer;
+      try { answer = await pc.createAnswer(); } catch (err) { throw new Error("создание answer (SDP от звонящего некорректен?): " + ((err && err.message) || err)); }
+      try { await pc.setLocalDescription(answer); } catch (err) { throw new Error("локальный SDP (answer): " + ((err && err.message) || err)); }
       send(call.from, { kind: "answer", sdp: pc.localDescription });
       const activeBtn = callMode === "video" ? videoBtn() : btn();
       if (activeBtn) { activeBtn.innerHTML = ENDX; activeBtn.title = "Завершить звонок"; }
