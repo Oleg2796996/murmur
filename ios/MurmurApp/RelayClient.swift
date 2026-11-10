@@ -25,12 +25,49 @@ final class RelayClient {
     /// the chat for an unknown peer before polling.
     var onPushMetadata: ((HistoryRow?) -> Void)?
     var onConnected: (() -> Void)?
+    /// WebRTC signaling frames ({type:"call_signal", from_npub, signal:{kind,...}}).
+    var onCallSignal: ((String, [String: Any]) -> Void)?
+
+    /// APNs token (VOIP channel) -> sent with /api/register_alias so the
+    /// server can push call_signal offers to cold peers.
+    var pushToken: Data?
 
     init(baseURL: String = RelayConfig.defaultBaseURL) {
         self.baseURL = baseURL
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest = 30
         self.session = URLSession(configuration: cfg)
+    }
+
+    /// Set from AppDelegate.didRegisterForRemoteNotificationsWithDeviceToken.
+    /// Registered server-side -> cold peer wakes on call offer.
+    func setPushToken(_ token: Data) {
+        pushToken = token
+        // Register with the relay so pending offers get pushed.
+        let store = IdentityStore.shared
+        guard let npub = store.npub else { return }
+        Task { await registerAlias(npub: npub) }
+    }
+
+    private func registerAlias(npub: String) async {
+        guard let url = URL(string: baseURL + "/api/register_alias"), let token = pushToken else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 15
+        let hex = token.map { String(format: "%02.2hhx", $0) }.joined()
+        let payload: [String: Any] = ["alias": npub, "npub": npub, "pushToken": hex]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        req.httpBody = body
+        URLSession.shared.dataTask(with: req) { _, resp, err in
+            if let err {
+                NSLog("murmur register_alias (pushToken) failed: \(err)")
+            } else if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                NSLog("murmur register_alias HTTP \(http.statusCode)")
+            } else {
+                NSLog("murmur register_alias ok npub=\(npub)")
+            }
+        }.resume()
     }
 
     // MARK: - HTTP
@@ -286,6 +323,26 @@ final class RelayClient {
         receiveLoop(t)
     }
 
+    /// WebRTC signaling over the live WS (pwa call-audio.js doSend parity):
+    /// {type:"call_signal", npub: me, to: peer, signal: {...}, push?: false}.
+    /// Relay routes it ephemerally to the peer's subscribers; only the initial
+    /// offer additionally wakes an offline recipient via APNs/WebPush.
+    func sendCallSignal(to peer: String, signal: [String: Any], push: Bool = true) {
+        guard let npub = IdentityStore.shared.npub else { return }
+        var msg: [String: Any] = [
+            "type": "call_signal",
+            "npub": npub,
+            "to": peer,
+            "signal": signal,
+        ]
+        if !push { msg["push"] = false }
+        guard let data = try? JSONSerialization.data(withJSONObject: msg),
+              let text = String(data: data, encoding: .utf8) else { return }
+        task?.send(.string(text)) { err in
+            if let err { NSLog("murmur call_signal send failed: \(err)") }
+        }
+    }
+
     private func sendSubscribe(_ t: URLSessionWebSocketTask, npub: String) {
         let payload: [String: Any] = ["type": "subscribe", "alias": npub, "npub": npub]
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
@@ -325,6 +382,11 @@ final class RelayClient {
         let type = (obj["type"] as? String) ?? (envelope["type"] as? String) ?? ""
         if ["typing", "call_signal", "subscribed", "pong", "error"].contains(type) {
             if type == "typing" { onTyping?(envelope["from_npub"] as? String ?? "") }
+            if type == "call_signal",
+               let from = envelope["from_npub"] as? String,
+               let signal = envelope["signal"] as? [String: Any] {
+                onCallSignal?(from, signal)
+            }
             return
         }
         guard let ts = envelope["ts"] as? Int else { return }

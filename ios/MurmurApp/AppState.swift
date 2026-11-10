@@ -69,6 +69,10 @@ final class AppState: ObservableObject {
         relay.onTyping = { [weak self] from in
             Task { @MainActor in self?.showTyping(from) }
         }
+        // Call signaling: raw frames from the relay -> CallManager.
+        relay.onCallSignal = { [weak self] from, signal in
+            CallManager.shared.forwardSignal(from: from, signal: signal)
+        }
     }
 
     /// WS push for possibly-UNKNOWN peer: create the chat first, then poll.

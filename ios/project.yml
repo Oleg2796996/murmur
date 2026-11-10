@@ -13,6 +13,11 @@ settings:
     DEVELOPMENT_TEAM: "JU67BN6T45"
     CODE_SIGN_STYLE: Automatic
 
+packages:
+  WebRTC:
+    url: https://github.com/stasel/WebRTC.git
+    minorVersion: "137.0.0"
+
 targets:
   MurmurApp:
     type: application
@@ -41,6 +46,8 @@ targets:
         aps-environment: development
         com.apple.developer.usernotifications.time-sensitive: true
     dependencies:
+      - package: WebRTC
+        product: WebRTC
       - framework: MurmurKit/MurmurUniffi.xcframework
         embed: false
     info:

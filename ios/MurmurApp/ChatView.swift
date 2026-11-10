@@ -20,6 +20,7 @@ struct ChatView: View {
     @State private var cameraMovieURL: URL?
     @State private var pickedItem: PhotosPickerItem?
     @State private var attaching = false
+    @State private var showingCall = false
     /// True while the message field has keyboard focus — lets the drag
     /// gesture dismiss the keyboard (scrollDismissesKeyboard only works
     /// when the ScrollView itself is focusable-linked on iOS 27).
@@ -108,6 +109,22 @@ struct ChatView: View {
         .toolbarBackground(MurmurTheme.panel, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
+        .toolbar { // call buttons — left side, PWA parity
+            ToolbarItem(placement: .topBarLeading) {
+                HStack(spacing: 20) {
+                    Button(action: startAudio) {
+                        Image(systemName: "phone")
+                            .font(.system(size: 22))
+                            .foregroundStyle(MurmurTheme.accent)
+                    }
+                    Button(action: startVideo) {
+                        Image(systemName: "video")
+                            .font(.system(size: 22))
+                            .foregroundStyle(MurmurTheme.accent)
+                    }
+                }
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -126,6 +143,10 @@ struct ChatView: View {
             Button("Отмена", role: .cancel) {}
         }
         .task { await loadHistory() }
+        .onAppear { showingCall = (cm.phase != .idle) }
+        .onChange(of: cm.phase) { _, new in
+            showingCall = (new != .idle)
+        }
     }
 
     private func bubble(_ m: ChatMessage) -> some View {
@@ -186,6 +207,15 @@ struct ChatView: View {
         let date = ts > 100_000_000_000 ? Date(timeIntervalSince1970: Double(ts) / 1000)
                                         : Date(timeIntervalSince1970: Double(ts))
         return f.string(from: date)
+    }
+
+    private var cm: CallManager { CallManager.shared }
+
+    private func startAudio() { callStart(video: false) }
+    private func startVideo() { callStart(video: true) }
+    private func callStart(video: Bool) {
+        cm.startCall(peer: peer, video: video)
+        showingCall = true
     }
 
     private var composer: some View {
