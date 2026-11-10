@@ -533,6 +533,17 @@ extension CallManager: RTCPeerConnectionDelegate {
 
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         Task { @MainActor in
+            // Visible diagnosis on the call screen (call58c): «соединение…»
+            // hangs are ICE failures that previously vanished silently.
+            let stateNames: [RTCIceConnectionState: String] = [
+                .new: "ice:new", .checking: "ice:checking", .connected: "ice:connected",
+                .completed: "ice:completed", .failed: "ice:FAILED",
+                .disconnected: "ice:disconnected", .closed: "ice:closed"
+            ]
+            NSLog("murmur call: ICE state \(stateNames[newState] ?? "\(newState.rawValue)")")
+            if case .connecting = self.phase, let txt = stateNames[newState] {
+                self.stateText = txt
+            }
             switch newState {
             case .connected, .completed:
                 guard case .connecting(let peer, let video) = self.phase else { return }

@@ -186,12 +186,22 @@ struct CallOverlay: View {
         Button(action: action) {
             ZStack {
                 Circle()
-                    .fill(active ? Color.white.opacity(0.85) : Color.white.opacity(0.25))
+                    .fill(Color.white.opacity(0.25))
                     .frame(width: 68, height: 68)
-                Image(systemName: system)
+                // Slashed icon while muted/camera-off (iOS Phone.app parity),
+                // not a fill change.
+                Image(systemName: active ? slashName(system) : system)
                     .font(.system(size: 24))
-                    .foregroundColor(.white)
+                    .foregroundColor(active ? .red : .white)
             }
+        }
+    }
+
+    private func slashName(_ system: String) -> String {
+        switch system {
+        case "mic.fill": return "mic.slash.fill"
+        case "video.fill": return "video.slash.fill"
+        default: return system
         }
     }
 
