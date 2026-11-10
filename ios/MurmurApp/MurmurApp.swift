@@ -5,6 +5,8 @@ struct MurmurApp: App {
     @UIApplicationDelegateAdaptor(MurmurAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var app = AppState()
+    /// Global call overlay: incoming/outgoing calls present from anywhere.
+    @StateObject private var callManager = CallManager.shared
 
     var body: some Scene {
         WindowGroup {
@@ -14,6 +16,11 @@ struct MurmurApp: App {
                 } else {
                     OnboardingView()
                 }
+            }
+            .fullScreenCover(isPresented: Binding(
+                get: { callManager.phase != .idle },
+                set: { _ in })) {
+                CallOverlay()
             }
             .environmentObject(app)
             .onAppear {

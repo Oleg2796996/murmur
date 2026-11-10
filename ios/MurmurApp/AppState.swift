@@ -70,6 +70,7 @@ final class AppState: ObservableObject {
             Task { @MainActor in self?.showTyping(from) }
         }
         // Call signaling: raw frames from the relay -> CallManager.
+        CallManager.shared.relayClient = relay
         relay.onCallSignal = { [weak self] from, signal in
             CallManager.shared.forwardSignal(from: from, signal: signal)
         }

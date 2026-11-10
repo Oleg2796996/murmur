@@ -16,8 +16,8 @@ struct CallOverlay: View {
     var body: some View {
         ZStack {
             // Remote video full background (video calls) or dark gradient.
-            if cm.phase == .connected, cm.callMode == "video" {
-                RemoteVideoView(track: cm.remoteVideoTrack)
+            if cm.phase == .connected, cm.activeCallIsVideo, let track = cm.remoteVideoTrack {
+                RemoteVideoView(track: track)
                     .ignoresSafeArea()
             } else {
                 Color.black.ignoresSafeArea()
@@ -71,11 +71,12 @@ struct CallOverlay: View {
             }
         }
         .onDisappear {
-            // Leaving the overlay = hangup for an ongoing/pending call.
-            if case .incoming = cm.phase {
-                cm.decline()
-            } else if case .outgoing = cm.phase {
-                cm.hangUp()
+            // Overlay closed = end any active/pending call (PWA parity:
+            // closing the call UI hangs up).
+            switch cm.phase {
+            case .idle: break
+            case .incoming: cm.decline()
+            default: cm.hangUp()
             }
         }
     }
@@ -173,45 +174,18 @@ struct CallOverlay: View {
     }
 }
 
-/// Renders an RTCVideoTrack into a SwiftUI view using AVSampleBufferDisplayLayer.
+/// Renders an RTCVideoTrack via the standard Metal renderer.
 struct RemoteVideoView: UIViewRepresentable {
-    @ObservedObject var track: RTCVideoTrack?
+    let track: RTCVideoTrack
 
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        let layer = AVSampleBufferDisplayLayer()
-        layer.frame = view.bounds
-        layer.devicePosition = .mirrored // front camera mirrors
-        view.layer.addSublayer(layer)
-        context.coordinator.addTrack(track)
+    func makeUIView(context: Context) -> RTCMTLVideoView {
+        let view = RTCMTLVideoView()
+        view.videoContentMode = .scaleAspectFill
+        track.addRenderer(view)
         return view
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
-        if let track = track {
-            context.coordinator.addTrack(track)
-        }
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    class Coordinator: NSObject, RTCVideoRenderer {
-        var track: RTCVideoTrack?
-        func addTrack(_ t: RTCVideoTrack) {
-            track = t
-            track?.add(self)
-        }
-        func removeTrack(_ t: RTCVideoTrack) {}
-        func setScaleMode(_ scaleMode: RTCVideoScaleMode) {}
-        func render(frame: CMSampleBuffer) {}
-    }
-}
-
-// Quick fallback: render video via a simple delegate attachment.
-extension RTCVideoTrack {
-    func attach(to: any RTCVideoRenderer) {
-        addRenderer(to)
+    func updateUIView(_ uiView: RTCMTLVideoView, context: Context) {
+        track.addRenderer(uiView)
     }
 }

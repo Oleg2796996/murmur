@@ -36,10 +36,15 @@ final class CallManager: NSObject, ObservableObject {
     private var localAudioTrack: RTCAudioTrack?
     private var localVideoTrack: RTCVideoTrack?
     private var localCapturer: RTCCameraVideoCapturer?
-    private var remoteVideoTrack: RTCVideoTrack?
+    /// Remote video track — read by CallOverlay for the fullscreen background.
+    private(set) var remoteVideoTrack: RTCVideoTrack?
 
     private var remotePeer: String?
+    /// Wired by AppState at init — AppState owns the only RelayClient.
+    weak var relayClient: RelayClient?
     private var callMode: String = "audio"          // "audio" | "video"
+    /// CallOverlay reads this to decide on the fullscreen video background.
+    var activeCallIsVideo: Bool { callMode == "video" }
     private var pendingOffer: (from: String, signal: [String: Any]?)?
     private var pendingRemoteCandidates: [RTCIceCandidate] = []
     private var sentIce: Set<String> = []            // dedup (call53 sentIce parity)
@@ -303,10 +308,9 @@ final class CallManager: NSObject, ObservableObject {
                 let videoSource = factory?.videoSource()
                 localVideoTrack = factory?.videoTrack(with: videoSource!, trackId: "murmur-v0")
                 pc?.add(localVideoTrack!, streamIds: ["murmur"])
-                if let capturer = RTCCameraVideoCapturer(delegate: videoSource!) {
-                    localCapturer = capturer
-                    startCamera(capturer)
-                }
+                let capturer = RTCCameraVideoCapturer(delegate: videoSource!)
+                localCapturer = capturer
+                startCamera(capturer)
             }
             pc?.delegate = self
         }
@@ -325,7 +329,7 @@ final class CallManager: NSObject, ObservableObject {
             return d1 < d2
         })!
         let fps = format.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 30
-        capturer.startCapture(with: back, format: format, fps: Int(min(fps, 30)))
+        capturer.startCapture(with: back, format: format, fps: Int32(min(fps, 30)))
     }
 
     // MARK: - Controls

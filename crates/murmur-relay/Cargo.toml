@@ -51,6 +51,9 @@ clap = { version = "4", features = ["derive"] }
 
 # Web Push (VAPID + ece + HTTP)
 web-push = "0.10"
+# vendored openssl: компилируется из исходников, нужен для musl-сборки релея
+# (на Ubuntu 18.04 нет glibc 2.34+/openssl3; бинарь должен быть статическим)
+openssl = { version = "0.10", features = ["vendored"] }
 jwt-simple = "0.11"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }

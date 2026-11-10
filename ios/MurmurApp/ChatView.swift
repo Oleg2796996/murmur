@@ -20,7 +20,6 @@ struct ChatView: View {
     @State private var cameraMovieURL: URL?
     @State private var pickedItem: PhotosPickerItem?
     @State private var attaching = false
-    @State private var showingCall = false
     /// True while the message field has keyboard focus — lets the drag
     /// gesture dismiss the keyboard (scrollDismissesKeyboard only works
     /// when the ScrollView itself is focusable-linked on iOS 27).
@@ -143,10 +142,6 @@ struct ChatView: View {
             Button("Отмена", role: .cancel) {}
         }
         .task { await loadHistory() }
-        .onAppear { showingCall = (cm.phase != .idle) }
-        .onChange(of: cm.phase) { _, new in
-            showingCall = (new != .idle)
-        }
     }
 
     private func bubble(_ m: ChatMessage) -> some View {
@@ -211,12 +206,8 @@ struct ChatView: View {
 
     private var cm: CallManager { CallManager.shared }
 
-    private func startAudio() { callStart(video: false) }
-    private func startVideo() { callStart(video: true) }
-    private func callStart(video: Bool) {
-        cm.startCall(peer: peer, video: video)
-        showingCall = true
-    }
+    private func startAudio() { cm.startCall(peer: peer, video: false) }
+    private func startVideo() { cm.startCall(peer: peer, video: true) }
 
     private var composer: some View {
         HStack(spacing: 8) {
