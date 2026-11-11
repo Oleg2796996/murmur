@@ -169,7 +169,10 @@ function hidePeer(peer) {
     try {
         const raw = localStorage.getItem(LS_DELETED_TS) || "{}";
         const map = JSON.parse(raw);
-        map[peer] = Math.floor(Date.now() / 1000);
+        // Lesson #132.5 (v160z22): записываем ts удаления в мс, как msg.ts в pollHist
+        // (раньше Math.floor(Date.now()/1000) = секунды: msg.ts (мс) > секунды ВСЕГДА
+        // → удалённый чат моментально восстанавливался при любом re-fetch).
+        map[peer] = Date.now();
         localStorage.setItem(LS_DELETED_TS, JSON.stringify(map));
     } catch (e) { /* best effort */ }
     clearUnread(peer);
@@ -192,6 +195,11 @@ function getDeletedTs(peer) {
     try {
         const raw = localStorage.getItem(LS_DELETED_TS) || "{}";
         const map = JSON.parse(raw);
-        return map[peer] || 0;
+        let ts = map[peer] || 0;
+        // v160z22 (Олег 2026-11-11): backward-compat — старые tombstones
+        // хранятся в секундах (Math.floor(Date.now()/1000)), а msg.ts теперь в мс;
+        // нормализуем: секунды < 1e12 → умножаем на 1000, иначе старый tombstone
+        // «провалит» и чат восстановится мгновенно.
+        return ts < 1e12 ? ts * 1000 : ts;
     } catch (e) { return 0; }
 }

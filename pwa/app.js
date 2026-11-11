@@ -5384,7 +5384,7 @@ if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", async () => {
         await requestNotificationPermission();
         requestPersistentStorage(); // v160w6m: не ждем — параллельно
-        warmOutboxCache();
+        await warmOutboxCache(); // v160z22 (Олег 2026-11-11): await — иначе outbox не прогрет
         wireReplyBarControls(); // v160r: reply-bar controls wiring
         wireBubbleTap();        // v160r: тап на bubble → reply (текст)
         wireLongPressReply();   // v160y27: долгое нажатие → reply (фото/видео/текст)
@@ -5392,14 +5392,16 @@ if (document.readyState === "loading") {
         tryAutoRestore();
     });
 } else {
-    requestNotificationPermission();
-    requestPersistentStorage(); // v160w6m: не ждем — параллельно
-    warmOutboxCache();
-    wireReplyBarControls(); // v160r
-    wireBubbleTap();        // v160r
-    wireLongPressReply();   // v160y27: long-press → reply
-    try { const bg = document.getElementById("btn-new-group"); if (bg) bg.addEventListener("click", openCreateGroupModal); } catch (e) {}
-    tryAutoRestore();
+    (async () => {
+        requestNotificationPermission();
+        requestPersistentStorage(); // v160w6m: не ждем — параллельно
+        await warmOutboxCache(); // v160z22 (Олег 2026-11-11): await — иначе outbox не прогрет
+        wireReplyBarControls(); // v160r
+        wireBubbleTap();        // v160r
+        wireLongPressReply();   // v160y27: long-press → reply
+        try { const bg = document.getElementById("btn-new-group"); if (bg) bg.addEventListener("click", openCreateGroupModal); } catch (e) {}
+        tryAutoRestore();
+    })();
 }
 
 // v160w6m (Олег 07.10.2026): requestPersistentStorage — просим у браузера
