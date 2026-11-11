@@ -5384,7 +5384,7 @@ if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", async () => {
         await requestNotificationPermission();
         requestPersistentStorage(); // v160w6m: не ждем — параллельно
-        warmOutboxCache();
+        await warmOutboxCache(); // v160z21: await, иначе _outboxKVCache пуст и pollHist печатает заглушку навсегда
         wireReplyBarControls(); // v160r: reply-bar controls wiring
         wireBubbleTap();        // v160r: тап на bubble → reply (текст)
         wireLongPressReply();   // v160y27: долгое нажатие → reply (фото/видео/текст)
@@ -5394,7 +5394,7 @@ if (document.readyState === "loading") {
 } else {
     requestNotificationPermission();
     requestPersistentStorage(); // v160w6m: не ждем — параллельно
-    warmOutboxCache();
+    await warmOutboxCache(); // v160z21: await, иначе _outboxKVCache пуст и pollHist печатает заглушку навсегда
     wireReplyBarControls(); // v160r
     wireBubbleTap();        // v160r
     wireLongPressReply();   // v160y27: long-press → reply

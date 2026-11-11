@@ -163,13 +163,13 @@ function hidePeer(peer) {
         arr.push(peer);
         saveHiddenPeers(arr);
     }
-    // Lesson #132.5: tombstone — записываем ts удаления, чтобы polling
+    // Lesson #132.5: tombstone — записываем ts удаления (мс), чтобы polling
     // восстановил чат только при РЕАЛЬНО новом сообщении (ts > tombstone),
     // а не на любой re-fetch старого envelope из /api/history.
     try {
         const raw = localStorage.getItem(LS_DELETED_TS) || "{}";
         const map = JSON.parse(raw);
-        map[peer] = Math.floor(Date.now() / 1000);
+        map[peer] = Date.now();  // мс, как msg.ts в pollHist (иначе мс > с всегда → удалянный чат сразу возвращается)
         localStorage.setItem(LS_DELETED_TS, JSON.stringify(map));
     } catch (e) { /* best effort */ }
     clearUnread(peer);
