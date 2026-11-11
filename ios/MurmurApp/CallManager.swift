@@ -383,7 +383,12 @@ final class CallManager: NSObject, ObservableObject {
             // iOS side nominates srflx/host and dies on ice:FAILED even
             // though TURN allocation succeeded (observed 2026-11-10).
             config.continualGatheringPolicy = .gatherContinually
-            config.candidateNetworkPolicy = .all
+            // v160z24c (Олег 2026-11-11, лог «ice:checking — sent=28 recv=10»):
+            // .all порождал 9 TCP-кандидатов и мусорные интерфейсы (симулятор,
+            // link-local) → 280 ICE-пар, relay-пары проверялись ПОСЛЕДНИМИ →
+            // звонок «висел» в checking минутами. .default = только UDP,
+            // host+srflx+relay — пары в разы меньше, relay достигается быстро.
+            config.candidateNetworkPolicy = .default
             let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
             pc = factory?.peerConnection(with: config, constraints: constraints, delegate: self)
 
@@ -641,8 +646,15 @@ extension CallManager: RTCPeerConnectionDelegate {
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
 
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
+        // v160z24c: фильтр мусорных кандидатов ДО отправки —
+        // tcp (Safari-пир их всё равно не использует) и link-local 169.254.*
+        // (пустые интерфейсы симулятора/шин). Меньше кандидатов = быстрее
+        // проверка релевантных пар (главный урок зависаний в checking).
+        let sdp = candidate.sdp
+        if sdp.contains(" tcp ") || sdp.contains("typ tcp") || sdp.contains("tcptype") { return }
+        if sdp.contains("169.254.") || sdp.contains("169.254 ") { return }
         // Trickle ICE to the peer (dedup, pwa sentIce parity).
-        let key = candidate.sdp
+        let key = sdp
         Task { @MainActor in
             guard !self.sentIce.contains(key) else { return }
             self.sentIce.insert(key)
