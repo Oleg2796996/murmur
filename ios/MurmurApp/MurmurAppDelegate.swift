@@ -11,6 +11,12 @@ final class MurmurAppDelegate: NSObject, UIApplicationDelegate {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in }
         application.registerForRemoteNotifications()
 
+        // v160z25: PushKit-регистрацию стартуем В didFinishLaunching —
+        // voip-push должен быть доставлен даже в убитое приложение ДО того,
+        // как SwiftUI построит MurmurApp.onAppear. Поздняя регистрация =
+        // пропущенный звонок на заблокированном экране.
+        PushManager.shared.bootstrapPushKit()
+
         // Incoming call notification category (silent push -> custom handler).
         let accept = UNNotificationAction(identifier: "MURMUR_ACCEPT", title: "Принять", options: .foreground)
         let decline = UNNotificationAction(identifier: "MURMUR_DECLINE", title: "Отклонить", options: .destructive)

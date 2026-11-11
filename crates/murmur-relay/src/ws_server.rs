@@ -163,6 +163,12 @@ impl WsServer {
                                                 if let Err(e) = push.deliver(&payload).await {
                                                     tracing::warn!(err=%e, "incoming call push failed");
                                                 }
+                                                // v160z25: нативный iOS-клиент — VoIP push (PushKit/CallKit),
+                                                // системный звонок на заблокированном экране. Токены kind=voip
+                                                // регистрирует iOS-приложение; для PWA-клиентов их нет — no-op.
+                                                if let Some(apns) = push.apns_handle() {
+                                                    apns.deliver_call_voip(&to, &from, &call_mode).await;
+                                                }
                                             });
                                         }
                                     }

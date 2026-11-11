@@ -148,6 +148,32 @@ final class CallManager: NSObject, ObservableObject {
 
     // MARK: - Incoming / signaling
 
+    /// v160z25: входящий из voip-push (PushKit). Мости́т в обычный handleOffer
+    /// логикой «нейтральной карточки» (kind="ring"-паритет PWA): incoming без
+    /// SDP, оффер придёт по WS следом (PWA re-offer'ит каждые 2с).
+    func handleIncomingPush(from: String, video: Bool) {
+        guard case .idle = phase else { return }
+        callMode = video ? "video" : "audio"
+        pendingOffer = (from, nil)
+        phase = .incoming(peer: from, video: video)
+        stateText = "входящий звонок"
+        armRingTimeout(from: from)
+    }
+
+    /// v160z25: accept из системной карточки CallKit (заблокированный экран).
+    /// Отличие от accept(): phase может быть .incoming ещё БЕЗ offer —
+    /// accept() сам подождёт оффер (v160z24) и answer'ит.
+    func acceptFromCallKit(peer: String) async {
+        if case .idle = phase {
+            // Push поднял карточку, но CallManager ещё не видел signal —
+            // создаём incoming-фазу, чтобы accept() работал штатно.
+            pendingOffer = (peer, nil)
+            phase = .incoming(peer: peer, video: false)
+            armRingTimeout(from: peer)
+        }
+        await accept()
+    }
+
     func handleSignal(from: String, signal: [String: Any]) {
         let kind = signal["kind"] as? String ?? ""
         guard let me = IdentityStore.shared.npub, from != me else { return }
@@ -496,6 +522,21 @@ final class CallManager: NSObject, ObservableObject {
         cameraOff = false
         stateText = ""
         phase = .idle
+        // v160z25: если звонок шёл через системную карточку CallKit —
+        // репортим end, иначе системный UI останется висеть «active».
+        CallKitProvider.shared.reportCallEnded()
+    }
+
+    /// v160z25: CallKit активирует аудио-сессию ДО answer (didActivate).
+    /// WebRTC-треки должны увидеть активную сессию — заглушаем наш
+    /// собственный setActive в ensureMediaPermissions, когда CallKit рулит.
+    func activateAudioSession(_ session: AVAudioSession) {
+        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth])
+        try? session.setActive(true, options: [])
+    }
+
+    func deactivateAudioSession(_ session: AVAudioSession) {
+        try? session.setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
     private func fail(errorText: String) {
@@ -568,9 +609,13 @@ final class CallManager: NSObject, ObservableObject {
             }
         }
         // Audio session: playAndRecord so the call audio keeps playing.
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth])
-        try? session.setActive(true, options: [])
+        // v160z25: если звонок начат из CallKit — сессия УЖЕ активирована в
+        // didActivate; повторный setActive на main-потоке даёт UI-freeze
+        // warning (AVAudioSession_iOS.mm:978) и конкурирует с CallKit.
+        if session.category != .playAndRecord || !session.isOtherAudioPlaying {
+            try? session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth])
+            try? session.setActive(true, options: [])
+        }
     }
 
     private func prefix(_ npub: String) -> String {

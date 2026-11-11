@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import UserNotifications
+import PushKit
 
 /// APNs registration + notification handling for the native iOS client.
 ///
@@ -14,16 +15,38 @@ import UserNotifications
 ///    relay only knows "npub X has device token Y".
 /// 4. A push simply wakes the app; on wake we poll history (same path as a
 ///    WS push metadata event).
-final class PushManager: NSObject, UNUserNotificationCenterDelegate {
+///
+/// v160z25 (Олег 2026-11-11 «наивный звонок как обычный»): PushKit-токен
+/// (kind="voip") регистрируется отдельно; voip-push будит приложение даже
+/// на заблокированном экране → CallKitProvider.reportIncoming → системная
+/// карточка звонка.
+final class PushManager: NSObject, UNUserNotificationCenterDelegate, PKPushRegistryDelegate {
     static let shared = PushManager()
 
     private var deviceToken: Data?
     private var registeredNpub: String?
+    /// v160z25: отдельный PushKit (voip) токен — Apple выдаёт другой токен
+    /// на PushKit-регистрацию, регистрируем его с kind="voip".
+    private var voipToken: Data?
+    private var voipRegisteredNpub: String?
+
+    private var voipRegistry: PKPushRegistry?
 
     // MARK: - Startup
 
+    /// v160z25: ранняя PushKit-регистрация из AppDelegate.didFinishLaunching
+    /// (до построения SwiftUI) — иначе voip-push в убитое приложение теряется.
+    func bootstrapPushKit() {
+        guard voipRegistry == nil else { return }
+        let registry = PKPushRegistry(queue: .main)
+        registry.delegate = self
+        registry.desiredPushTypes = [.voIP]
+        voipRegistry = registry
+    }
+
     /// Call once after identity is available (onboarding or launch).
     func bootstrap(app: AppState) {
+        bootstrapPushKit() // idempotent
         UNUserNotificationCenter.current().delegate = self
         let center = UNUserNotificationCenter.current()
         center.requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
@@ -36,6 +59,11 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
         // Re-register if the identity changed since the last registration.
         if let npub = IdentityStore.shared.npub, npub != registeredNpub {
             registerTokenOnRelay(npub: npub)
+        }
+        // v160z25: voip-токен тоже перерегистрируем при смене identity
+        // (например, восстановление аккаунта из backup).
+        if let npub = IdentityStore.shared.npub, npub != voipRegisteredNpub {
+            registerVoipTokenOnRelay(npub: npub)
         }
     }
 
@@ -71,7 +99,7 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    private static func postRegistration(hex: String, npub: String, sig: String) async {
+    private static func postRegistration(hex: String, npub: String, sig: String, kind: String = "alert") async {
         guard let url = URL(string: RelayConfig.defaultBaseURL + "/apns/register") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -80,7 +108,7 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
         let body: [String: Any] = [
             "npub": npub,
             "token": hex,
-            "kind": "alert",
+            "kind": kind,
             "challenge_sig": sig,
         ]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
@@ -97,4 +125,69 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
 
 extension Notification.Name {
     static let murmurPushWake = Notification.Name("murmurPushWake")
+}
+
+// MARK: - PKPushRegistryDelegate (v160z25: VoIP pushes / CallKit)
+
+extension PushManager {
+    /// v160z25: входящий VoIP push — ОБЯЗАТЕЛЬНЫЙ обработчик (Apple крашит
+    /// приложение, если PushKit-деливери не обработан немедленно).
+    func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: () -> Void) {
+        completion()
+        handleVoipPush(payload)
+    }
+
+    func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
+        guard type == .voIP else { return }
+        voipToken = credentials.token
+        let hex = credentials.token.map { String(format: "%02x", $0) }.joined()
+        NSLog("murmur pushkit: voip token=\(hex.prefix(16))…")
+        if let npub = IdentityStore.shared.npub {
+            voipRegisteredNpub = npub
+            registerVoipTokenOnRelay(npub: npub)
+        }
+    }
+
+    func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
+        // Токен сменился — при следующем didUpdate перерегистрируем.
+    }
+
+    /// Регистрация voip-токена на ролее (kind="voip", релей шлёт на него
+    /// deliver_call_voip при входящем звонке).
+    func registerVoipTokenOnRelay(npub: String) {
+        guard let token = voipToken else { return }
+        let hex = token.map { String(format: "%02x", $0) }.joined()
+        let identity = try? IdentityStore.shared.requireIdentity()
+        let payload = Data("apns-register".utf8)
+        Task { @MainActor in
+            guard let identity else { return }
+            let sig = try? await IdentityStore.shared.cryptoSignEnvelopeAsync(identity, senderNpub: npub, payload: payload)
+            guard let sig else { NSLog("murmur pushkit register: sign failed"); return }
+            await Self.postRegistration(hex: hex, npub: npub, sig: sig, kind: "voip")
+        }
+    }
+
+    /// Входящий voip-push (заблокированный экран / убитое приложение).
+    /// Apple: обработка ДОЛЖНА быть немедленной — reportNewIncomingCall
+    /// обязан вызваться синхронно после wake, иначе iOS рапортует crash.
+    /// Payload релея: {aps: {}, kind: "incoming_call", from, mode}.
+    func handleVoipPush(_ payload: PKPushPayload) {
+        NSLog("murmur pushkit: voip payload received")
+        guard payload.type == .voIP else { return }
+        let dict = payload.dictionaryPayload ?? [:]
+        guard dict["kind"] as? String == "incoming_call",
+              let from = dict["from"] as? String else {
+            NSLog("murmur pushkit: unknown voip payload, ignoring")
+            return
+        }
+        let mode = dict["mode"] as? String ?? "audio"
+        let video = mode == "video"
+        NSLog("murmur pushkit: incoming_call from=\(from.prefix(12)) mode=\(mode)")
+        Task { @MainActor in
+            // 1) CallManager: показать входящий (его phase поднято fullScreenCover).
+            CallManager.shared.handleIncomingPush(from: from, video: video)
+            // 2) CallKit: системная карточка на заблокированном экране.
+            CallKitProvider.shared.reportIncoming(from: from, video: video)
+        }
+    }
 }

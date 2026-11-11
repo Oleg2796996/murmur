@@ -529,6 +529,11 @@ impl PushServer {
         self
     }
 
+    /// v160z25: доступ к ApnsHandle для VoIP-доставки звонков из ws_server.
+    pub fn apns_handle(&self) -> Option<crate::apns::ApnsHandle> {
+        Some(self.apns.clone())
+    }
+
     pub fn with_static_dir(mut self, dir: Option<PathBuf>) -> Self {
         self.static_dir = dir;
         self

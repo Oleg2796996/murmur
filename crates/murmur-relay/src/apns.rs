@@ -293,6 +293,33 @@ impl ApnsClient {
             }
         }
     }
+
+    /// v160z25: VoIP push — apns-push-type: voip, без alert/sound в aps
+    /// (Apple: PushKit-клиент должен получать voip-пуш без визуального alert,
+    /// иначе push не доставляется в PKPushRegistry).
+    pub async fn send_voip(&self, token: &str, body: &serde_json::Value) -> anyhow::Result<bool> {
+        let jwt = self.key.provider_token()?;
+        let url = format!("{}/3/device/{}", self.base_url, token);
+        let resp = self
+            .http
+            .post(&url)
+            .header("authorization", format!("bearer {jwt}"))
+            .header("apns-topic", &self.topic)
+            .header("apns-push-type", "voip")
+            .header("apns-priority", "10")
+            .json(body)
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await?;
+        match resp.status().as_u16() {
+            200 => Ok(true),
+            403 | 404 | 410 => Ok(false),
+            status => {
+                let text = resp.text().await.unwrap_or_default();
+                anyhow::bail!("APNs voip {status}: {text}")
+            }
+        }
+    }
 }
 
 /// Shared handle wired into the relay (None when APNs not configured).
@@ -347,6 +374,32 @@ impl ApnsHandle {
                     store.remove(npub, "alert");
                 }
                 Err(e) => warn!(npub = %npub, err = %e, "APNs send failed"),
+            }
+        }
+    }
+
+    /// v160z25 (Олег 2026-11-11 «наивный звонок на iOS как обычный звонок»):
+    /// VoIP push (PushKit) для входящего звонка. Требования Apple:
+    /// apns-push-type = voip, apns-priority = 10, полезная нагрузка БЕЗ alert
+    /// (иначе PushKit-клиент игнорирует). Payload несёт только kind/from/mode
+    /// — релей по-прежнему не видит ни SDP, ни имён.
+    pub async fn deliver_call_voip(&self, npub: &str, from_npub: &str, call_mode: &str) {
+        let Some(client) = &self.client else { return };
+        let Some(store) = &self.store else { return };
+        for reg in store.tokens_for(npub, "voip") {
+            let body = json!({
+                "aps": {},
+                "kind": "incoming_call",
+                "from": from_npub,
+                "mode": call_mode,
+            });
+            match client.send_voip(&reg.token, &body).await {
+                Ok(true) => info!(npub = %npub, "APNs voip call push delivered"),
+                Ok(false) => {
+                    warn!(npub = %npub, "APNs voip token rejected, unregistering");
+                    store.remove(npub, "voip");
+                }
+                Err(e) => warn!(npub = %npub, err = %e, "APNs voip send failed"),
             }
         }
     }

@@ -50,6 +50,10 @@ targets:
         product: WebRTC
       - framework: MurmurKit/MurmurUniffi.xcframework
         embed: false
+      # v160z25: системные фреймворки CallKit + PushKit (наивный звонок
+      # на заблокированном экране).
+      - sdk: CallKit.framework
+      - sdk: PushKit.framework
     info:
       path: MurmurApp/Info.plist
       properties:
