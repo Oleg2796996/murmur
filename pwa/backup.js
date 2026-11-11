@@ -38,7 +38,12 @@
       const exported = await window.appStore.exportBackupData();
       data.kv = exported.kv || {};
       data.chats = exported.chats || {};
-      data.blobs = exported.blobs || [];
+      // v160z23 (Олег 2026-11-11): blob'ы (фото/видео, 45+ МБ base64) НЕ кладём в backup.
+      // Причина: Safari/iOS не переваривает расшифровку 79 МБ файла — restore падал
+      // целиком, и терялся ВЕСЬ backup (identity+контакты+история). Теперь backup
+      // содержит только текст: identity, LS, kv, чаты. Фото/видео живут локально
+      // на устройстве до эвикции (серверный TTL всё равно их стирает).
+      data.blobs = [];
       // appStore migration may have identity in IDB while live app still uses LS.
       if (!data.identity.npub && data.kv["murmur.npub"]) data.identity.npub = data.kv["murmur.npub"];
     }
