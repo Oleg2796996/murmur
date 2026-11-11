@@ -267,7 +267,9 @@ final class CallManager: NSObject, ObservableObject {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {
             if pendingOffer?.from == peer, pendingOffer?.signal != nil { return true }
-            if phase != .incoming { return false } // отмена/закрытие
+            // Phase.incoming имеет associated values — сравнение через pattern-match,
+            // не через != (Swift: "member 'incoming(peer:video:)' is a function...").
+            guard case .incoming = phase else { return false } // отмена/закрытие
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
         return pendingOffer?.from == peer && pendingOffer?.signal != nil
