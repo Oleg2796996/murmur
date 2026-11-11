@@ -10,6 +10,13 @@ final class RelayClient {
     private(set) var baseURL: String
     private let session: URLSession
     private var task: URLSessionWebSocketTask?
+    /// v160z24 (Олег 2026-11-11 «звонок зависает, когда берёшь трубку на iOS»):
+    /// send() сразу после resume() (или во время reconnect-окна) ПАДАЕТ —
+    /// call-кадр (offer/answer/ice) теряется навсегда, PWA ждёт answer,
+    /// обе стороны висят в «соединение…». WS-ready флаг + очередь исходящих
+    /// call-сигналов с дозасылкой при первом полученном кадре.
+    private var wsReady = false
+    private var pendingCallSignals: [[String: Any]] = []
 
     /// Reconnect backoff, same constants as the PWA.
     private let reconnectBase: TimeInterval = 1
@@ -316,6 +323,7 @@ final class RelayClient {
         guard let url = RelayConfig.webSocketURL(base: baseURL),
               let npub = IdentityStore.shared.npub else { return }
         shouldReconnect = true
+        wsReady = false // v160z24: пока не получен первый кадр/pong — WS не готов
         let t = session.webSocketTask(with: url)
         task = t
         t.resume()
@@ -336,11 +344,38 @@ final class RelayClient {
             "signal": signal,
         ]
         if !push { msg["push"] = false }
+        // v160z24: WS ещё не готов (пробуждение от push, reconnect-окно) —
+        // кадр в очередь; ретрай после subscribe. Без этого answer/offer
+        // терялся молча и звонок висел в «соединение…» на обеих сторонах.
+        guard wsReady, task != nil else {
+            pendingCallSignals.append(msg)
+            NSLog("murmur call_signal queued (ws not ready), total=\(pendingCallSignals.count)")
+            return
+        }
+        sendCallSignalNow(msg)
+    }
+
+    private func sendCallSignalNow(_ msg: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: msg),
               let text = String(data: data, encoding: .utf8) else { return }
-        task?.send(.string(text)) { err in
-            if let err { NSLog("murmur call_signal send failed: \(err)") }
+        task?.send(.string(text)) { [weak self] err in
+            if let err {
+                NSLog("murmur call_signal send failed: \(err) — requeueing")
+                Task { @MainActor [weak self] in
+                    self?.pendingCallSignals.append(msg)
+                }
+            }
         }
+    }
+
+    /// v160z24: доза отправить очередь после установления WS
+    /// (вызывается из receiveLoop при первом успешном кадре).
+    private func flushPendingCallSignals() {
+        guard wsReady, !pendingCallSignals.isEmpty else { return }
+        let batch = pendingCallSignals
+        pendingCallSignals.removeAll()
+        NSLog("murmur call_signal flush \(batch.count) queued frame(s)")
+        for msg in batch { sendCallSignalNow(msg) }
     }
 
     private func sendSubscribe(_ t: URLSessionWebSocketTask, npub: String) {
@@ -371,6 +406,12 @@ final class RelayClient {
     }
 
     private func handleIncoming(_ text: String) {
+        // v160z24: первый успешный входящий кадр = WS жив и подписка прошла →
+        // можно слать и доза отправить накопленные call-сигналы.
+        if !wsReady {
+            wsReady = true
+            flushPendingCallSignals()
+        }
         guard let data = text.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         // Relay wraps deliveries as {"type":"push","payload":{...}}; typing and

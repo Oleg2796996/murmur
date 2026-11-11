@@ -202,6 +202,21 @@ final class CallManager: NSObject, ObservableObject {
     func accept() async {
         guard case let .incoming(peer, video) = phase else { return }
         ringTimeoutTask?.cancel()
+        // v160z24 (Олег 2026-11-11): push-путь — карточка без SDP. Раньше сразу
+        // шлём fresh offer, но PWA в ringing его ИГНОРИРУЕТ (callState !==
+        // "connecting" → return) → дедлок «соединение…» на обеих сторонах.
+        // Теперь: до 5с ждём приход offer (PWA re-offer'ит каждые 2с), и
+        // только если он так и не пришёл — fallback в fresh offer.
+        if pendingOffer?.signal == nil || pendingOffer?.from != peer {
+            NSLog("murmur call: accept without SDP — waiting up to 5s for caller offer")
+            let waited = await waitForOffer(peer: peer, seconds: 5)
+            if !waited {
+                NSLog("murmur call: no offer in 5s — falling back to fresh offer")
+            }
+            // v160z24: пока ждали — звонок могли отменить/закрыть (bye, decline).
+            guard case .incoming = phase else { return }
+            guard pendingOffer?.from == peer else { return }
+        }
         // Cold-start push path (PWA call-audio.js parity): the ring card may
         // have no SDP yet — accepting then acts as a fresh outgoing call
         // (we create the offer, callee-turned-caller answers).
@@ -244,6 +259,18 @@ final class CallManager: NSObject, ObservableObject {
         } catch {
             fail(errorText: error.localizedDescription)
         }
+    }
+
+    /// v160z24: ждём прихода offer от пира до N секунд (offer уже в пути —
+    /// PWA re-offer'ит каждые 2с после wake). Возвращает true если offer пришёл.
+    private func waitForOffer(peer: String, seconds: Double) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if pendingOffer?.from == peer, pendingOffer?.signal != nil { return true }
+            if phase != .incoming { return false } // отмена/закрытие
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        return pendingOffer?.from == peer && pendingOffer?.signal != nil
     }
 
     private func answerOffer(from: String, signal: [String: Any]) async {
