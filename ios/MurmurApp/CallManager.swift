@@ -50,6 +50,11 @@ final class CallManager: NSObject, ObservableObject {
     var activeCallIsVideo: Bool { callMode == "video" }
     private var pendingOffer: (from: String, signal: [String: Any]?)?
     private var pendingRemoteCandidates: [RTCIceCandidate] = []
+    /// v160z24b: ICE-счётчики для диагностики «соединение…» зависаний.
+    /// Видно в Xcode-консоли: сколько кандидатов iOS отправил пиру,
+    /// сколько получил от пира, сколько забуферено до setRemoteDescription.
+    private var iceSentCount = 0
+    private var iceRecvCount = 0
     private var sentIce: Set<String> = []            // dedup (call53 sentIce parity)
     private var offerRetryTask: Task<Void, Never>?
     private var ringTimeoutTask: Task<Void, Never>?
@@ -342,6 +347,8 @@ final class CallManager: NSObject, ObservableObject {
               let index = cand["sdpMLineIndex"] as? Int32,
               let sdp = cand["candidate"] as? String else { return }
         let candidate = RTCIceCandidate(sdp: sdp, sdpMLineIndex: index, sdpMid: mid)
+        iceRecvCount += 1
+        NSLog("murmur call: ice recv #\(iceRecvCount) \(sdp.prefix(50))")
         if let pc, pc.remoteDescription != nil {
             Task { try? await pc.add(candidate) }
         } else {
@@ -478,6 +485,8 @@ final class CallManager: NSObject, ObservableObject {
         pendingOffer = nil
         pendingRemoteCandidates.removeAll()
         sentIce.removeAll()
+        iceSentCount = 0
+        iceRecvCount = 0
         callStartedAt = 0
         durationSeconds = 0
         micMuted = false
@@ -619,6 +628,10 @@ extension CallManager: RTCPeerConnectionDelegate {
                 self.startTimer()
             case .failed, .closed, .disconnected:
                 if self.phase != .idle { self.close("ice \(newState.rawValue)") }
+            case .checking:
+                // v160z24b: расширенная диагностика зависаний в checking —
+                // сразу видно: обмен кандидатами шёл или оборвался.
+                NSLog("murmur call: ICE checking — sent=\(self.iceSentCount) recv=\(self.iceRecvCount) buffered=\(self.pendingRemoteCandidates.count)")
             default:
                 break
             }
@@ -640,6 +653,8 @@ extension CallManager: RTCPeerConnectionDelegate {
                     "sdpMLineIndex": Int(candidate.sdpMLineIndex),
                 ]
                 self.relayClient?.sendCallSignal(to: peer, signal: ["kind": "ice", "candidate": json], push: false)
+                    self.iceSentCount += 1
+                    NSLog("murmur call: ice sent #\(self.iceSentCount) \(candidate.sdp.prefix(50))")
             }
         }
     }
