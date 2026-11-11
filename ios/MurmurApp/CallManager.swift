@@ -383,12 +383,10 @@ final class CallManager: NSObject, ObservableObject {
             // iOS side nominates srflx/host and dies on ice:FAILED even
             // though TURN allocation succeeded (observed 2026-11-10).
             config.continualGatheringPolicy = .gatherContinually
-            // v160z24c (Олег 2026-11-11, лог «ice:checking — sent=28 recv=10»):
-            // .all порождал 9 TCP-кандидатов и мусорные интерфейсы (симулятор,
-            // link-local) → 280 ICE-пар, relay-пары проверялись ПОСЛЕДНИМИ →
-            // звонок «висел» в checking минутами. .default = только UDP,
-            // host+srflx+relay — пары в разы меньше, relay достигается быстро.
-            config.candidateNetworkPolicy = .default
+            // v160z24c: candidateNetworkPolicy НЕ трогаем — в ObjC-обёртке libwebrtc
+            // (stasel/WebRTC v137) enum RTCCandidateNetworkPolicy имеет только .all,
+            // '.default' не существует (Xcode: Type has no member 'default').
+            // Мусорные кандидаты режем ФИЛЬТРОМ в didGenerate (ниже).
             let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
             pc = factory?.peerConnection(with: config, constraints: constraints, delegate: self)
 
