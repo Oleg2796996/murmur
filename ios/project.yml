@@ -27,7 +27,7 @@ targets:
       - path: MurmurKit/Generated/murmur_uniffi.swift
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.murmurchat.app
+        PRODUCT_BUNDLE_IDENTIFIER: org.murmurchat.ios
         INFOPLIST_FILE: MurmurApp/Info.plist
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         OTHER_LDFLAGS:
