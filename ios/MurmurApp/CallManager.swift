@@ -55,6 +55,7 @@ final class CallManager: NSObject, ObservableObject {
     /// сколько получил от пира, сколько забуферено до setRemoteDescription.
     private var iceSentCount = 0
     private var iceRecvCount = 0
+    private var incomingOfferCount = 0
     private var sentIce: Set<String> = []            // dedup (call53 sentIce parity)
     private var offerRetryTask: Task<Void, Never>?
     private var ringTimeoutTask: Task<Void, Never>?
@@ -74,12 +75,11 @@ final class CallManager: NSObject, ObservableObject {
             "turn:murmurchat.org:3478?transport=udp",
             "turn:murmurchat.org:3478?transport=tcp"
         ], username: "murmur-prod", credential: "murmurchat"),
-        // v160z25g: TLS-релей для сетей, где TCP 3478 тоже режется
-        // (hotspot/строгий NAT — наблюдение 12.11: iPhone держит TURN-сессии
-        // по TCP, но UDP-медиа до пира не доходят; turns/5349 надёжнее).
-        RTCIceServer(urlStrings: [
-            "turns:murmurchat.org:5349?transport=tcp"
-        ], username: "murmur-prod", credential: "murmurchat"),
+        // v160z26f (ОТКАТ 12.11): turns:5349 УБРАН — в сборках с ним iPhone
+        // переставал собирать ВСЕ relay-кандидаты (sent: только host/IPv6,
+        // ноль relay; логи 21:50-22:00), в дневной сборке без turns relay был.
+        // stasel/WebRTC v137: TLS-TURN роняет gathering (гипотеза агента).
+        // turns остаётся на PWA-стороне (Safari собрал его нормально).
     ]
 
     override private init() {
@@ -212,6 +212,12 @@ final class CallManager: NSObject, ObservableObject {
     }
 
     private func handleOffer(from: String, signal: [String: Any]) {
+        // v160z26f: glare-детектор — если offer'ов больше одного за звонок,
+        // PWA re-offer loop доходит до iPhone ПОСЛЕ answer (гипотеза агента:
+        // implicit rollback в ObjC-обёртке ломает negotiation). Одного числа
+        // в логе хватит для диагноза.
+        incomingOfferCount += 1
+        NSLog("murmur call: offer #\(incomingOfferCount) received (signaling state: \(pc?.signalingState.rawValue ?? -1))")
         let mode = (signal["mode"] as? String) == "video" ? "video" : "audio"
         callMode = mode
         let video = mode == "video"
@@ -532,6 +538,7 @@ final class CallManager: NSObject, ObservableObject {
         sentIce.removeAll()
         iceSentCount = 0
         iceRecvCount = 0
+        incomingOfferCount = 0
         callStartedAt = 0
         durationSeconds = 0
         micMuted = false
