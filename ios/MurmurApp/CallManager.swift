@@ -612,6 +612,7 @@ final class CallManager: NSObject, ObservableObject {
         // v160z25: если звонок начат из CallKit — сессия УЖЕ активирована в
         // didActivate; повторный setActive на main-потоке даёт UI-freeze
         // warning (AVAudioSession_iOS.mm:978) и конкурирует с CallKit.
+        let session = AVAudioSession.sharedInstance()
         if session.category != .playAndRecord || !session.isOtherAudioPlaying {
             try? session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth])
             try? session.setActive(true, options: [])
