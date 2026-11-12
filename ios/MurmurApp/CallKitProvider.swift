@@ -106,7 +106,7 @@ extension CallKitProvider: CXProviderDelegate {
         }
     }
 
-    func provider(_ provider: CXProvider, perform action: CXAnswerAction) {
+    func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         Task { @MainActor in
             NSLog("murmur callkit: answer action")
             guard let peer = self.activePeer else {
