@@ -184,13 +184,19 @@ extension PushManager {
         let video = mode == "video"
         NSLog("murmur pushkit: incoming_call from=\(from.prefix(12)) mode=\(mode)")
         Task { @MainActor in
-            // v160z26b: СНАЧАЛА CallKit-репорт — Apple требует reportNewIncomingCall
-            // немедленно после voip-push (иначе iOS молча глушит карточку).
-            // БАГ 12.11: handleIncomingPush ставил phase=.incoming ПЕРВЫМ,
-            // reportIncoming видел phase != .idle и делал early return —
-            // системная карточка НЕ показывалась никогда (ни на локе, ни в фоне).
-            CallKitProvider.shared.reportIncoming(from: from, video: video)
-            // 2) CallManager: показать входящий (его phase поднимает fullScreenCover).
+            // v160z26e (агент-исследование + анализ таймингов самосброса 12.11):
+            // CallKit-карточка показывается ТОЛЬКО когда приложение в фоне —
+            // как в Telegram/WhatsApp. Когда app открыт, наш CallOverlay —
+            // единственный UI приёма. ИНАЧЕ: висящая системная карточка (CXAction)
+            // таймаутит через ~25с → timedOutPerforming → decline() → bye пиру →
+            // «звонок сам сбрасывается» (наблюдалось весь день 12.11).
+            let isBackground = UIApplication.shared.applicationState != .active
+            NSLog("murmur pushkit: app state for callkit card: \(isBackground ? "background → show" : "foreground → skip (overlay only)")")
+            if isBackground {
+                CallKitProvider.shared.reportIncoming(from: from, video: video)
+            }
+            // CallManager: показать входящий (phase поднимает fullScreenCover —
+            // при открытом app это основной путь приёма, как вчера v160z24d).
             CallManager.shared.handleIncomingPush(from: from, video: video)
         }
     }

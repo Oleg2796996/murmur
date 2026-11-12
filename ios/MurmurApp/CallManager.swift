@@ -244,6 +244,10 @@ final class CallManager: NSObject, ObservableObject {
     func accept() async {
         guard case let .incoming(peer, video) = phase else { return }
         ringTimeoutTask?.cancel()
+        // v160z26e: принимаем из ОВЕРЛЕЯ — закрыть системную карточку CallKit,
+        // если она успела показаться (race: push при фон-переходе). Иначе
+        // висящий CXAction таймаутит → timedOutPerforming → decline → bye пиру.
+        CallKitProvider.shared.reportCallEnded()
         // v160z24 (Олег 2026-11-11): push-путь — карточка без SDP. Раньше сразу
         // шлём fresh offer, но PWA в ringing его ИГНОРИРУЕТ (callState !==
         // "connecting" → return) → дедлок «соединение…» на обеих сторонах.
