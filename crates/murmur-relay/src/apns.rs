@@ -297,26 +297,51 @@ impl ApnsClient {
     /// v160z25: VoIP push — apns-push-type: voip, без alert/sound в aps
     /// (Apple: PushKit-клиент должен получать voip-пуш без визуального alert,
     /// иначе push не доставляется в PKPushRegistry).
+    /// v160z26: пробуем основной topic, затем topic + ".voip" — у некоторых
+    /// PushKit-токенов APNs привязывает токен к topic с суффиксом (наблюдение
+    /// 12.11: валидный voip-токен стабильно даёт DeviceTokenNotForTopic на
+    /// базовый topic при любом bundle id).
     pub async fn send_voip(&self, token: &str, body: &serde_json::Value) -> anyhow::Result<bool> {
-        let jwt = self.key.provider_token()?;
+        for topic in [&self.topic, &format!("{}.voip", self.topic)] {
+            if let Some(result) = self.send_voip_topic(token, body, topic).await {
+                return Ok(result);
+            }
+        }
+        Ok(false)
+    }
+
+    /// None = ошибка сети/сервера (не пробуем второй topic), Some(ok) = ответ APNs.
+    async fn send_voip_topic(&self, token: &str, body: &serde_json::Value, topic: &str) -> Option<bool> {
+        let jwt = self.key.provider_token().ok()?;
         let url = format!("{}/3/device/{}", self.base_url, token);
         let resp = self
             .http
             .post(&url)
             .header("authorization", format!("bearer {jwt}"))
-            .header("apns-topic", &self.topic)
+            .header("apns-topic", topic)
             .header("apns-push-type", "voip")
             .header("apns-priority", "10")
             .json(body)
             .timeout(Duration::from_secs(15))
             .send()
-            .await?;
+            .await
+            .ok()?;
         match resp.status().as_u16() {
-            200 => Ok(true),
-            403 | 404 | 410 => Ok(false),
+            200 => Some(true),
+            // DeviceTokenNotForTopic → пробуем следующий topic (возвращаем Some(false)
+            // только после последнего). 403/404/410 — токен отозван, не пробуем.
+            400 => {
+                let text = resp.text().await.unwrap_or_default();
+                if text.contains("DeviceTokenNotForTopic") {
+                    None // сигнал пробовать следующий topic
+                } else {
+                    Some(false)
+                }
+            }
+            403 | 404 | 410 => Some(false),
             status => {
                 let text = resp.text().await.unwrap_or_default();
-                anyhow::bail!("APNs voip {status}: {text}")
+                Some(false) // неожиданный статус — не ретраим другим topic
             }
         }
     }
