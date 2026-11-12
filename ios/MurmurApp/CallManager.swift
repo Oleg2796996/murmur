@@ -74,6 +74,12 @@ final class CallManager: NSObject, ObservableObject {
             "turn:murmurchat.org:3478?transport=udp",
             "turn:murmurchat.org:3478?transport=tcp"
         ], username: "murmur-prod", credential: "murmurchat"),
+        // v160z25g: TLS-релей для сетей, где TCP 3478 тоже режется
+        // (hotspot/строгий NAT — наблюдение 12.11: iPhone держит TURN-сессии
+        // по TCP, но UDP-медиа до пира не доходят; turns/5349 надёжнее).
+        RTCIceServer(urlStrings: [
+            "turns:murmurchat.org:5349?transport=tcp"
+        ], username: "murmur-prod", credential: "murmurchat"),
     ]
 
     override private init() {
