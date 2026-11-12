@@ -59,6 +59,11 @@ final class CallManager: NSObject, ObservableObject {
     private var offerRetryTask: Task<Void, Never>?
     private var ringTimeoutTask: Task<Void, Never>?
     private var timerTask: Task<Void, Never>?
+    /// v160z25d: льгота для транзиентного ice:disconnected — PWA закрывает звонок
+    /// по pc.connectionState, а iceConnectionState.disconnected часто
+    /// восстанавливается (пара переключается на TURN). Мгновенный close(ice 5)
+    /// убивал живые звонки (регресс 12.11: connected → disconnected → close).
+    private var iceDisconnectGraceTask: Task<Void, Never>?
     private var callStartedAt: TimeInterval = 0
     private var iceServers: [RTCIceServer] = [
         RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"]),
@@ -503,6 +508,7 @@ final class CallManager: NSObject, ObservableObject {
         offerRetryTask?.cancel(); offerRetryTask = nil
         ringTimeoutTask?.cancel(); ringTimeoutTask = nil
         timerTask?.cancel(); timerTask = nil
+        iceDisconnectGraceTask?.cancel(); iceDisconnectGraceTask = nil
         localCapturer?.stopCapture()
         localCapturer = nil
         pc?.close()
@@ -671,12 +677,31 @@ extension CallManager: RTCPeerConnectionDelegate {
             }
             switch newState {
             case .connected, .completed:
+                self.iceDisconnectGraceTask?.cancel()
+                self.iceDisconnectGraceTask = nil
                 guard case .connecting(let peer, let video) = self.phase else { return }
                 self.phase = .connected(peer: peer, video: video)
                 self.stateText = "На связи"
                 self.startTimer()
-            case .failed, .closed, .disconnected:
-                if self.phase != .idle { self.close("ice \(newState.rawValue)") }
+            case .failed:
+                // failed — терминальное состояние: все пары проверены.
+                if self.phase != .idle { self.close("ice failed") }
+            case .disconnected:
+                // v160z25d: НЕ рвём сразу — даём ICE 10с восстановиться
+                // (транзиентный disconnect при смене пары/сети). Если через
+                // 10с всё ещё disconnected — закрываем (pwa-паритет:
+                // call-audio.js закрывает по connectionState, не по ICE).
+                guard self.phase != .idle else { return }
+                self.iceDisconnectGraceTask?.cancel()
+                self.iceDisconnectGraceTask = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    guard let self, !Task.isCancelled else { return }
+                    if let pc = self.pc, pc.iceConnectionState == .disconnected, self.phase != .idle {
+                        self.close("ice disconnected >10s")
+                    }
+                }
+            case .closed:
+                if self.phase != .idle { self.close("ice closed") }
             case .checking:
                 // v160z24b: расширенная диагностика зависаний в checking —
                 // сразу видно: обмен кандидатами шёл или оборвался.
