@@ -67,6 +67,15 @@ targets:
         UILaunchScreen: {}
         NSMicrophoneUsageDescription: "Микрофон нужен для звонков."
         NSCameraUsageDescription: "Камера нужна для видеозвонков."
+        # v160z26d (агент-исследование 12.11): Local Network Privacy (iOS 14+)
+        # — БЕЗ этого ключа iOS молча блокирует трафик к локальным адресам
+        # 192.168.x.x → host-ICE-пары не собираются (звонок PWA→iPhone на одной
+        # LAN: host 192.168.1.10 ↔ 192.168.1.68, checking навсегда → FAILED).
+        # Permission запрашивается при первом локальном трафике; промпт мог быть
+        # «съеден» CallKit-карточкой. Добавляем ключ + Bonjour-сервисы.
+        NSLocalNetworkUsageDescription: "Приложению нужен доступ к локальной сети для звонков между устройствами."
+        NSBonjourServices:
+          - _murmur._tcp
         UIBackgroundModes:
           - audio
           - remote-notification
