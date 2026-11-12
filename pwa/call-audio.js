@@ -35,6 +35,7 @@
   const FSEX = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h5V4"/><path d="M20 15h-5v5"/><path d="M9 9l-5-5"/><path d="M15 15l5 5"/></svg>';
   let pendingOffer = null;
   let reofferTimer = null; // call53: повтор оффера для холодного пира (WS эфемерен, оффер теряется)
+  let lastPeerSignalTs = 0; // v160z26g: ts последнего сигнала от пира (event-driven reoffer stop)
   let sentIce = []; // call53: кандидаты, отправленные до answer (дозируем повторно)
   let camFacing = "user"; // call54: текущая камера PiP (user=фронтальная, environment=тыловая)
   let camFlipBusy = false; // call54: защита от двойного тапа во время переключения
@@ -392,6 +393,7 @@
     pc = null; remotePeer = null; pendingOffer = null;
     if (reofferTimer) { clearInterval(reofferTimer); reofferTimer = null; } // call53
     if (pushRingTimer) { clearTimeout(pushRingTimer); pushRingTimer = null; } // call56
+    lastPeerSignalTs = 0; // v160z26g: сброс маркера «пир жив» на новый звонок
     sentIce.length = 0; // call53
     camFacing = "user"; camFlipBusy = false; // call54
 
@@ -500,6 +502,14 @@
     reofferTimer = setInterval(() => {
       if (callState !== "connecting" || callDirection !== "out" || !pc || remoteDescriptionReady) {
         clearInterval(reofferTimer); reofferTimer = null; return;
+      }
+      // v160z26g (Олег 12.11 «как в Telegram»): если пир УЖЕ отвечает (answer/ICE),
+      // loop немедленно стоп — повторные offer'ы после answer вызывают glare
+      // (libwebrtc-ObjC implicit rollback слаб, подтверждено логом 30 offer'ов).
+      if (lastPeerSignalTs > 0 && Date.now() - lastPeerSignalTs < 3000) {
+        clearInterval(reofferTimer); reofferTimer = null;
+        diagLog("glare-guard", "peer alive (signal <3s ago) — reoffer loop stopped");
+        return;
       }
       const socket = ws();
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
@@ -709,6 +719,8 @@
   async function onSignal(msg) {
     const from = msg.from_npub; const s = msg.signal;
     if (!from || !s) return;
+    // v160z26g: отметка «пир жив» — для event-driven остановки re-offer loop.
+    if (remotePeer === from || (pendingOffer && pendingOffer.from === from)) lastPeerSignalTs = Date.now();
     if (s.kind === "bye") {
       // call56: bye от звонящего (его 60с истёк / отмена до соединения) должен
       // гасить и «призрачную» входящую карточку без SDP — раньше она висела,
@@ -829,7 +841,15 @@
     if (!pc || remotePeer !== from) return;
     if (s.kind === "answer") {
       // call57b: answer от нативного пира тоже может нести extmap-allow-mixed.
-      await pc.setRemoteDescription({ type: s.sdp.type, sdp: sanitizeSdp(s.sdp.sdp) });
+      // v160z26g: try/catch + console.warn — молчаливый фейл здесь = Mac не
+      // применяет answer (30 re-offers/звонок, лог 22:17) и ICE мёртв.
+      try {
+        await pc.setRemoteDescription({ type: s.sdp.type, sdp: sanitizeSdp(s.sdp.sdp) });
+      } catch (err) {
+        console.warn("[MurmurCall] ANSWER setRemoteDescription FAILED:", err && err.message, "sdpLen:", (s.sdp && s.sdp.sdp || "").length);
+        diagLog("error", "answer srd: " + ((err && err.message) || err));
+        return;
+      }
       remoteDescriptionReady = true;
       // call53: answer получен — re-offer цикл больше не нужен, а кандидаты,
       // отправленные в офлайн-окно пира, дозируем повторно. Дубликаты
