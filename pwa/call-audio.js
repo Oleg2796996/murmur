@@ -13,6 +13,13 @@
       ],
       username: "murmur-prod",
       credential: "murmurchat"
+    },
+    // v160z26c: TLS-релей для TCP-only сетей (hotspot/VPN режут UDP и
+    // plain-TCP медиа). Симметричный путь с iOS (turns:5349 там же).
+    {
+      urls: "turns:murmurchat.org:5349?transport=tcp",
+      username: "murmur-prod",
+      credential: "murmurchat"
     }
   ];
   let pc = null;
