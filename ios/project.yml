@@ -45,11 +45,12 @@ targets:
       properties:
         aps-environment: development
         com.apple.developer.usernotifications.time-sensitive: true
-        # v160z25e: ОБЯЗАТЕЛЬНО для PushKit voip-пушей (iOS 13+). Без него
-        # APNs отвечает 400 DeviceTokenNotForTopic на voip-пуш (наблюдение
-        # 12.11: alert-пуши доставляются, voip — нет; токен PushKit выдаётся,
-        # но не привязан к topic без этого entitlement).
-        com.apple.developer.pushkit.unrestricted-voip: true
+        # v160z25f: com.apple.developer.pushkit.unrestricted-voip ВРЕМЕННО убран —
+        # это restricted entitlement (Xcode: «not found and could not be included
+        # in profile»), включается только по запросу в Apple Developer Support.
+        # Пока его нет: voip-пуши дают 400 DeviceTokenNotForTopic, звонки работают
+        # через WS-сигналинг при живом приложении (как вчера, v160z24d).
+        # Вернуть ключ после одобрения запроса к Apple (см. pilot-docs).
     dependencies:
       - package: WebRTC
         product: WebRTC
