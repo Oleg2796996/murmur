@@ -162,19 +162,24 @@ extension PushManager {
         Task { @MainActor in
             switch response.actionIdentifier {
             case "MURMUR_DECLINE", UNNotificationDismissActionIdentifier:
-                // Отклонить: bye пиру БЕЗ поднятия UI. Если приложение убито —
-                // identity доступна из Keychain, но RelayClient ещё не создан;
-                // bye отправим через одноразовый пост.
-                if let npub {
-                    await Self.sendByeOneShot(from: npub, to: from)
-                }
+                // Отклонить: bye пиру БЕЗ поднятия UI. call_signal ходит только
+                // по WS — при убитом приложении сокета нет, пир сам сбросит
+                // по 60с таймауту (как при неответе).
+                NSLog("murmur push: decline from alert — caller will timeout")
                 completionHandler()
             case "MURMUR_ACCEPT", UNNotificationDefaultActionIdentifier:
-                // Принять (или тап по баннеру): поднимаем UI, CallManager
-                // показывает incoming-оверлей, accept() ждёт offer до 5с.
+                // v160z27d (Олег 13.11 «рингтон без ответа Apple»): тап/Принять
+                // ПОДНИМАЕТ живое приложение → reportIncoming из ЖИВОГО
+                // приложения НЕ блокируется iOS (блокируется только вызов из
+                // voip-wake убитого приложения) → нативная CallKit-карточка
+                // с РИНГТОНОМ и вибрацией, entitlement не нужен.
                 if let npub {
                     CallManager.shared.handleIncomingPush(from: from, video: video)
                     NotificationCenter.default.post(name: .murmurPushWake, object: nil)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        let shown = CallKitProvider.shared.reportIncoming(from: from, video: video)
+                        NSLog("murmur push: callkit card from alert-tap shown=\(shown)")
+                    }
                 }
                 completionHandler()
             default:
