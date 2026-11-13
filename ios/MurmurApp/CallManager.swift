@@ -92,18 +92,18 @@ final class CallManager: NSObject, ObservableObject {
             "turn:murmurchat.org:3478?transport=udp",
             "turn:murmurchat.org:3478?transport=tcp"
         ], username: "murmur-prod", credential: "murmurchat"),
-        // v160z26h (ВОЗВРАТ 13.11): turns:5349 СНОВА ВКЛЮЧЁН.
-        // Гипотеза v160z26f («stasel v137 роняет gathering на TLS-TURN») была
-        // ОШИБОЧНОЙ — реальная причина нулевых relay-кандидатов нашлась в
-        // нашем СОБСТВЕННОМ фильтре didGenerate ниже: он резал строки с
-        // " tcp " / "tcptype", а TURN-relay-кандидат по TCP/TLS содержит
-        // ровно "typ relay ... tcptype passive" → ЕДИНСТВЕННЫЙ рабочий путь
-        // выбрасывался ДО отправки пиру. В логе 12.11 22:23 iPhone не отправил
-        // НИ ОДНОГО relay-кандидата, хотя coturn на сервере его аллокации видел.
-        // Теперь фильтр режет только link-local, поэтому TLS-релей снова нужен.
-        RTCIceServer(urlStrings: [
-            "turns:murmurchat.org:5349?transport=tcp"
-        ], username: "murmur-prod", credential: "murmurchat"),
+        // v160z26i (13.11): turns:5349 УБРАН СНОВА — и это ОКОНЧАТЕЛЬНО.
+        // Лог 13.11 ~11:28 (сборка 87847c7): с turns в конфиге iPhone собрал
+        // ТОЛЬКО 7 host-кандидатов, 0 srflx, 0 relay; gathering замирает.
+        // coturn при этом видит УСПЕШНЫЕ TLS/TCP-аллокации с iPhone (5349) —
+        // TCP/TLS до сервера работает, но stasel/WebRTC v137 НЕ эмитит
+        // кандидаты, пока в конфиге есть TLS-TURN. Воспроизведено 2-й раз
+        // (v160z25g вечер 12.11, v160z26h утро 13.11). Без turns (утро
+        // 12.11): srflx + 2 relay (3478 udp+tcp) собирались нормально.
+        // История: v160z26f убрал turns по этой же причине; v160z26h вернул
+        // (казалось, что виноват фильтр " tcp " — он ТОЖЕ был багом и
+        // исправлен, но TLS-TURN-замирание — отдельная, реальная проблема).
+        // turns остаётся на PWA-стороне (Safari/WebKit собирает его нормально).
     ]
 
     override private init() {
