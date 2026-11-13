@@ -560,6 +560,9 @@ final class CallManager: NSObject, ObservableObject {
         if let peer = pendingOffer?.from ?? remotePeer {
             relayClient?.sendCallSignal(to: peer, signal: ["kind": "bye"], push: false)
         }
+        // v160z27: decline из overlay тоже закрывает системную карточку
+        // (карточка теперь показывается ВСЕГДА, а не только в фоне).
+        CallKitProvider.shared.reportCallEnded()
         close("decline")
     }
 

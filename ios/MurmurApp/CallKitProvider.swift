@@ -133,7 +133,11 @@ extension CallKitProvider: CXProviderDelegate {
         NSLog("murmur callkit: action timed out")
         Task { @MainActor in
             CallManager.shared.decline()
-            self.clearActive()
+            // v160z27: системная карточка обязана закрыться — иначе висит до
+            // перезагрузки (наблюдение 12.11: таймаут закрывал звонок, но карточка
+            // оставалась на экране блокировки).
+            self.reportCallEnded()
+            action.fulfill()
         }
     }
 

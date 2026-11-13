@@ -184,19 +184,25 @@ extension PushManager {
         let video = mode == "video"
         NSLog("murmur pushkit: incoming_call from=\(from.prefix(12)) mode=\(mode)")
         Task { @MainActor in
-            // v160z26e (агент-исследование + анализ таймингов самосброса 12.11):
-            // CallKit-карточка показывается ТОЛЬКО когда приложение в фоне —
-            // как в Telegram/WhatsApp. Когда app открыт, наш CallOverlay —
-            // единственный UI приёма. ИНАЧЕ: висящая системная карточка (CXAction)
-            // таймаутит через ~25с → timedOutPerforming → decline() → bye пиру →
-            // «звонок сам сбрасывается» (наблюдалось весь день 12.11).
-            let isBackground = UIApplication.shared.applicationState != .active
-            NSLog("murmur pushkit: app state for callkit card: \(isBackground ? "background → show" : "foreground → skip (overlay only)")")
-            if isBackground {
-                CallKitProvider.shared.reportIncoming(from: from, video: video)
-            }
+            // v160z27 (Олег 13.11 «наивный звонок»): CallKit-карточка — ВСЕГДА,
+            // как у Telegram: и на заблокированном экране, и при открытом app.
+            // reportNewIncomingCall вызывается СИНХРОННО сразу после wake (Apple
+            // крашит приложение, если PushKit-деливери не был обработан
+            // немедленно и не поднял звонок — требование iOS 13+).
+            //
+            // История: v160z26e показывал карточку только в фоне (боролись с
+            // «звонок сам сбрасывается» через timedOutPerforming). Но: а) фон-only
+            // не даёт системного меню при открытом app (Олег хочет как в
+            // Telegram), б) с v160z27 CallOverlay ПОВЕРХ карточки при активном
+            // app (двойной UI допустим: overlay закрывает карточку через
+            // reportCallEnded при accept/decline — CallManager.accept() это
+            // уже делает).
+            NSLog("murmur pushkit: app state for callkit card: \(UIApplication.shared.applicationState == .active ? "foreground (overlay on top)" : "background/locked → card")")
+            let cardShown = CallKitProvider.shared.reportIncoming(from: from, video: video)
+            NSLog("murmur pushkit: callkit card shown=\(cardShown)")
             // CallManager: показать входящий (phase поднимает fullScreenCover —
-            // при открытом app это основной путь приёма, как вчера v160z24d).
+            // при открытом app overlay поверх системной карточки; при accept
+            // overlay закрывает карточку reportCallEnded).
             CallManager.shared.handleIncomingPush(from: from, video: video)
         }
     }

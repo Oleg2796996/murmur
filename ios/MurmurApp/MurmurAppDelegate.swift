@@ -17,6 +17,12 @@ final class MurmurAppDelegate: NSObject, UIApplicationDelegate {
         // пропущенный звонок на заблокированном экране.
         PushManager.shared.bootstrapPushKit()
 
+        // v160z27: CallKit provider создаём на старте приложения (не лениво
+        // при первом reportIncoming) — на заблокированном экране каждая
+        // миллисекунда между voip-push и reportNewIncomingCall на счету
+        // (iOS 13+ рапортует crash, если карточка не поднята немедленно).
+        CallKitProvider.shared.bootstrap()
+
         // Incoming call notification category (silent push -> custom handler).
         let accept = UNNotificationAction(identifier: "MURMUR_ACCEPT", title: "Принять", options: .foreground)
         let decline = UNNotificationAction(identifier: "MURMUR_DECLINE", title: "Отклонить", options: .destructive)
