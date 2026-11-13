@@ -241,8 +241,6 @@ extension PushManager {
     }
 
     /// Входящий voip-push (заблокированный экран / убитое приложение).
-    /// Apple: обработка ДОЛЖНА быть немедленной — reportNewIncomingCall
-    /// обязан вызваться синхронно после wake, иначе iOS рапортует crash.
     /// Payload релея: {aps: {}, kind: "incoming_call", from, mode}.
     func handleVoipPush(_ payload: PKPushPayload) {
         NSLog("murmur pushkit: voip payload received")
@@ -256,6 +254,18 @@ extension PushManager {
         let mode = dict["mode"] as? String ?? "audio"
         let video = mode == "video"
         NSLog("murmur pushkit: incoming_call from=\(from.prefix(12)) mode=\(mode)")
+        // v160z27f (краш 18:20, PKPushRegistry.m:382): iOS убивает приложение
+        // "never posted an incoming call to the system", если
+        // reportNewIncomingCall не вызван СИНХРОННО из этого delegate-колбэка.
+        // Прежний Task { @MainActor } давал async-хоп → iOS считал push
+        // необработанным. Card показывается ПРЯМО ЗДЕСЬ, handleIncomingPush
+        // (UI) уходит в Task — он не обязан быть синхронным.
+        // Мы на main queue (PKPushRegistry(queue: .main)); MainActor == main
+        // queue, поэтому assumeIsolated легален и БЕЗ async-хопа (iOS 17+).
+        let cardShown = MainActor.assumeIsolated {
+            CallKitProvider.shared.reportIncoming(from: from, video: video)
+        }
+        NSLog("murmur pushkit: callkit card shown=\(cardShown)")
         Task { @MainActor in
             // v160z27 (Олег 13.11 «наивный звонок»): CallKit-карточка — ВСЕГДА,
             // как у Telegram: и на заблокированном экране, и при открытом app.
@@ -270,9 +280,6 @@ extension PushManager {
             // app (двойной UI допустим: overlay закрывает карточку через
             // reportCallEnded при accept/decline — CallManager.accept() это
             // уже делает).
-            NSLog("murmur pushkit: app state for callkit card: \(UIApplication.shared.applicationState == .active ? "foreground (overlay on top)" : "background/locked → card")")
-            let cardShown = CallKitProvider.shared.reportIncoming(from: from, video: video)
-            NSLog("murmur pushkit: callkit card shown=\(cardShown)")
             // CallManager: показать входящий (phase поднимает fullScreenCover —
             // при открытом app overlay поверх системной карточки; при accept
             // overlay закрывает карточку reportCallEnded).
