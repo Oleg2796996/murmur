@@ -859,7 +859,16 @@
       // v160z26g: try/catch + console.warn — молчаливый фейл здесь = Mac не
       // применяет answer (30 re-offers/звонок, лог 22:17) и ICE мёртв.
       try {
-        await pc.setRemoteDescription({ type: s.sdp.type, sdp: sanitizeSdp(s.sdp.sdp) });
+        // v160z26k: sdp-объект от iOS проходит релей прозрачно, но Safari
+        // бросает TypeError ("Type error" — усечённый текст WebKit), если
+        // type не строковый enum. sdpJSON на iOS шлёт type="answer" строкой,
+        // НО: если где-то по пути объект теряет shape — fallback спасёт.
+        const aType = (s.sdp && typeof s.sdp.type === "string") ? s.sdp.type : "answer";
+        const aSdp = (s.sdp && typeof s.sdp.sdp === "string") ? s.sdp.sdp : "";
+        if (!aSdp) {
+          diagLog("error", "answer without SDP body! keys=" + (s.sdp ? Object.keys(s.sdp).join(",") : "no sdp obj"));
+        }
+        await pc.setRemoteDescription({ type: aType, sdp: sanitizeSdp(aSdp) });
       } catch (err) {
         console.warn("[MurmurCall] ANSWER setRemoteDescription FAILED:", err && err.message, "sdpLen:", (s.sdp && s.sdp.sdp || "").length);
         diagLog("error", "answer srd: " + ((err && err.message) || err));
@@ -869,6 +878,9 @@
           fetch("/api/call-diag", { method: "POST", body: JSON.stringify({
             t: new Date().toISOString(), side: "pwa", ev: "answer_srd_failed",
             err: (err && err.message) || String(err),
+            errName: err && err.name, errStack: err && String(err.stack || "").slice(0, 800),
+            sdpObjType: s.sdp ? typeof s.sdp : "none",
+            sdpTypeField: s.sdp ? String(s.sdp.type) : "none",
             signalingState: pc.signalingState, remoteDescriptionReady,
             offerCount: offerCount,
             sdpHead: String((s.sdp && s.sdp.sdp) || "").slice(0, 3500)
