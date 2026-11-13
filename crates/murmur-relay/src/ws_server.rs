@@ -178,7 +178,16 @@ impl WsServer {
                                                 // системный звонок на заблокированном экране. Токены kind=voip
                                                 // регистрирует iOS-приложение; для PWA-клиентов их нет — no-op.
                                                 if let Some(apns) = push.apns_handle() {
+                                                    // v160z27c: voip-push остаётся
+                                                    // (PushKit wake при живом
+                                                    // entitlement), НО плюс
+                                                    // alert-push с кнопками
+                                                    // Принять/Отклонить — работает
+                                                    // даже при убитом приложении
+                                                    // без entitlement (Apple case
+                                                    // 30000013365625 в ожидании).
                                                     apns.deliver_call_voip(&to, &from, &call_mode).await;
+                                                    apns.deliver_call_alert(&to, &from, &call_mode).await;
                                                 }
                                             });
                                         }

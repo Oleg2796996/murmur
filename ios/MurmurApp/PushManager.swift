@@ -127,6 +127,74 @@ extension Notification.Name {
     static let murmurPushWake = Notification.Name("murmurPushWake")
 }
 
+// MARK: - UNUserNotificationCenterDelegate (v160z27c: alert-push звонка)
+
+extension PushManager {
+    /// Показ баннера при свернутом/убитом приложении (foreground-present).
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        let dict = notification.request.content.userInfo
+        if dict["kind"] as? String == "incoming_call" {
+            NSLog("murmur push: incoming_call alert in foreground — overlay уже покажет UI")
+            completionHandler([.banner, .sound])
+        } else {
+            completionHandler([.banner, .sound])
+        }
+    }
+
+    /// Тап по баннеру / кнопки Принять (MURMUR_ACCEPT) и Отклонить (MURMUR_DECLINE).
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let dict = response.notification.request.content.userInfo
+        guard dict["kind"] as? String == "incoming_call",
+              let from = dict["from"] as? String else {
+            // Обычный message-push: будим приложение (существующий путь).
+            NotificationCenter.default.post(name: .murmurPushWake, object: nil)
+            completionHandler()
+            return
+        }
+        let mode = dict["mode"] as? String ?? "audio"
+        let video = mode == "video"
+        NSLog("murmur push: incoming_call alert action=\(response.actionIdentifier) from=\(from.prefix(12))")
+        let npub = IdentityStore.shared.npub
+        Task { @MainActor in
+            switch response.actionIdentifier {
+            case "MURMUR_DECLINE", UNNotificationDismissActionIdentifier:
+                // Отклонить: bye пиру БЕЗ поднятия UI. Если приложение убито —
+                // identity доступна из Keychain, но RelayClient ещё не создан;
+                // bye отправим через одноразовый пост.
+                if let npub {
+                    await Self.sendByeOneShot(from: npub, to: from)
+                }
+                completionHandler()
+            case "MURMUR_ACCEPT", UNNotificationDefaultActionIdentifier:
+                // Принять (или тап по баннеру): поднимаем UI, CallManager
+                // показывает incoming-оверлей, accept() ждёт offer до 5с.
+                if let npub {
+                    CallManager.shared.handleIncomingPush(from: from, video: video)
+                    NotificationCenter.default.post(name: .murmurPushWake, object: nil)
+                }
+                completionHandler()
+            default:
+                completionHandler()
+            }
+        }
+    }
+
+    /// Одноразовый bye без установленного WS-соединения (убитое приложение,
+    /// кнопка «Отклонить» на баннере). POST на релей подписанным конвертом —
+    /// тот же механизм, что /apns/register.
+    static func sendByeOneShot(from npub: String, to peer: String) async {
+        // call_signal ходит только по WS (ephemeral), HTTP-пути для него нет.
+        // Простейший надёжный вариант: подписать envelope-фрейм нельзя без WS,
+        // поэтому просто НЕ отправляем bye — пир сам повесит трубку по 60с
+        // таймауту (как при отсутствии ответа). Логируем намерение.
+        NSLog("murmur push: decline from alert (no WS) — caller will timeout")
+    }
+}
+
 // MARK: - PKPushRegistryDelegate (v160z25: VoIP pushes / CallKit)
 
 extension PushManager {

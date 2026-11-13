@@ -294,6 +294,48 @@ impl ApnsClient {
         }
     }
 
+    /// v160z27c: alert-push звонка — category=MURMUR_CALL (кнопки
+    /// Принять/Отклонить) + kind/from/mode как custom-поля payload.
+    pub async fn send_call_alert(&self, token: &str, alert: &ApnsAlert) -> anyhow::Result<bool> {
+        let jwt = self.key.provider_token()?;
+        let url = format!("{}/3/device/{}", self.base_url, token);
+        let mut body = json!({
+            "aps": {
+                "alert": { "title": "MurMur", "body": alert.body },
+                "sound": "default",
+                "category": "MURMUR_CALL",
+                "interruption-level": "time-sensitive",
+            },
+            "kind": "incoming_call",
+        });
+        if let Some(obj) = alert.custom.as_object() {
+            for (k, v) in obj {
+                if k != "content_available" {
+                    body[k.clone()] = v.clone();
+                }
+            }
+        }
+        let resp = self
+            .http
+            .post(&url)
+            .header("authorization", format!("bearer {jwt}"))
+            .header("apns-topic", &self.topic)
+            .header("apns-push-type", "alert")
+            .header("apns-priority", "10")
+            .json(&body)
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await?;
+        match resp.status().as_u16() {
+            200 => Ok(true),
+            403 | 404 | 410 => Ok(false),
+            status => {
+                let text = resp.text().await.unwrap_or_default();
+                anyhow::bail!("APNs {status}: {text}")
+            }
+        }
+    }
+
     /// v160z25: VoIP push — apns-push-type: voip, без alert/sound в aps
     /// (Apple: PushKit-клиент должен получать voip-пуш без визуального alert,
     /// иначе push не доставляется в PKPushRegistry).
@@ -399,6 +441,41 @@ impl ApnsHandle {
                     store.remove(npub, "alert");
                 }
                 Err(e) => warn!(npub = %npub, err = %e, "APNs send failed"),
+            }
+        }
+    }
+
+    /// v160z27c (Олег 13.11): alert-push входящего звонка — fallback для
+    /// устройств БЕЗ entitlement unrestricted-voip (Apple case 30000013365625
+    /// в ожидании): voip-push будит приложение, но reportNewIncomingCall
+    /// молча блокируется → карточки нет → iOS штрафует приложение (убивает
+    /// после серии нарушений — наблюдение 13.11: «один раз сработало, потом
+    /// перестало»). Alert-push показывает БАННЕР «Входящий звонок» с кнопками
+    /// Принять/Отклонить (категория MURMUR_CALL, AppDelegate v160z25) даже
+    /// при убитом приложении. Работает ВСЕГДА, без entitlement.
+    pub async fn deliver_call_alert(&self, npub: &str, from_npub: &str, call_mode: &str) {
+        let Some(client) = &self.client else { return };
+        let Some(store) = &self.store else { return };
+        let mode = if call_mode == "video" { "видеозвонок" } else { "звонок" };
+        for reg in store.tokens_for(npub, "alert") {
+            let alert = ApnsAlert {
+                body: format!("Входящий {}", mode),
+                badge: None,
+                custom: json!({
+                    "kind": "incoming_call",
+                    "from": from_npub,
+                    "mode": call_mode,
+                }),
+            };
+            // Модифицируем aps: категория с кнопками. ApnsAlert не несёт
+            // category — добавим через отдельную посылку: используем send_alert_raw.
+            match client.send_call_alert(&reg.token, &alert).await {
+                Ok(true) => info!(npub = %npub, "APNs call alert delivered"),
+                Ok(false) => {
+                    warn!(npub = %npub, "APNs alert token rejected, unregistering");
+                    store.remove(npub, "alert");
+                }
+                Err(e) => warn!(npub = %npub, err = %e, "APNs call alert send failed"),
             }
         }
     }
