@@ -141,7 +141,18 @@ impl WsServer {
                                             "from_npub": from,
                                             "signal": signal,
                                         });
-                                        self.hub.broadcast_ephemeral(to, ev.to_string());
+                                        // v160z26j: трассировка call-сигналов — ищем,
+                                        // где теряются answer'ы iPhone→Mac
+                                        // (лог 13.11 11:37: iPhone resending answer ×8,
+                                        // PWA продолжает re-offer → answer не применяется).
+                                        let kind = signal.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
+                                        let sdp_len = signal.get("sdp")
+                                            .and_then(|v| v.get("sdp"))
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.len())
+                                            .unwrap_or(0);
+                                        let delivered = self.hub.broadcast_ephemeral(to, ev.to_string());
+                                        info!(call_sig = "route", kind, from = %from, to = %to, delivered, sdp_len, "call_signal routed");
                                         // Only the initial offer wakes an offline recipient.
                                         // SDP/ICE remains WS-only and is never persisted/pushed.
                                         // Always wake the recipient for the initial offer.
