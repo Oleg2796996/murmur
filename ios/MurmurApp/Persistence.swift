@@ -99,6 +99,7 @@ enum Persistence {
                                       direction: m.callDirection ?? "in",
                                       duration: m.callDuration ?? 0)
                 }
+                return msg
             }
             // Keep the thread chronological after restore.
             summary.messages.sort { $0.ts < $1.ts }
