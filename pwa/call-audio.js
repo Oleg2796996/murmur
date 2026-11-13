@@ -35,6 +35,9 @@
   const FSEX = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h5V4"/><path d="M20 15h-5v5"/><path d="M9 9l-5-5"/><path d="M15 15l5 5"/></svg>';
   let pendingOffer = null;
   let reofferTimer = null; // call53: повтор оффера для холодного пира (WS эфемерен, оффер теряется)
+  // v160z26h: re-offer стал setTimeout-цепочкой (нарастающий интервал) — единый
+  // стоп для всех точек (clearInterval/clearTimeout взаимозаменяемы, но явно).
+  function stopReoffer() { if (reofferTimer) { clearTimeout(reofferTimer); reofferTimer = null; } }
   let lastPeerSignalTs = 0; // v160z26g: ts последнего сигнала от пира (event-driven reoffer stop)
   let sentIce = []; // call53: кандидаты, отправленные до answer (дозируем повторно)
   let camFacing = "user"; // call54: текущая камера PiP (user=фронтальная, environment=тыловая)
@@ -391,7 +394,7 @@
     }
     if (pc) pc.close();
     pc = null; remotePeer = null; pendingOffer = null;
-    if (reofferTimer) { clearInterval(reofferTimer); reofferTimer = null; } // call53
+    if (reofferTimer) { stopReoffer(); } // call53
     if (pushRingTimer) { clearTimeout(pushRingTimer); pushRingTimer = null; } // call56
     lastPeerSignalTs = 0; // v160z26g: сброс маркера «пир жив» на новый звонок
     sentIce.length = 0; // call53
@@ -498,24 +501,33 @@
     // подключён, релей эфемерные сигналы не хранит, пуш несёт только
     // нейтральное incoming_call без SDP). Повторяем оффер каждые 4с, пока
     // не придёт answer; push:false — пуш уже был отправлен первичным оффером.
-    if (reofferTimer) { clearInterval(reofferTimer); reofferTimer = null; }
-    reofferTimer = setInterval(() => {
-      if (callState !== "connecting" || callDirection !== "out" || !pc || remoteDescriptionReady) {
-        clearInterval(reofferTimer); reofferTimer = null; return;
-      }
-      // v160z26g (Олег 12.11 «как в Telegram»): если пир УЖЕ отвечает (answer/ICE),
-      // loop немедленно стоп — повторные offer'ы после answer вызывают glare
-      // (libwebrtc-ObjC implicit rollback слаб, подтверждено логом 30 offer'ов).
-      if (lastPeerSignalTs > 0 && Date.now() - lastPeerSignalTs < 3000) {
-        clearInterval(reofferTimer); reofferTimer = null;
-        diagLog("glare-guard", "peer alive (signal <3s ago) — reoffer loop stopped");
-        return;
-      }
-      const socket = ws();
-      if (!socket || socket.readyState !== WebSocket.OPEN) return;
-      try { send(to, { kind: "offer", mode: callMode, sdp: pc.localDescription }, { push: false }); }
-      catch (err) { diagLog("error", "reoffer: " + err.message); }
-    }, 2000); // call54b: Олег — 2с вместо 4с (быстрее карточка на холодной PWA)
+    stopReoffer();
+    // v160z26h (Олег, лог 12.11 22:23): re-offer loop — это «пинок» пиру,
+    // чтобы он переслал answer. Он НЕ должен останавливаться из-за
+    // ЛЮБОГО сигнала пира: если answer потерялся, ICE-кандидаты всё равно
+    // летят, а answer — нет. Старый v160z26g останавливал loop на любой
+    // сигнал (в т.ч. ICE) → пир ждал answer вечно → ice:FAILED (Mac принял
+    // 12 ICE-кандидатов от iPhone, но answer не применил ни разу).
+    // Теперь loop останавливается ТОЛЬКО на applied answer (remoteDescriptionReady
+    // выше), а cadence растёт 2→4→6→8с (анти-шторм: было 30 offer'ов/звонок).
+    // iOS-пир на re-offer переотправляет свой answer (v160z26h) — этот цикл
+    // самопочиняющийся: пир получил offer → переслал answer →Mac применил.
+    let reofferDelay = 2000;
+    const scheduleReoffer = () => {
+      reofferTimer = setTimeout(() => {
+        if (callState !== "connecting" || callDirection !== "out" || !pc || remoteDescriptionReady) {
+          reofferTimer = null; return;
+        }
+        const socket = ws();
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          try { send(to, { kind: "offer", mode: callMode, sdp: pc.localDescription }, { push: false }); }
+          catch (err) { diagLog("error", "reoffer: " + err.message); }
+        }
+        reofferDelay = Math.min(reofferDelay + 2000, 8000);
+        scheduleReoffer();
+      }, reofferDelay);
+    };
+    scheduleReoffer();
     const activeBtn = callMode === "video" ? videoBtn() : btn();
     if (activeBtn) { activeBtn.innerHTML = "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><g transform=\"rotate(180 12 12)\"><path d=\"M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z\"/></g></svg>"; activeBtn.title = "Завершить звонок"; }
     // This timeout is only for an unanswered outgoing call. It must not run
@@ -851,10 +863,11 @@
         return;
       }
       remoteDescriptionReady = true;
+      diagLog("answer-applied", "remote answer set (sdpLen " + ((s.sdp && s.sdp.sdp) ? s.sdp.sdp.length : 0) + ")");
       // call53: answer получен — re-offer цикл больше не нужен, а кандидаты,
       // отправленные в офлайн-окно пира, дозируем повторно. Дубликаты
       // на принимающей стороне безвредны.
-      if (reofferTimer) { clearInterval(reofferTimer); reofferTimer = null; }
+      if (reofferTimer) { stopReoffer(); }
       for (const cand of sentIce.splice(0)) {
         try { send(remotePeer, { kind: "ice", candidate: cand }); } catch (err) { diagLog("error", "resend ICE: " + err.message); }
       }

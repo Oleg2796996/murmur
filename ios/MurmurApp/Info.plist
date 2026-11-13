@@ -28,6 +28,12 @@
 	<string>Камера нужна для видеозвонков.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Микрофон нужен для звонков.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Приложению нужен доступ к локальной сети для звонков между устройствами.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_murmur._tcp</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

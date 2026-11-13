@@ -56,6 +56,15 @@ final class CallManager: NSObject, ObservableObject {
     private var iceSentCount = 0
     private var iceRecvCount = 0
     private var incomingOfferCount = 0
+    /// v160z26h: последний отправленный нами answer (SDP) — чтобы переотправить
+    /// его на re-offer пира (WS-фрейм мог потеряться → пир вечно ждёт answer).
+    private var lastAnswerSDP: [String: Any]?
+    /// v160z26h: счётчики типов ICE-кандидатов (host/srflx/prflx/relay) —
+    /// диагностика «iPhone собрал только host» (лог 12.11 22:23).
+    private var iceHostCount = 0
+    private var iceSrflxCount = 0
+    private var icePrflxCount = 0
+    private var iceRelayCount = 0
     private var sentIce: Set<String> = []            // dedup (call53 sentIce parity)
     private var offerRetryTask: Task<Void, Never>?
     private var ringTimeoutTask: Task<Void, Never>?
@@ -67,6 +76,14 @@ final class CallManager: NSObject, ObservableObject {
     private var iceDisconnectGraceTask: Task<Void, Never>?
     private var callStartedAt: TimeInterval = 0
     private var iceServers: [RTCIceServer] = [
+        // v160z26h: srflx нужен не меньше relay. Лог 12.11 22:23: iPhone
+        // отправил ТОЛЬКО host-кандидаты (192.168.1.68 / 10.227.63.83 /
+        // ULA-IPv6) — ни одного srflx, ни одного relay. Google STUN из РФ
+        // может не отвечать (блок/таймаут), а coturn на нашем же проде
+        // отвечает на STUN-биндинги на 3478 без авторизации. Поэтому
+        // STUN-источник — coturn (тот же хост, что и TURN) + Google как
+        // запасной. Ни одного srflx = P2P-путь через NAT невозможен.
+        RTCIceServer(urlStrings: ["stun:murmurchat.org:3478"]),
         RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"]),
         // TURN fallback for symmetric NAT / mobile networks — coturn on the
         // prod relay host. P2P stays preferred; TURN is only used when direct
@@ -75,11 +92,18 @@ final class CallManager: NSObject, ObservableObject {
             "turn:murmurchat.org:3478?transport=udp",
             "turn:murmurchat.org:3478?transport=tcp"
         ], username: "murmur-prod", credential: "murmurchat"),
-        // v160z26f (ОТКАТ 12.11): turns:5349 УБРАН — в сборках с ним iPhone
-        // переставал собирать ВСЕ relay-кандидаты (sent: только host/IPv6,
-        // ноль relay; логи 21:50-22:00), в дневной сборке без turns relay был.
-        // stasel/WebRTC v137: TLS-TURN роняет gathering (гипотеза агента).
-        // turns остаётся на PWA-стороне (Safari собрал его нормально).
+        // v160z26h (ВОЗВРАТ 13.11): turns:5349 СНОВА ВКЛЮЧЁН.
+        // Гипотеза v160z26f («stasel v137 роняет gathering на TLS-TURN») была
+        // ОШИБОЧНОЙ — реальная причина нулевых relay-кандидатов нашлась в
+        // нашем СОБСТВЕННОМ фильтре didGenerate ниже: он резал строки с
+        // " tcp " / "tcptype", а TURN-relay-кандидат по TCP/TLS содержит
+        // ровно "typ relay ... tcptype passive" → ЕДИНСТВЕННЫЙ рабочий путь
+        // выбрасывался ДО отправки пиру. В логе 12.11 22:23 iPhone не отправил
+        // НИ ОДНОГО relay-кандидата, хотя coturn на сервере его аллокации видел.
+        // Теперь фильтр режет только link-local, поэтому TLS-релей снова нужен.
+        RTCIceServer(urlStrings: [
+            "turns:murmurchat.org:5349?transport=tcp"
+        ], username: "murmur-prod", credential: "murmurchat"),
     ]
 
     override private init() {
@@ -241,6 +265,18 @@ final class CallManager: NSObject, ObservableObject {
             // never re-answer: both-answer deadlock = ice:checking forever.
             if case .connected = phase { return }
             if let pc, pc.signalingState != .stable { return } // colliding offer → ignore (impolite)
+            // v160z26h (Олег, лог 12.11 22:23): PWA ждёт answer, который
+            // потерялся (WS-фрейм answer до Mac не дошёл). PWA шлёт re-offer
+            // каждые 2-8с. Раньше мы его игнорировали («уже negotiated»),
+            // поэтому Mac ВЕЧНО ждал answer → ice:FAILED (30 offer'ов,
+            // 0 применённых answer'ов). Теперь: re-offer от ТОГО ЖЕ пира,
+            // когда мы УЖЕ ответили (localDescription = answer) → переотправляем
+            // свой answer. Это самопочиняющийся цикл: offer → answer → apply.
+            if let pc = pc, pc.remoteDescription != nil, pc.localDescription?.type == .answer {
+                NSLog("murmur call: re-offer #\(incomingOfferCount) → resending our answer")
+                resendAnswer(to: from)
+                return
+            }
             if let pc, pc.remoteDescription != nil { return }  // already negotiated
             Task { await answerOffer(from: from, signal: signal) }
         }
@@ -305,6 +341,7 @@ final class CallManager: NSObject, ObservableObject {
                 }
             }
             try await pc?.setLocalDescription(answer)
+            lastAnswerSDP = sdpJSON(answer)
             relayClient?.sendCallSignal(to: peer, signal: ["kind": "answer", "sdp": sdpJSON(answer)], push: false)
             phase = .connecting(peer: peer, video: video)
             stateText = "соединение…"
@@ -358,11 +395,20 @@ final class CallManager: NSObject, ObservableObject {
                     }
                 }
                 try await pc.setLocalDescription(answer)
+                lastAnswerSDP = sdpJSON(answer)
                 relayClient?.sendCallSignal(to: from, signal: ["kind": "answer", "sdp": sdpJSON(answer)], push: false)
             }
         } catch {
             NSLog("murmur call: glare answer failed: \(error)")
         }
+    }
+
+    /// v160z26h: переотправка нашего answer пиру, который прислал re-offer
+    /// (его первый answer-фрейм потерялся). Без этого пир вечно ждал бы
+    /// answer → ice:FAILED (наблюдение 12.11 22:23).
+    private func resendAnswer(to peer: String) {
+        guard let answer = lastAnswerSDP else { return }
+        relayClient?.sendCallSignal(to: peer, signal: ["kind": "answer", "sdp": answer], push: false)
     }
 
     private func handleAnswer(from: String, signal: [String: Any]) {
@@ -538,7 +584,12 @@ final class CallManager: NSObject, ObservableObject {
         sentIce.removeAll()
         iceSentCount = 0
         iceRecvCount = 0
+        iceHostCount = 0
+        iceSrflxCount = 0
+        icePrflxCount = 0
+        iceRelayCount = 0
         incomingOfferCount = 0
+        lastAnswerSDP = nil
         callStartedAt = 0
         durationSeconds = 0
         micMuted = false
@@ -729,7 +780,16 @@ extension CallManager: RTCPeerConnectionDelegate {
         }
     }
 
-    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
+        // v160z26h: логируем ход gathering — было главным вопросом
+        // «почему iPhone не собрал ни одного srflx/relay-кандидата».
+        Task { @MainActor in
+            let names: [RTCIceGatheringState: String] = [
+                .new: "new", .gathering: "gathering", .complete: "complete"
+            ]
+            NSLog("murmur call: ICE gathering → \(names[newState] ?? "\(newState.rawValue)") (host=\(self.iceHostCount) srflx=\(self.iceSrflxCount) relay=\(self.iceRelayCount))")
+        }
+    }
 
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
         // v160z24c: фильтр мусорных кандидатов ДО отправки —
@@ -737,13 +797,28 @@ extension CallManager: RTCPeerConnectionDelegate {
         // (пустые интерфейсы симулятора/шин). Меньше кандидатов = быстрее
         // проверка релевантных пар (главный урок зависаний в checking).
         let sdp = candidate.sdp
-        if sdp.contains(" tcp ") || sdp.contains("typ tcp") || sdp.contains("tcptype") { return }
+        // v160z26h (Олег, лог 12.11 22:23): старый фильтр резал ТОЛЬКО
+        // link-local, а TCP-кандидаты отбрасывал по " tcp " / "typ tcp" /
+        // "tcptype". Но реальные TURN-relay-кандидаты содержат
+        // "typ relay" + "tcptype passive" — строка " tcp " в них ЕСТЬ.
+        // Значит фильтр выбрасывал ЕДИНСТВЕННЫЙ рабочий путь, когда
+        // host/srflx недоступны (Wi-Fi с AP isolation, LTE-чернодырые).
+        // На сервере (coturn) iPhone аллокировал TURN по TCP — и эти
+        // кандидаты НИКОГДА не доходили до пира (в логе iPhone 0 relay).
+        // Теперь режем ТОЛЬКО link-local; TCP-кандидаты пропускаем —
+        // ICE сам выберет рабочую пару (P2P предпочтительнее релея).
         if sdp.contains("169.254.") || sdp.contains("169.254 ") { return }
         // Trickle ICE to the peer (dedup, pwa sentIce parity).
         let key = sdp
         Task { @MainActor in
             guard !self.sentIce.contains(key) else { return }
             self.sentIce.insert(key)
+            // v160z26h: счётчики по типу кандидата — видно, собрал ли
+            // клиент srflx/relay (или только host).
+            if sdp.contains("typ relay") { self.iceRelayCount += 1 }
+            else if sdp.contains("typ srflx") { self.iceSrflxCount += 1 }
+            else if sdp.contains("typ prflx") { self.icePrflxCount += 1 }
+            else { self.iceHostCount += 1 }
             if let peer = self.remotePeer {
                 let json: [String: Any] = [
                     "candidate": candidate.sdp,
