@@ -47,8 +47,20 @@ final class CallKitProvider: NSObject, ObservableObject {
     @discardableResult
     func reportIncoming(from peer: String, video: Bool) -> Bool {
         bootstrap()
-        // Уже идёт звонок — второй не показываем (CallManager сам отклонит).
-        if case .idle = CallManager.shared.phase {} else { return false }
+        // v160z27b: offer по WS часто ПРИХОДИТ РАНЬШЕ voip-push (WS в фоне
+        // ещё жив секунды-минуты) и ставит phase=.incoming. Это ТОТ ЖЕ
+        // звонок — карточка нужна! Лог 13.11 13:49: "offer #1 received" до
+        // push'а → guard возвращал false → карточки не было → Мак прозвонил
+        // 60с и сбросил. Блокируем только РЕАЛЬНУЮ занятость: исходящий/
+        // соединение/входящий от ДРУГОГО пира.
+        switch CallManager.shared.phase {
+        case .idle:
+            break // свободны — показываем
+        case .incoming(let pendingPeer, _):
+            guard pendingPeer == peer else { return false } // другой звонящий
+        case .outgoing, .connecting, .connected:
+            return false // реально заняты
+        }
 
         let handle = CXHandle(type: .generic, value: peer)
         let update = CXCallUpdate()
