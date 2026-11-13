@@ -31,7 +31,7 @@ struct RelayError: LocalizedError {
 /// One message in a 1:1 chat, as stored locally.
 struct ChatMessage: Identifiable, Equatable {
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
-        lhs.id == rhs.id && lhs.body == rhs.body && lhs.status == rhs.status
+        lhs.id == rhs.id && lhs.body == rhs.body && lhs.status == rhs.status && lhs.callEvent == rhs.callEvent
     }
     enum Direction: String { case incoming, outgoing }
     enum Status: String { case sending, sent, failed }
@@ -46,6 +46,55 @@ struct ChatMessage: Identifiable, Equatable {
     var hash: String?
     /// Merged attachment chips for rendering (server refs + envelope meta).
     var attachments: [[String: Any]] = []
+    /// v160z27e: call-event маркеры (PWA callEvent/callStatus/callDirection/
+    /// callDuration паритет). body у call-event пустой.
+    var callEvent = false
+    var callStatus: String? = nil      // completed | declined | cancelled | missed | failed
+    var callDirection: String? = nil   // in | out
+    var callDuration: Int = 0
+
+    /// Пометить сообщение как событие звонка (мутирует, т.к. хранится по ссылке
+    /// нельзя — ChatMessage value-type; вызывать ДО вставки в AppState).
+    mutating func makeCallEvent(status: String, direction: String, duration: Int) {
+        self.callEvent = true
+        self.callStatus = status
+        self.callDirection = direction
+        self.callDuration = duration
+    }
+
+    /// Человекочитаемая строка события — точный паритет PWA-лейблов (app.js).
+    var callEventText: String {
+        guard callEvent, let st = callStatus else { return body }
+        let dirOut = callDirection == "out"
+        let label: String
+        switch (st, dirOut) {
+        case ("declined", true):  label = "Исходящий отклонен"
+        case ("declined", false): label = "Входящий отменен"
+        case ("cancelled", true): label = "Исходящий"
+        case ("cancelled", false): label = "Входящий отменен"
+        case ("missed", _):       label = "Пропущенный"
+        case ("failed", true):    label = "Исходящий"
+        case ("failed", false):   label = "Входящий"
+        default:                  label = dirOut ? "Исходящий" : "Входящий"
+        }
+        let dur = callDuration > 0 ? " — " + Self.formatCallDuration(callDuration) : ""
+        let time = Self.formatCallTime(ts)
+        return label + " " + time + dur
+    }
+
+    /// "MM:SS" — паритет formatDurationForCall.
+    static func formatCallDuration(_ seconds: Int) -> String {
+        let s = max(0, seconds)
+        return String(format: "%02d:%02d", s / 60, s % 60)
+    }
+
+    /// "HH:MM" — паритет formatTime.
+    static func formatCallTime(_ ts: Int) -> String {
+        let d = Date(timeIntervalSince1970: TimeInterval(ts))
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f.string(from: d)
+    }
 }
 
 /// Hashable key for ForEach over attachment dicts.

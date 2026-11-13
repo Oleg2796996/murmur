@@ -145,6 +145,25 @@ struct ChatView: View {
     }
 
     private func bubble(_ m: ChatMessage) -> some View {
+        if m.callEvent {
+            // v160z27e: событие звонка — центрированная серая строка (PWA
+            // call-event-text паритет): «Пропущенный 14:22», «Исходящий 14:25 — 03:41».
+            return AnyView(
+                HStack {
+                    Spacer(minLength: 0)
+                    Text(m.callEventText)
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .padding(.vertical, 2)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 24)
+            )
+        }
+        return AnyView(bubbleRow(m))
+    }
+
+    private func bubbleRow(_ m: ChatMessage) -> some View {
         HStack(alignment: .bottom, spacing: 6) {
             if m.direction == .outgoing { Spacer(minLength: 40) }
             VStack(alignment: m.direction == .outgoing ? .trailing : .leading, spacing: 2) {

@@ -5,6 +5,9 @@ import UserNotifications
 /// Root state: identity presence, relay client, chat list.
 @MainActor
 final class AppState: ObservableObject {
+    /// v160z27e: слабая ссылка на активный AppState для системных событий
+    /// (CallManager пишет историю звонков). Устанавливается в init.
+    static weak var shared: AppState?
     @Published var authenticated = false
     @Published var myNpub: String = ""
     @Published var chats: [ChatSummary] = []
@@ -37,6 +40,7 @@ final class AppState: ObservableObject {
     private let contactNamesKey = "murmur.contact_names"
 
     init() {
+        AppState.shared = self // v160z27e
         if IdentityStore.shared.restoreFromKeychain() {
             authenticated = true
             myNpub = IdentityStore.shared.npub ?? ""
@@ -457,6 +461,21 @@ final class AppState: ObservableObject {
             chats.sort { $0.lastTs > $1.lastTs }
         }
         persist()
+    }
+
+    /// v160z27e: вставить call-event сообщение в историю чата (PWA
+    /// recordCallEvent паритет). upsert() уже создал/обновил чат (превью),
+    /// здесь заменяем его пустую болванку на полный call-event и сохраняем.
+    func appendCallEvent(peer: String, message: ChatMessage) {
+        if let i = chats.firstIndex(where: { $0.peer == peer }) {
+            if let j = chats[i].messages.firstIndex(where: { $0.id == message.id }) {
+                chats[i].messages[j] = message
+            } else {
+                chats[i].messages.append(message)
+            }
+            chats[i].messages.sort { $0.ts < $1.ts }
+            persist()
+        }
     }
 
     // MARK: - Contact names (murmur.contact_names parity)

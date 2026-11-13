@@ -14,6 +14,11 @@ enum Persistence {
         var status: String
         var hash: String?
         var attachmentsJSON: Data?
+        // v160z27e: call-event поля (опциональны для обратной совместимости).
+        var callEvent: Bool? = nil
+        var callStatus: String? = nil
+        var callDirection: String? = nil
+        var callDuration: Int? = nil
     }
 
     struct PersistedChat: Codable {
@@ -54,7 +59,11 @@ enum Persistence {
                             id: m.id, peer: m.peer, body: m.body, ts: m.ts,
                             direction: m.direction.rawValue, status: m.status.rawValue,
                             hash: m.hash,
-                            attachmentsJSON: (try? JSONSerialization.data(withJSONObject: m.attachments))
+                            attachmentsJSON: (try? JSONSerialization.data(withJSONObject: m.attachments)),
+                            callEvent: m.callEvent ? true : nil,
+                            callStatus: m.callStatus,
+                            callDirection: m.callDirection,
+                            callDuration: m.callDuration > 0 ? m.callDuration : nil
                         )
                     },
                     lastMimes: chat.lastMimes
@@ -76,7 +85,7 @@ enum Persistence {
             var summary = ChatSummary(peer: chat.peer, lastBody: chat.lastBody, lastTs: chat.lastTs,
                                       lastMimes: chat.lastMimes ?? [])
             summary.messages = chat.messages.map { m in
-                ChatMessage(
+                var msg = ChatMessage(
                     id: m.id, peer: m.peer, body: m.body, ts: m.ts,
                     direction: ChatMessage.Direction(rawValue: m.direction) ?? .incoming,
                     status: ChatMessage.Status(rawValue: m.status) ?? .sent,
@@ -85,11 +94,16 @@ enum Persistence {
                         try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]]
                     } ?? []
                 )
+                if m.callEvent == true {
+                    msg.makeCallEvent(status: m.callStatus ?? "completed",
+                                      direction: m.callDirection ?? "in",
+                                      duration: m.callDuration ?? 0)
+                }
             }
             // Keep the thread chronological after restore.
             summary.messages.sort { $0.ts < $1.ts }
             // Drop legacy empty "…" pills (pre-guard rows: no text, no attachments).
-            summary.messages.removeAll { $0.body.isEmpty && $0.attachments.isEmpty && $0.direction == .incoming }
+            summary.messages.removeAll { !$0.callEvent && $0.body.isEmpty && $0.attachments.isEmpty && $0.direction == .incoming }
             if summary.messages.isEmpty { return nil }
             return summary
         }

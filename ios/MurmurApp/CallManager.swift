@@ -56,6 +56,12 @@ final class CallManager: NSObject, ObservableObject {
     private var iceSentCount = 0
     private var iceRecvCount = 0
     private var incomingOfferCount = 0
+    /// v160z27e (Олег 13.11 «звонки в истории iOS как в PWA»): флаг «записан ли
+    /// звонок в историю» (callRecorded) + направление (входящий/исходящий).
+    /// PWA-паритет: если соединение состоялось (callStartedAt > 0) — в историю
+    /// идёт завершённый звонок с длительностью независимо от того, кто положил.
+    private var callRecorded = false
+    private var callDirectionOut = false
     /// v160z26h: последний отправленный нами answer (SDP) — чтобы переотправить
     /// его на re-offer пира (WS-фрейм мог потеряться → пир вечно ждёт answer).
     private var lastAnswerSDP: [String: Any]?
@@ -121,6 +127,8 @@ final class CallManager: NSObject, ObservableObject {
 
     func startCall(peer: String, video: Bool) {
         guard phase == .idle else { return }
+        callDirectionOut = true   // v160z27e
+        callRecorded = false
         callMode = video ? "video" : "audio"
         remotePeer = peer
         phase = .outgoing(peer: peer, video: video)
@@ -248,6 +256,7 @@ final class CallManager: NSObject, ObservableObject {
 
         switch phase {
         case .idle, .incoming:
+            if case .idle = phase { callDirectionOut = false; callRecorded = false } // v160z27e
             pendingOffer = (from, signal)
             phase = .incoming(peer: from, video: video)
             stateText = "входящий звонок"
@@ -568,8 +577,63 @@ final class CallManager: NSObject, ObservableObject {
 
     // MARK: - Teardown
 
+    /// v160z27e (Олег 13.11 «звонки в истории iOS как в PWA»): запись события
+    /// звонка в локальную историю чата. Паритет PWA recordCallEvent (app.js):
+    /// - направление: исходящий «Исходящий/Исходящий отклонен», входящий
+    ///   «Входящий/Входящий отменен/Пропущенный»;
+    /// - если соединение состоялось (callStartedAt > 0) — «Входящий/Исходящий»
+    ///   с длительностью, независимо от причины разрыва;
+    /// - body пустой, id уникален ("call:<peer>:<ts>:<rand>") — PWA показывает
+    ///   такие строки отдельным стилем call-event-text, iOS — своим row.
+    private func recordCallEvent(reason: String) {
+        guard !callRecorded, let peer = remotePeer ?? pendingOffer?.from else { return }
+        let now = Int(Date().timeIntervalSince1970)
+        // PWA-статусы: completed / declined / cancelled / missed / failed.
+        let status: String
+        if callStartedAt > 0 {
+            status = "completed"
+        } else {
+            switch reason {
+            case "decline", "bye from peer":
+                status = callDirectionOut ? "declined" : "cancelled"
+            case "declined":
+                status = callDirectionOut ? "declined" : "cancelled"
+            case "ring timeout":
+                status = "missed"
+            case "ice failed", "ice disconnected >10s", "ice closed", "error":
+                status = "failed"
+            default:
+                status = callDirectionOut ? "cancelled" : "missed"
+            }
+        }
+        let duration = callStartedAt > 0 ? Int(Date().timeIntervalSince1970 - callStartedAt) : 0
+        let id = "call:\(peer):\(now):\(Int.random(in: 0..<1_000_000))"
+        var msg = ChatMessage(id: id, peer: peer, body: "", ts: now,
+                              direction: .incoming, status: .sent,
+                              hash: nil, attachments: [])
+        msg.makeCallEvent(status: status, direction: callDirectionOut ? "out" : "in", duration: duration)
+        // Превью чата (lastBody): PWA-паритет — в списке чатов у call-event виден
+        // короткий текст («Пропущенный», «Исходящий — 03:41»), а не пустота.
+        let preview: String
+        if status == "completed" {
+            preview = (callDirectionOut ? "Исходящий — " : "Входящий — ") + ChatMessage.formatCallDuration(duration)
+        } else if status == "missed" {
+            preview = "Пропущенный"
+        } else if status == "declined" {
+            preview = callDirectionOut ? "Исходящий отклонен" : "Входящий отменен"
+        } else {
+            preview = callDirectionOut ? "Исходящий" : "Входящий"
+        }
+        AppState.shared?.upsert(peer: peer, body: preview, ts: now,
+                                direction: .incoming, hash: id, attachments: [])
+        AppState.shared?.appendCallEvent(peer: peer, message: msg)
+        callRecorded = true
+        NSLog("murmur call: recorded call event status=\(status) dur=\(duration)s dir=\(callDirectionOut ? "out" : "in")")
+    }
+
     private func close(_ reason: String = "unspecified") {
         NSLog("murmur call: close(\(reason))")
+        recordCallEvent(reason: reason)   // v160z27e: история звонков как в PWA
         offerRetryTask?.cancel(); offerRetryTask = nil
         ringTimeoutTask?.cancel(); ringTimeoutTask = nil
         timerTask?.cancel(); timerTask = nil
@@ -593,6 +657,8 @@ final class CallManager: NSObject, ObservableObject {
         iceRelayCount = 0
         incomingOfferCount = 0
         lastAnswerSDP = nil
+        callRecorded = false
+        callDirectionOut = false
         callStartedAt = 0
         durationSeconds = 0
         micMuted = false
