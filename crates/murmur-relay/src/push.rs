@@ -755,6 +755,22 @@ impl PushServer {
                                 let push: &PushServer = &push_self;
                                 handle_post_envelope(req, pending.clone(), hub.clone(), push, db.clone()).await
                             }
+                            // v160z26j: клиентский diag-эндпоинт — PWA репортит
+                            // ошибки setRemoteDescription (answer не применяется,
+                            // лог 13.11 11:37/12:30) прямо в journald релея.
+                            (Method::POST, "/api/call-diag") => {
+                                let body = req.collect().await.unwrap().to_bytes();
+                                let text = String::from_utf8_lossy(&body);
+                                // Режем до 4КБ, чтобы SDP-дамп не завалил журнал.
+                                let mut text = text.to_string();
+                                text.truncate(4096);
+                                tracing::info!(target: "murmur_relay::call_diag", "{}", text);
+                                Ok(Response::builder()
+                                    .status(StatusCode::OK)
+                                    .header("access-control-allow-origin", "*")
+                                    .body(Full::new(Bytes::from("ok")))
+                                    .unwrap())
+                            }
                             (Method::POST, "/api/upload") => {
                                 handle_api_upload(req, db.clone(), pending.clone()).await
                             }

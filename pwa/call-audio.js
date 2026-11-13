@@ -39,6 +39,7 @@
   // стоп для всех точек (clearInterval/clearTimeout взаимозаменяемы, но явно).
   function stopReoffer() { if (reofferTimer) { clearTimeout(reofferTimer); reofferTimer = null; } }
   let lastPeerSignalTs = 0; // v160z26g: ts последнего сигнала от пира (event-driven reoffer stop)
+  let offerCount = 0; // v160z26j: сколько offer'ов отправили за звонок (diag)
   let sentIce = []; // call53: кандидаты, отправленные до answer (дозируем повторно)
   let camFacing = "user"; // call54: текущая камера PiP (user=фронтальная, environment=тыловая)
   let camFlipBusy = false; // call54: защита от двойного тапа во время переключения
@@ -502,6 +503,7 @@
     // нейтральное incoming_call без SDP). Повторяем оффер каждые 4с, пока
     // не придёт answer; push:false — пуш уже был отправлен первичным оффером.
     stopReoffer();
+    offerCount = 0; // v160z26j
     // v160z26h (Олег, лог 12.11 22:23): re-offer loop — это «пинок» пиру,
     // чтобы он переслал answer. Он НЕ должен останавливаться из-за
     // ЛЮБОГО сигнала пира: если answer потерялся, ICE-кандидаты всё равно
@@ -520,6 +522,7 @@
         }
         const socket = ws();
         if (socket && socket.readyState === WebSocket.OPEN) {
+          offerCount++;
           try { send(to, { kind: "offer", mode: callMode, sdp: pc.localDescription }, { push: false }); }
           catch (err) { diagLog("error", "reoffer: " + err.message); }
         }
@@ -860,6 +863,17 @@
       } catch (err) {
         console.warn("[MurmurCall] ANSWER setRemoteDescription FAILED:", err && err.message, "sdpLen:", (s.sdp && s.sdp.sdp || "").length);
         diagLog("error", "answer srd: " + ((err && err.message) || err));
+        // v160z26j: репортим на релей — journald увидит ошибку + SDP,
+        // без доступа к консоли Mac. Режем SDP до 3500 байт.
+        try {
+          fetch("/api/call-diag", { method: "POST", body: JSON.stringify({
+            t: new Date().toISOString(), side: "pwa", ev: "answer_srd_failed",
+            err: (err && err.message) || String(err),
+            signalingState: pc.signalingState, remoteDescriptionReady,
+            offerCount: offerCount,
+            sdpHead: String((s.sdp && s.sdp.sdp) || "").slice(0, 3500)
+          }) }).catch(() => {});
+        } catch (_) {}
         return;
       }
       remoteDescriptionReady = true;
