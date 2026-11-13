@@ -152,9 +152,9 @@ struct ChatView: View {
                 HStack {
                     Spacer(minLength: 0)
                     Text(m.callEventText)
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                        .padding(.vertical, 2)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Color(white: 0.85))
+                        .padding(.vertical, 3)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 24)
