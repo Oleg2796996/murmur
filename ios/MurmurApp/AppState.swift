@@ -17,6 +17,11 @@ final class AppState: ObservableObject {
     /// npub currently typing (ephemeral UI state, PWA parity).
     @Published var typingPeers: Set<String> = []
 
+    /// A `.murmur` file opened from Files / another app (2026-11-14).
+    /// Parked by MurmurAppDelegate; picked up by the chat-list view, which
+    /// asks for the password and restores from it.
+    nonisolated(unsafe) static var pendingBackupURL: URL?
+
     /// npub -> display name (PWA `murmur.contact_names` parity).
     @Published var contactNames: [String: String] = [:] {
         didSet { persistContactNames() }
@@ -183,20 +188,147 @@ final class AppState: ObservableObject {
         PushManager.shared.registerTokenOnRelay(npub: myNpub)
     }
 
-    /// Apply profile data restored from a .murmur backup (name + contacts).
-    func applyBackupIdentity(_ info: BackupIdentity) {
-        if !info.name.isEmpty {
-            UserDefaults.standard.set(info.name, forKey: "murmur.name")
+    /// Apply a decoded `.murmur` backup payload (2026-11-14).
+    ///
+    /// Before this, the import restored ONLY the identity: chat history,
+    /// contact names and unread counters from the backup were thrown away —
+    /// the PWA backup opened "successfully" in iOS and showed an EMPTY chat
+    /// list, which looked like data loss. Now the whole payload lands:
+    ///   - contact names (merged, own npub and system:relay excluded);
+    ///   - chat history per peer (chronological, deduped against what is
+    ///     already on the device);
+    ///   - unread counters per peer.
+    ///
+    /// The identity itself is applied by the caller (IdentityStore.importHex)
+    /// BEFORE this runs, so `myNpub` is already the restored one.
+    func applyBackupPayload(_ payload: BackupManager.Payload) {
+        if !payload.name.isEmpty {
+            UserDefaults.standard.set(payload.name, forKey: "murmur.name")
         }
-        if let data = info.contactNamesJson.data(using: .utf8),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String],
-           !obj.isEmpty {
+        // Contact names.
+        if !payload.contactNames.isEmpty {
             var merged = contactNames
-            for (k, v) in obj where k != myNpub && k != "system:relay" {
+            for (k, v) in payload.contactNames where k != myNpub && k != "system:relay" {
                 merged[k] = v
             }
             contactNames = merged
         }
+        // Chat history.
+        for (peer, msgs) in payload.chats where peer != "system:relay" && peer != myNpub {
+            mergeRestoredChat(peer: peer, messages: msgs)
+        }
+        // Unread counters.
+        if !payload.unread.isEmpty {
+            for (peer, count) in payload.unread where peer != "system:relay" && peer != myNpub {
+                unreadByPeer[peer] = count
+            }
+            updateBadge()
+        }
+        if !chats.isEmpty {
+            chats.sort { $0.lastTs > $1.lastTs }
+        }
+        persist()
+    }
+
+    /// Merge restored messages into an existing (or new) chat.
+    ///
+    /// Keeps whatever the device already knows: the relay erases delivered
+    /// envelopes within minutes, so the LOCAL copy is the only archive. A
+    /// restored message that is not on the device yet is appended; one that
+    /// already exists is left alone.
+    ///
+    /// v160z28 (2026-11-14): the dedup key is NOT the message id.
+    ///   * Live iOS messages get id = envelope hash (or "peer-ts").
+    ///   * Restored PWA messages get id = the PWA `_sig` (= from + ts).
+    /// Comparing them by id would never match → every message present both
+    /// in the backup and on the server would be shown TWICE. The stable
+    /// identity of a MurMur message is the envelope hash; without it the
+    /// (peer, ts, direction) triple is the next best key.
+    private func mergeRestoredChat(peer: String, messages: [BackupManager.Message]) {
+        guard !messages.isEmpty else { return }
+        var summary = chats.first(where: { $0.peer == peer })
+            ?? ChatSummary(peer: peer, lastBody: "", lastTs: 0, lastMimes: [])
+        var seen = Set<String>()
+        for existing in summary.messages {
+            seen.formUnion(Self.dedupKeys(peer: peer, ts: existing.ts,
+                                          direction: existing.direction,
+                                          hash: existing.hash))
+        }
+        var added = 0
+        for m in messages {
+            let restoredDirection: ChatMessage.Direction = m.direction == "out" ? .outgoing : .incoming
+            let keys = Self.dedupKeys(peer: peer, ts: m.ts,
+                                      direction: restoredDirection,
+                                      hash: m.hash)
+            guard seen.isDisjoint(with: keys) else { continue }
+            seen.formUnion(keys)
+            var msg = ChatMessage(
+                id: m.id,
+                peer: peer,
+                body: m.body,
+                ts: m.ts,
+                // PWA marks call events as direction "system" (rendered
+                // neutral, centred). iOS has no system direction — the
+                // call-event row is rendered centred by ChatView regardless
+                // of direction, so `.incoming` is the right carrier.
+                direction: restoredDirection,
+                status: .sent,
+                hash: m.hash,
+                attachments: m.attachments
+            )
+            if m.callEvent {
+                msg.makeCallEvent(status: m.callStatus ?? "completed",
+                                  direction: m.callDirection ?? "in",
+                                  duration: m.callDuration)
+            }
+            summary.messages.append(msg)
+            added += 1
+        }
+        guard added > 0 else { return }
+        summary.messages.sort { $0.ts < $1.ts }
+        summary.messages.removeDuplicates()
+        // Preview = newest message (PWA list parity).
+        if let newest = summary.messages.last {
+            summary.lastTs = newest.ts
+            if newest.callEvent {
+                summary.lastBody = ChatMessage.callPreview(status: newest.callStatus ?? "completed",
+                                                          direction: newest.callDirection ?? "in",
+                                                          duration: newest.callDuration)
+            } else {
+                summary.lastBody = newest.body
+            }
+            summary.lastMimes = newest.attachments.compactMap { $0["mime"] as? String }
+        }
+        if let i = chats.firstIndex(where: { $0.peer == peer }) {
+            chats[i] = summary
+        } else {
+            chats.append(summary)
+        }
+    }
+
+    /// Identity keys of one message, used to detect "the same message" across
+    /// two different id schemes (live iOS vs restored from a PWA backup).
+    ///
+    /// v160z28 (2026-11-14):
+    ///   * `h:<hash>` — the envelope hash. This is the TRUE identity of a
+    ///     MurMur message and is present on both sides for every message that
+    ///     came through the relay.
+    ///   * `t:<peer>:<ts>:<dir>` — the fallback for messages without a hash
+    ///     (optimistic sends, call events). The direction keeps an outgoing
+    ///     and an incoming message with the same ts apart.
+    ///
+    /// The PWA `_sig` (from + ts) is deliberately NOT used as a key: it
+    /// contains the sender npub, so the same message seen from the two sides
+    /// of a conversation would produce different strings.
+    private static func dedupKeys(peer: String, ts: Int,
+                                  direction: ChatMessage.Direction,
+                                  hash: String?) -> Set<String> {
+        var keys = Set<String>()
+        if let hash, !hash.isEmpty {
+            keys.insert("h:\(hash)")
+        }
+        keys.insert("t:\(peer):\(ts):\(direction.rawValue)")
+        return keys
     }
 
     /// Cold-start refresh for a Keychain-restored identity: `didAuthenticate`

@@ -125,6 +125,8 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate, PKPushRegis
 
 extension Notification.Name {
     static let murmurPushWake = Notification.Name("murmurPushWake")
+    /// A `.murmur` backup file was opened from Files / another app.
+    static let murmurOpenBackupDocument = Notification.Name("murmurOpenBackupDocument")
 }
 
 // MARK: - UNUserNotificationCenterDelegate (v160z27c: alert-push звонка)

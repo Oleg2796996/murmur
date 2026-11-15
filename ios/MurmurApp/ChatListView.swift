@@ -83,6 +83,9 @@ struct ChatListView: View {
     @State private var showKeyReveal = false
     @State private var showBackupExport = false
     @State private var showBackupImporter = false
+    /// A `.murmur` file opened from Files — the import sheet takes the URL
+    /// and asks for the password (2026-11-14).
+    @State private var pendingImport: BackupFile?
     @State private var importPassword = ""
     @State private var showWipeConfirm = false
     @State private var searchText = ""
@@ -186,6 +189,27 @@ struct ChatListView: View {
             .sheet(isPresented: $showKeyReveal) { KeyRevealView() }
             .sheet(isPresented: $showBackupExport) { BackupExportSheet() }
             .sheet(isPresented: $showBackupImporter) { BackupImportSheet { app.didAuthenticate() } }
+            // A `.murmur` file opened from Files: show the import sheet with
+            // that file pre-selected (2026-11-14).
+            .sheet(item: $pendingImport) { file in
+                BackupImportSheet(initialURL: file.url) { app.didAuthenticate() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .murmurOpenBackupDocument)) { _ in
+                if let url = AppState.pendingBackupURL {
+                    AppState.pendingBackupURL = nil
+                    pendingImport = BackupFile(url: url)
+                }
+            }
+            // Cold start: the app was launched BY the .murmur file, so the
+            // notification was posted before this view existed (it is only
+            // mounted after the account is authenticated). The URL waits in
+            // `AppState.pendingBackupURL` — pick it up here.
+            .onAppear {
+                if let url = AppState.pendingBackupURL {
+                    AppState.pendingBackupURL = nil
+                    pendingImport = BackupFile(url: url)
+                }
+            }
             .confirmationDialog(
                 "Все ваши данные (личность, ключи, история чатов) будут безвозвратно удалены с этого устройства. Продолжить?",
                 isPresented: $showWipeConfirm, titleVisibility: .visible

@@ -28,6 +28,13 @@ struct RelayError: LocalizedError {
     static func make(_ m: String) -> RelayError { RelayError(message: m) }
 }
 
+/// A `.murmur` backup file handed to the app (opened from Files / another
+/// app). `Identifiable` so it can drive a SwiftUI `.sheet(item:)`.
+struct BackupFile: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
+}
+
 /// One message in a 1:1 chat, as stored locally.
 struct ChatMessage: Identifiable, Equatable {
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
@@ -86,6 +93,26 @@ struct ChatMessage: Identifiable, Equatable {
     static func formatCallDuration(_ seconds: Int) -> String {
         let s = max(0, seconds)
         return String(format: "%02d:%02d", s / 60, s % 60)
+    }
+
+    /// Short preview for the chat LIST (PWA `lastMessagePreview` parity):
+    /// «Исходящий — 03:41», «Пропущенный», «Входящий отменен».
+    static func callPreview(status: String, direction: String, duration: Int) -> String {
+        let out = direction == "out"
+        switch status {
+        case "completed":
+            return (out ? "Исходящий — " : "Входящий — ") + formatCallDuration(duration)
+        case "missed":
+            return "Пропущенный"
+        case "declined":
+            return out ? "Исходящий отклонен" : "Входящий отменен"
+        case "cancelled":
+            return out ? "Исходящий" : "Входящий отменен"
+        case "failed":
+            return out ? "Исходящий" : "Входящий"
+        default:
+            return out ? "Исходящий" : "Входящий"
+        }
     }
 
     /// "HH:MM" — паритет formatTime.

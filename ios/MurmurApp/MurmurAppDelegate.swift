@@ -47,6 +47,20 @@ final class MurmurAppDelegate: NSObject, UIApplicationDelegate {
         NSLog("murmur apns: register failed \(error.localizedDescription)")
     }
 
+    // MARK: - Open a `.murmur` backup from Files / another app (2026-11-14)
+    //
+    // The Info.plist declares `org.murmurchat.backup` as a document type, so
+    // tapping a `.murmur` file in Files launches MurMur with that URL. The
+    // URL is parked here and picked up by MurmurApp's onOpenURL handler.
+    func application(_ app: UIApplication,
+                     open url: URL,
+                     options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        NSLog("murmur: open document \(url.lastPathComponent)")
+        AppState.pendingBackupURL = url
+        NotificationCenter.default.post(name: .murmurOpenBackupDocument, object: nil)
+        return true
+    }
+
     // APNs delivery of a call_signal frame is done as a silent push
     // (type: "voip", no alert/sound) -> the relay wakes and forwards
     // onCallSignal -> CallManager (cold peer rings).

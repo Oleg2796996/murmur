@@ -33,6 +33,20 @@ struct MurmurApp: App {
                 app.connect()
                 app.refreshOnLaunch()
             }
+            // Открытие .murmur-файла из «Файлов» (v160z28).
+            //
+            // ВАЖНО: `UIApplicationDelegate.application(_:open:)` в приложении
+            // со scene-lifecycle (UIApplicationSceneManifest + WindowGroup)
+            // НЕ вызывается — URL приходит в сцену. Для SwiftUI это
+            // `.onOpenURL` на сцене. Поэтому держим URL в статике
+            // (AppState.pendingBackupURL) и отдаём его тому, кто его ждёт:
+            // чат-листу (когда аккаунт уже есть) или онбордингу (свежая
+            // установка — иначе файл из «Файлов» молча потерялся бы).
+            .onOpenURL { url in
+                NSLog("murmur: onOpenURL \(url.lastPathComponent)")
+                AppState.pendingBackupURL = url
+                NotificationCenter.default.post(name: .murmurOpenBackupDocument, object: nil)
+            }
             .onChange(of: scenePhase) { _, phase in
                 // Track foreground state for the unread logic: incoming to
                 // the open chat counts toward the badge when not active.

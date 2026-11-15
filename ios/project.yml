@@ -81,3 +81,23 @@ targets:
           - remote-notification
           - voip
         ITSAppUsesNonExemptEncryption: false
+        # v160z28 (2026-11-14): регистрация .murmur как документа — чтобы файл
+        # backup можно было открыть из «Файлов» (тап → MurMur).
+        # ВАЖНО: xcodegen генерирует Info.plist из ЭТОГО файла — ключи,
+        # добавленные только в ios/MurmurApp/Info.plist, будут стёрты при
+        # `xcodegen generate` (см. коммит 87847c7: NSLocalNetworkUsageDescription
+        # пришлось дублировать сюда по той же причине).
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: MurMur Backup
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSItemContentTypes:
+              - org.murmurchat.backup
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: org.murmurchat.backup
+            UTTypeDescription: MurMur Backup
+            UTTypeConformsTo:
+              - public.data
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - murmur
