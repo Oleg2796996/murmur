@@ -103,7 +103,7 @@ struct ChatView: View {
             composer
             }
         }
-        .navigationTitle(ChatListView.contactLabel(app, peer))
+        .navigationTitle(contactLabel(app, peer))
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(MurmurTheme.panel, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
