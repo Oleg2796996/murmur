@@ -49,13 +49,13 @@ struct GlassPillButton: View {
             // по частям. 21:22: «Сканировать» при 13pt не влезало в 96pt и
             // рвалось («Сканирова / ь») → ширина 104pt, шрифт 12, страховка
             // minimumScaleFactor — слово ВСЕГДА целиком.
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(MurmurTheme.accent)
                 .multilineTextAlignment(.center)
-                .minimumScaleFactor(0.8)
+                .minimumScaleFactor(0.75)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 4)
-                .frame(width: 104, height: 44, alignment: .center)
+                .padding(.horizontal, 3)
+                .frame(width: 96, height: 44, alignment: .center)
                 .background {
                     if #available(iOS 26.0, *) {
                         AnyView(
@@ -105,6 +105,9 @@ struct ChatListView: View {
     /// Keyboard focus on the search field — lets a downward swipe dismiss
     /// the keyboard (same UX as inside a chat, Олег 2026-11-09 23:14).
     @FocusState private var searchFocused: Bool
+    /// 🌐-смена языка (PWA parity): инкремент заставляет ViewBuilder
+    /// пересчитать все MurmurI18N.t(...) строки без пересоздания AppState.
+    @State private var langEpoch = 0
 
     var body: some View {
         NavigationStack {
@@ -115,7 +118,7 @@ struct ChatListView: View {
                             Text("MurMur")
                                 .font(.title2.bold())
                                 .foregroundStyle(MurmurTheme.text)
-                            Text("Пригласите друга или вставьте полученную ссылку для начала общения")
+                            Text(MurmurI18N.t("Пригласите друга или вставьте полученную ссылку для начала общения"))
                                 .font(.footnote)
                                 .foregroundStyle(MurmurTheme.textMuted)
                                 .multilineTextAlignment(.center)
@@ -170,19 +173,55 @@ struct ChatListView: View {
             // остальные в общую капсулу.
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
-                    HStack(spacing: 8) {
+                    // 2026-11-16 23:0x: 5 элементов ряда (3 пилюли + 🌐 + …) на
+                    // узких iPhone (mini/SE, 375pt) не помещаются — ряд в
+                    // горизонтальном ScrollView без индикатора: на широких
+                    // выглядит как раньше, на узких прокручивается.
+                    ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
                         // 2026-11-16 21:18 (Олег): слова не должны переноситься
                         // по частям — разрывы строк заданы явно (\n), каждое
                         // слово целиком на своей строке.
-                        GlassPillButton(title: "Пригласить\nдруга") { showInvite = true }
+                        GlassPillButton(title: MurmurI18N.t("Пригласить друга").replacingOccurrences(of: " ", with: "\n")) { showInvite = true }
                         Spacer(minLength: 0)
-                        GlassPillButton(title: "Сканировать\nQR") { showQRScanner = true }
+                        GlassPillButton(title: MurmurI18N.t("Сканировать QR").replacingOccurrences(of: " ", with: "\n")) { showQRScanner = true }
                         Spacer(minLength: 0)
-                        GlassPillButton(title: "Вставить\nссылку") { showNewChat = true }
+                        GlassPillButton(title: MurmurI18N.t("Вставить ссылку").replacingOccurrences(of: " ", with: "\n")) { showNewChat = true }
+                        Spacer(minLength: 0)
+                        // 🌐-кнопка смены языка — PWA parity (v160y33, call43):
+                        // показывает КОД текущего языка (🌐 RU/EN/FR/ES/DE),
+                        // цикл ru → en → fr → es → de.
+                        Button {
+                            MurmurI18N.setLanguage(MurmurI18N.current.next)
+                        } label: {
+                            Text("🌐 \(MurmurI18N.current.label)")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(MurmurTheme.accent)
+                                .frame(width: 52, height: 44)
+                                .background {
+                                    if #available(iOS 26.0, *) {
+                                        AnyView(
+                                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                                .fill(.clear)
+                                                .glassEffect(.regular.tint(.white.opacity(0.08)), in: .capsule)
+                                        )
+                                    } else {
+                                        AnyView(
+                                            Capsule()
+                                                .fill(.ultraThinMaterial)
+                                                .overlay(Capsule().stroke(.white.opacity(0.10), lineWidth: 0.5))
+                                                .shadow(color: .black.opacity(0.25), radius: 4, y: 1)
+                                        )
+                                    }
+                                }
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
                         Spacer(minLength: 0)
                         moreMenu
                     }
-                    .padding(.horizontal, 12)
+                    }
+                    .padding(.horizontal, 8)
                     .padding(.top, 0)
                     .padding(.bottom, 6)
                     // 2026-11-16 17:52 (Олег): жёлтую плашку «Backup восстановлен —
@@ -234,6 +273,13 @@ struct ChatListView: View {
                     pendingImport = BackupFile(url: url)
                 }
             }
+            // 🌐-смена языка: перечитать все t(...) строки (PWA делает
+            // location.reload(); SwiftUI — просто пересчитать ViewBuilder).
+            .onReceive(NotificationCenter.default.publisher(for: .murmurLanguageChanged)) { _ in
+                langEpoch += 1
+            }
+            // Смена языка → пересобрать всё дерево со свежими t(...) строками.
+            .id(langEpoch)
             .confirmationDialog(
                 "Все ваши данные (личность, ключи, история чатов) будут безвозвратно удалены с этого устройства. Продолжить?",
                 isPresented: $showWipeConfirm, titleVisibility: .visible
@@ -263,7 +309,7 @@ struct ChatListView: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(MurmurTheme.textMuted)
-            TextField("поиск чатов…", text: $searchText)
+            TextField(MurmurI18N.t("поиск чатов…"), text: $searchText)
                 .focused($searchFocused)
                 .foregroundStyle(MurmurTheme.text)
                 .autocorrectionDisabled()
@@ -363,9 +409,9 @@ struct ChatListView: View {
             Image(systemName: "ellipsis.circle")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(MurmurTheme.accent)
-                .frame(width: 40, height: 40)
+                .frame(width: 36, height: 44)
                 .background { glassCircleBackground }
-                .contentShape(Circle())
+                .contentShape(Rectangle())
         }
     }
 

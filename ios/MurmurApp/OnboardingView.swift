@@ -16,6 +16,8 @@ struct OnboardingView: View {
     /// A `.murmur` file opened from Files — handed to the import sheet.
     @State private var pendingImport: BackupFile?
     @State private var showImporter = false
+    /// 🌐-смена языка: пересобрать дерево со свежими t(...)-строками.
+    @State private var langEpoch = 0
 
     var body: some View {
         ZStack {
@@ -28,7 +30,7 @@ struct OnboardingView: View {
                     Text("MurMur")
                         .font(.system(size: 40, weight: .bold))
                         .foregroundStyle(MurmurTheme.text)
-                    Text("Приватный мессенджер без номеров, почт и слежки")
+                    Text(MurmurI18N.t("приватный мессенджер"))
                         .font(.body)
                         .foregroundStyle(MurmurTheme.textMuted)
                 }
@@ -57,7 +59,7 @@ struct OnboardingView: View {
                     } label: {
                         HStack {
                             Spacer()
-                            Label("Восстановить из backup", systemImage: "arrow.counterclockwise")
+                            Label(MurmurI18N.t("Восстановить из backup"), systemImage: "arrow.counterclockwise")
                                 .font(.body.weight(.semibold))
                                 .foregroundStyle(MurmurTheme.accent)
                             Spacer()
@@ -79,7 +81,7 @@ struct OnboardingView: View {
                         if busy {
                             ProgressView().tint(MurmurTheme.bg)
                         } else {
-                            Label("Создать", systemImage: "plus.circle.fill")
+                            Label(MurmurI18N.t("Создать"), systemImage: "plus.circle.fill")
                                 .font(.body.weight(.semibold))
                                 .foregroundStyle(MurmurTheme.bg)
                         }
@@ -121,6 +123,10 @@ struct OnboardingView: View {
                 pendingImport = BackupFile(url: url)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .murmurLanguageChanged)) { _ in
+            langEpoch += 1
+        }
+        .id(langEpoch)
     }
 
     private func feature(_ icon: String, _ text: String) -> some View {
