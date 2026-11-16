@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import CoreImage
 import UIKit
+import VisionKit
 import ObjectiveC.runtime
 
 /// «Сканировать QR» — камера распознаёт QR-код инвайта и сразу открывает чат.
