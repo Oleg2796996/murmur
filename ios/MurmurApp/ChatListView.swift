@@ -43,10 +43,16 @@ struct GlassPillButton: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 15, weight: .semibold))
+            // 2026-11-16 21:13 (Олег): с добавкой «Сканировать QR» три пилюли
+            // + «…» перестали влезать в экран. Все пилюли теперь одной ширины
+            // (96pt), текст в 2 ряда по центру, шрифт 13 — ряд собирается в
+            // любую ширину iPhone.
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(MurmurTheme.accent)
-                .padding(.horizontal, 16)
-                .frame(height: 40)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .padding(.horizontal, 6)
+                .frame(width: 96, height: 44)
                 .background {
                     if #available(iOS 26.0, *) {
                         AnyView(
@@ -66,7 +72,6 @@ struct GlassPillButton: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .fixedSize()
     }
 }
 
