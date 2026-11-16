@@ -110,24 +110,42 @@ struct ChatView: View {
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar { // call buttons — left side, PWA parity
             ToolbarItem(placement: .topBarLeading) {
-                HStack(spacing: 2) {
-                    // 2026-11-16 (Олег): на скрине аудио- и видео-кнопки
-                    // сливались в ОДНУ капсулу (toolbar рисует под ними общую
-                    // стеклянную подложку). Разделяем: каждая кнопка — в своём
-                    // круге, как назад/карандаш; между ними зазор.
+                // 2026-11-16 (Олег): точный паритет pwa/styles.css #btn-call /
+                // #btn-video-call — скруглённые квадраты 44×48, каждая СО СВОЕЙ
+                // рамкой и цветным градиентом: аудио = красный (#ff6b6b),
+                // видео = синий (#69a8ff). Раньше обе были голыми SF Symbols
+                // в одном ToolbarItem — iOS рисовал под ними общую стеклянную
+                // подложку, и кнопки сливались в один контрол.
+                HStack(spacing: 8) {
                     Button(action: startAudio) {
-                        Image(systemName: "phone")
-                            .font(.system(size: 17))
-                            .foregroundStyle(MurmurTheme.accent)
-                            .frame(width: 34, height: 34)
-                            .background(Circle().fill(MurmurTheme.bubbleIn))
+                        Image(systemName: "phone.fill")
+                            .font(.system(size: 19, weight: .semibold))
+                            .foregroundStyle(Color(red: 1.0, green: 0.42, blue: 0.42)) // #ff6b6b
+                            .frame(width: 44, height: 34)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color(red: 1.0, green: 0.28, blue: 0.28).opacity(0.18))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color(red: 1.0, green: 0.35, blue: 0.35).opacity(0.58), lineWidth: 1)
+                            )
+                            .contentShape(Rectangle())
                     }
                     Button(action: startVideo) {
-                        Image(systemName: "video")
-                            .font(.system(size: 17))
-                            .foregroundStyle(MurmurTheme.accent)
-                            .frame(width: 34, height: 34)
-                            .background(Circle().fill(MurmurTheme.bubbleIn))
+                        Image(systemName: "video.fill")
+                            .font(.system(size: 19, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.41, green: 0.66, blue: 1.0)) // #69a8ff
+                            .frame(width: 44, height: 34)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color(red: 0.28, green: 0.57, blue: 1.0).opacity(0.20))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color(red: 0.28, green: 0.57, blue: 1.0).opacity(0.62), lineWidth: 1)
+                            )
+                            .contentShape(Rectangle())
                     }
                 }
             }
