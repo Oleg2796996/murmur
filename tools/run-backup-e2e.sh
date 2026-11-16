@@ -81,6 +81,7 @@ EOF
 cp "$REPO/ios/MurmurApp/BackupManager.swift"       "$PKG/Sources/E2E/"
 cp "$REPO/ios/MurmurApp/BackupPayloadCodec.swift"  "$PKG/Sources/E2E/"
 cp "$REPO/ios/MurmurApp/Models.swift"              "$PKG/Sources/E2E/"
+cp "$REPO/ios/MurmurApp/ChatRestore.swift"         "$PKG/Sources/E2E/"
 cp "$REPO/tools/backup-e2e-test.swift"              "$PKG/Sources/E2E/main.swift"
 
 cat > "$PKG/Package.swift" <<'EOF'
@@ -116,3 +117,23 @@ swift build -c release
 
 echo "==> running the production path against $FILE"
 "$PKG/.build/release/e2e" "$FILE" "$PASSWORD" "$REF"
+
+# ---------------------------------------------------------------------------
+# 2026-11-16: the RESTORE logic (ChatRestore.swift — how the backup payload
+# is merged into the chat list) is checked separately, against the same real
+# file. It is pure Foundation, so it compiles on HP without any shim.
+# ---------------------------------------------------------------------------
+echo ""
+echo "==> restore-merge test (ChatRestore.swift, pure logic)"
+RESTORE_OUT="/tmp/murmur-restore-payload.json"
+node "$REPO/tools/backup-decode-reference.js" "$FILE" "$PASSWORD" "$RESTORE_OUT" >/dev/null
+RESTORE_MAIN="$(mktemp -d)/main.swift"
+cp "$REPO/tools/restore-test.swift" "$RESTORE_MAIN"
+swiftc -O "$RESTORE_MAIN" \
+    "$REPO/ios/MurmurApp/BackupPayloadCodec.swift" \
+    "$REPO/ios/MurmurApp/Models.swift" \
+    "$REPO/ios/MurmurApp/ChatRestore.swift" \
+    -o /tmp/murmur-restore-test
+# The harness reads the decrypted payload from this fixed path.
+cp "$RESTORE_OUT" /tmp/restore-payload.json
+/tmp/murmur-restore-test "$FILE" "$PASSWORD"

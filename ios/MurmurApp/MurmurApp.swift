@@ -17,6 +17,16 @@ struct MurmurApp: App {
                     OnboardingView()
                 }
             }
+            // 2026-11-16 (Олег: «местами вместо темного выступает светлый
+            // фон внизу экрана и на кнопках»): the app is a DARK-ONLY design
+            // (PWA palette, Telegram-dark). Without an explicit colour scheme
+            // iOS renders it in the user's system appearance — in Light mode
+            // the glass pills (.ultraThinMaterial / .glassEffect) and every
+            // unstyled surface came out light grey on a light background.
+            // Forcing the dark scheme makes the whole UI match the palette.
+            .preferredColorScheme(.dark)
+            .tint(MurmurTheme.accent)
+            .background(MurmurTheme.bg.ignoresSafeArea())
             .fullScreenCover(isPresented: Binding(
                 get: { callManager.phase != .idle },
                 set: { _ in })) {

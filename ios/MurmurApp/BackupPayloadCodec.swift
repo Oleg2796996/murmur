@@ -56,6 +56,21 @@ enum BackupPayloadCodec {
         guard let root = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
             throw CodecError.corrupted
         }
+        return try decode(root: root)
+    }
+
+    /// Same as `decode(_:)`, but for a payload that is already decrypted
+    /// (used by the HP test harness `tools/restore-test.swift` and by any
+    /// future "restore from a decrypted blob" path).
+    static func decode(jsonData: Data) throws -> Payload {
+        guard let root = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            throw CodecError.corrupted
+        }
+        return try decode(root: root)
+    }
+
+    /// The actual payload parser.
+    static func decode(root: [String: Any]) throws -> Payload {
         let ls = root["ls"] as? [String: Any] ?? [:]
         let kv = root["kv"] as? [String: Any] ?? [:]
         let chatsRaw = root["chats"] as? [String: Any] ?? [:]

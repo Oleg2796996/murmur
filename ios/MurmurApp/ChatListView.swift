@@ -97,44 +97,59 @@ struct ChatListView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if filteredChats.isEmpty {
-                    VStack(spacing: 8) {
-                        Text("MurMur")
-                            .font(.title2.bold())
-                            .foregroundStyle(MurmurTheme.text)
-                        Text("Пригласите друга или вставьте полученную ссылку для начала общения")
-                            .font(.footnote)
-                            .foregroundStyle(MurmurTheme.textMuted)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 32)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(filteredChats) { chat in
-                                NavigationLink {
-                                    ChatView(peer: chat.peer)
-                                } label: {
-                                    row(chat)
+            VStack(spacing: 0) {
+                Group {
+                    if filteredChats.isEmpty {
+                        VStack(spacing: 8) {
+                            Text("MurMur")
+                                .font(.title2.bold())
+                                .foregroundStyle(MurmurTheme.text)
+                            Text("Пригласите друга или вставьте полученную ссылку для начала общения")
+                                .font(.footnote)
+                                .foregroundStyle(MurmurTheme.textMuted)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 32)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                ForEach(filteredChats) { chat in
+                                    NavigationLink {
+                                        ChatView(peer: chat.peer)
+                                    } label: {
+                                        row(chat)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain)
                             }
                         }
-                    }
-                    // Олег: свайп вниз по списку — закрыть клавиатуру поиска
-                    // (как внутри чата). simultaneousGesture не мешает скроллу.
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 30)
-                            .onEnded { value in
-                                if value.translation.height > 40 {
-                                    searchFocused = false
+                        // Олег: свайп вниз по списку — закрыть клавиатуру поиска
+                        // (как внутри чата). simultaneousGesture не мешает скроллу.
+                        .simultaneousGesture(
+                            DragGesture(minimumDistance: 30)
+                                .onEnded { value in
+                                    if value.translation.height > 40 {
+                                        searchFocused = false
+                                    }
                                 }
-                            }
-                    )
-                    .scrollDismissesKeyboard(.interactively)
+                        )
+                        .scrollDismissesKeyboard(.interactively)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // v9: own search field (searchable needs a navbar — hidden now).
+                //
+                // 2026-11-16 (Олег: «местами вместо темного выступает светлый
+                // фон внизу экрана»): the search bar used to be a SEPARATE
+                // sibling expression in the ViewBuilder tuple of the
+                // NavigationStack — SwiftUI then treated the whole thing as a
+                // TupleView and laid the bar out OUTSIDE the navigation
+                // content, at the very bottom of the window, on the system
+                // (light) background. Inside a VStack it is pinned to the
+                // bottom of the navigation content, on our own dark panel.
+                searchBar
             }
             .background(MurmurTheme.bg)
             // 2026-11-09 (Олег, v7): ряд кнопок ВЫРОВНЕН ПО ШИРИНЕ экрана
@@ -143,41 +158,25 @@ struct ChatListView: View {
             // iOS 26 рендерил только первый principal-элемент и сваривал
             // остальные в общую капсулу.
             .safeAreaInset(edge: .top, spacing: 0) {
-                HStack(spacing: 8) {
-                    GlassPillButton(title: "Пригласить друга") { showInvite = true }
-                    Spacer(minLength: 0)
-                    GlassPillButton(title: "Вставить ссылку") { showNewChat = true }
-                    Spacer(minLength: 0)
-                    moreMenu
-                }
-                .padding(.horizontal, 12)
-                .padding(.top, 0)
-                .padding(.bottom, 6)
-            }
-            // v9: own search field (searchable needs a navbar — hidden now)
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(MurmurTheme.textMuted)
-                TextField("поиск чатов…", text: $searchText)
-                    .focused($searchFocused)
-                    .foregroundStyle(MurmurTheme.text)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(MurmurTheme.textMuted)
+                VStack(spacing: 0) {
+                    HStack(spacing: 8) {
+                        GlassPillButton(title: "Пригласить друга") { showInvite = true }
+                        Spacer(minLength: 0)
+                        GlassPillButton(title: "Вставить ссылку") { showNewChat = true }
+                        Spacer(minLength: 0)
+                        moreMenu
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 0)
+                    .padding(.bottom, 6)
+
+                    // 2026-11-16: the outcome of the last restore is shown
+                    // here — a silent partial restore is what made the user
+                    // think «восстановилось как-то странно» (Олег 09:05).
+                    restoreStatus
                 }
+                .background(MurmurTheme.bg)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(MurmurTheme.bubbleIn)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .padding(.horizontal, 12)
-            .padding(.bottom, 6)
             .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar(.hidden, for: .navigationBar)  // v9: empty navbar row removed
@@ -228,6 +227,60 @@ struct ChatListView: View {
     }
 
     // MARK: - Sidebar footer (PWA parity)
+
+    /// Result of the last backup restore (or an import error), shown right
+    /// under the action buttons. 2026-11-16.
+    @ViewBuilder private var restoreStatus: some View {
+        if let report = app.lastRestoreReport {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Backup восстановлен — \(report.summary)")
+                    .font(.caption)
+                    .foregroundStyle(report.identityChanged ? MurmurTheme.gold : MurmurTheme.textMuted)
+                if report.identityChanged {
+                    Text("Установлена другая личность — прежние чаты удалены")
+                        .font(.caption2)
+                        .foregroundStyle(MurmurTheme.gold)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 4)
+            .background(MurmurTheme.bg)
+        }
+    }
+
+    /// The chat-search field (PWA `chat-search` parity).
+    ///
+    /// 2026-11-16: extracted into its own view so it can be placed INSIDE
+    /// the navigation content (see `body`) — as a sibling expression in the
+    /// ViewBuilder tuple it was laid out outside the stack, at the bottom of
+    /// the window, on the light system background.
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(MurmurTheme.textMuted)
+            TextField("поиск чатов…", text: $searchText)
+                .focused($searchFocused)
+                .foregroundStyle(MurmurTheme.text)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(MurmurTheme.textMuted)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(MurmurTheme.bubbleIn)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
+        .background(MurmurTheme.bg)
+    }
 
     // MARK: - Paste invite (PWA btn-add-by-link parity)
 

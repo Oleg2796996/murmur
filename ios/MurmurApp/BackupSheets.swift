@@ -256,9 +256,16 @@ struct BackupImportSheet: View {
                     // `myNpub` must be the RESTORED npub before the payload is
                     // applied — applyBackupPayload filters our own npub out of
                     // the contact list using it.
+                    //
+                    // 2026-11-16: the npub the device had BEFORE the import is
+                    // captured first — if the backup belongs to a different
+                    // identity, the old (foreign) chats must be dropped
+                    // instead of being mixed into the restored account.
+                    let previousNpub = app.myNpub.isEmpty ? nil : app.myNpub
                     app.myNpub = npub
-                    app.applyBackupPayload(payload)
-                    statusText = "Восстановлено: чатов \(payload.chats.count), контактов \(payload.contactNames.count)"
+                    app.applyBackupPayload(payload, previousNpub: previousNpub)
+                    let r = app.lastRestoreReport
+                    statusText = "Восстановлено: \(r?.summary ?? payload.chats.count.description)"
                     busy = false
                 }
                 // The host view performs the post-import handshake

@@ -129,6 +129,34 @@ extension Dictionary where Key == String, Value == Any {
     var blobID: String { self["blob_id"] as? String ?? UUID().uuidString }
 }
 
+/// One chat in the list: the peer, the newest message preview and the whole
+/// local thread.
+///
+/// 2026-11-16: moved here from `AppState.swift` (which imports SwiftUI) so
+/// the restore logic in `ChatRestore.swift` stays pure Foundation and can be
+/// tested on the HP machine against REAL backup files.
+struct ChatSummary: Identifiable {
+    var id: String { peer }
+    let peer: String
+    var lastBody: String
+    var lastTs: Int
+    var messages: [ChatMessage] = []
+    /// mimes of the newest message's attachments (preview label, PWA parity)
+    var lastMimes: [String] = []
+}
+
+extension Array where Element == ChatMessage {
+    /// Dedup by id, keeping the newest occurrence (relay echo vs optimistic).
+    mutating func removeDuplicates() {
+        var seen = Set<String>()
+        var out: [ChatMessage] = []
+        for m in reversed() {
+            if seen.insert(m.id).inserted { out.append(m) }
+        }
+        self = out.reversed()
+    }
+}
+
 /// Wire envelope exactly as the relay expects it (`POST /envelope?to=<npub>`).
 /// Field set and signature scheme match pwa/app.js; the relay verifies the
 /// signature over `from|to|ts|ct` so it can never tamper with `ct`.

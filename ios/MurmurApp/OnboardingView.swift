@@ -3,10 +3,19 @@ import SwiftUI
 /// First-run flow: landing with the site pitch + single "Create" button.
 /// Import of `.murmur` backups moved out of the first screen (per Oleg,
 /// 2026-11-06). Styled with the app theme (PWA palette, MurmurTheme).
+///
+/// 2026-11-16: added a "Восстановить из backup" button — a FRESH install
+/// that was launched by tapping a `.murmur` file in Files had no way to
+/// import it: the chat list (which owns the import sheet) is only mounted
+/// after the account exists, so the file silently did nothing (Олег:
+/// «восстановилось как-то странно»).
 struct OnboardingView: View {
     @EnvironmentObject private var app: AppState
     @State private var errorText: String?
     @State private var busy = false
+    /// A `.murmur` file opened from Files — handed to the import sheet.
+    @State private var pendingImport: BackupFile?
+    @State private var showImporter = false
 
     var body: some View {
         ZStack {
@@ -39,6 +48,28 @@ struct OnboardingView: View {
 
                 Spacer()
 
+                // MARK: - Restore from backup (2026-11-16)
+                // A fresh install launched from a `.murmur` file in Files
+                // lands here — offer the import right away.
+                if pendingImport != nil || showImporter {
+                    Button {
+                        showImporter = true
+                    } label: {
+                        HStack {
+                            Spacer()
+                            Label("Восстановить из backup", systemImage: "arrow.counterclockwise")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(MurmurTheme.accent)
+                            Spacer()
+                        }
+                        .padding(.vertical, 14)
+                        .background(MurmurTheme.bubbleIn)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .padding(.bottom, 10)
+                    .disabled(busy)
+                }
+
                 // MARK: - Create button
                 Button {
                     createIdentity()
@@ -69,6 +100,26 @@ struct OnboardingView: View {
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 24)
+        }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.data, .murmurBackup],
+                      allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                pendingImport = BackupFile(url: url)
+            } else if case .failure(let err) = result {
+                errorText = err.localizedDescription
+            }
+        }
+        .sheet(item: $pendingImport) { file in
+            BackupImportSheet(initialURL: file.url) { app.didAuthenticate() }
+        }
+        .onAppear {
+            // The app was launched BY the .murmur file (cold start) — the URL
+            // waits in `AppState.pendingBackupURL` (posted before this view
+            // existed). Pick it up here.
+            if let url = AppState.pendingBackupURL {
+                AppState.pendingBackupURL = nil
+                pendingImport = BackupFile(url: url)
+            }
         }
     }
 
