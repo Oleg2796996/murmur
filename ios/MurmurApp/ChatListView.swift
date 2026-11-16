@@ -46,13 +46,16 @@ struct GlassPillButton: View {
             // 2026-11-16 21:13 (Олег): с добавкой «Сканировать QR» три пилюли
             // + «…» перестали влезать в экран. Пилюли фиксированной ширины,
             // разрывы строк заданы ЯВНО в заголовке (\n) — слова не рвутся
-            // по частям (21:18).
-                .font(.system(size: 13, weight: .semibold))
+            // по частям. 21:22: «Сканировать» при 13pt не влезало в 96pt и
+            // рвалось («Сканирова / ь») → ширина 104pt, шрифт 12, страховка
+            // minimumScaleFactor — слово ВСЕГДА целиком.
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(MurmurTheme.accent)
                 .multilineTextAlignment(.center)
+                .minimumScaleFactor(0.8)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 6)
-                .frame(width: 96, height: 44, alignment: .center)
+                .padding(.horizontal, 4)
+                .frame(width: 104, height: 44, alignment: .center)
                 .background {
                     if #available(iOS 26.0, *) {
                         AnyView(
