@@ -218,7 +218,16 @@ struct BackupImportSheet: View {
         do {
             guard let url = try result.get().first else { return }
             selectedURL = url
-            statusText = "Файл выбран — введите пароль"
+            NSLog("murmur import: file selected \(url.lastPathComponent)")
+            // 2026-11-16 (Олег: «ввел пароль и выбрал файл — ничего не
+            // произошло»): после выбора файла восстановление НЕ запускалось
+            // само — надо было ещё заметить и нажать «Восстановить».
+            // Теперь: если пароль уже введён — запускаем сразу.
+            if password.isEmpty {
+                statusText = "Файл выбран — введите пароль и нажмите «Восстановить»"
+            } else {
+                restore(from: url)
+            }
         } catch {
             errorText = error.localizedDescription
         }
@@ -236,6 +245,7 @@ struct BackupImportSheet: View {
                     defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                     return try Data(contentsOf: url, options: .mappedIfSafe)
                 }.value
+                NSLog("murmur import: file read \(data.count) bytes")
                 let password = self.password
                 guard !password.isEmpty else {
                     await MainActor.run {
@@ -247,6 +257,7 @@ struct BackupImportSheet: View {
                 let payload: BackupManager.Payload = try await Task.detached(priority: .userInitiated) {
                     try BackupManager.decodeBackup(data: data, password: password)
                 }.value
+                NSLog("murmur import: decrypt ok, peers=\(payload.chats.count) contacts=\(payload.contactNames.count)")
 
                 // Identity first (Keychain), then the rest of the payload.
                 let npub = try await Task.detached(priority: .userInitiated) { () -> String in
