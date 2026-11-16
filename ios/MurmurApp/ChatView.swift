@@ -109,21 +109,22 @@ struct ChatView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar { // call buttons — left side, PWA parity
-            ToolbarItem(placement: .topBarLeading) {
-                // 2026-11-16 (Олег): точный паритет pwa/styles.css #btn-call /
-                // #btn-video-call — скруглённые квадраты 44×48, каждая СО СВОЕЙ
-                // рамкой и цветным градиентом: аудио = красный (#ff6b6b),
-                // видео = синий (#69a8ff). Раньше обе были голыми SF Symbols
-                // в одном ToolbarItem — iOS рисовал под ними общую стеклянную
-                // подложку, и кнопки сливались в один контрол.
-                if #available(iOS 26.0, *) {
-                    // iOS 26 рисует под содержимым ToolbarItem общую стеклянную
-                    // капсулу (Олег: «осталась подложка, на которой лежат эти
-                    // обе кнопки») — глушим, у кнопок свои цветные пилюли.
-                    // Тот же приём, что в чат-листе (коммит bc21e31).
+            // 2026-11-16 (Олег): точный паритет pwa/styles.css #btn-call /
+            // #btn-video-call — скруглённые квадраты 44×48, каждая СО СВОЕЙ
+            // рамкой и цветным градиентом: аудио = красный (#ff6b6b),
+            // видео = синий (#69a8ff).
+            // iOS 26 рисует под содержимым ToolbarItem общую стеклянную
+            // капсулу (Олег: «осталась подложка, на которой лежат эти
+            // обе кнопки») — глушим. ВАЖНО: sharedBackgroundVisibility —
+            // метод ToolbarContent, НЕ View: вешается на ToolbarItem
+            // (как в чат-листе, bc21e31), а не на HStack внутри него.
+            if #available(iOS 26.0, *) {
+                ToolbarItem(placement: .topBarLeading) {
                     HStack(spacing: 8) { callButtons }
-                        .sharedBackgroundVisibility(.hidden)
-                } else {
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .topBarLeading) {
                     HStack(spacing: 8) { callButtons }
                 }
             }
