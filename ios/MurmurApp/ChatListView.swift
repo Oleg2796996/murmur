@@ -44,15 +44,15 @@ struct GlassPillButton: View {
         Button(action: action) {
             Text(title)
             // 2026-11-16 21:13 (Олег): с добавкой «Сканировать QR» три пилюли
-            // + «…» перестали влезать в экран. Все пилюли теперь одной ширины
-            // (96pt), текст в 2 ряда по центру, шрифт 13 — ряд собирается в
-            // любую ширину iPhone.
+            // + «…» перестали влезать в экран. Пилюли фиксированной ширины,
+            // разрывы строк заданы ЯВНО в заголовке (\n) — слова не рвутся
+            // по частям (21:18).
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(MurmurTheme.accent)
                 .multilineTextAlignment(.center)
-                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 6)
-                .frame(width: 96, height: 44)
+                .frame(width: 96, height: 44, alignment: .center)
                 .background {
                     if #available(iOS 26.0, *) {
                         AnyView(
@@ -168,13 +168,14 @@ struct ChatListView: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     HStack(spacing: 8) {
-                        GlassPillButton(title: "Пригласить друга") { showInvite = true }
+                        // 2026-11-16 21:18 (Олег): слова не должны переноситься
+                        // по частям — разрывы строк заданы явно (\n), каждое
+                        // слово целиком на своей строке.
+                        GlassPillButton(title: "Пригласить\nдруга") { showInvite = true }
                         Spacer(minLength: 0)
-                        // 2026-11-16 (Олег): скан QR-кода инвайта — камера,
-                        // код распознан → чат добавляется сразу (шит закрыт).
-                        GlassPillButton(title: "Сканировать QR") { showQRScanner = true }
+                        GlassPillButton(title: "Сканировать\nQR") { showQRScanner = true }
                         Spacer(minLength: 0)
-                        GlassPillButton(title: "Вставить ссылку") { showNewChat = true }
+                        GlassPillButton(title: "Вставить\nссылку") { showNewChat = true }
                         Spacer(minLength: 0)
                         moreMenu
                     }
