@@ -116,37 +116,15 @@ struct ChatView: View {
                 // видео = синий (#69a8ff). Раньше обе были голыми SF Symbols
                 // в одном ToolbarItem — iOS рисовал под ними общую стеклянную
                 // подложку, и кнопки сливались в один контрол.
-                HStack(spacing: 8) {
-                    Button(action: startAudio) {
-                        Image(systemName: "phone.fill")
-                            .font(.system(size: 19, weight: .semibold))
-                            .foregroundStyle(Color(red: 1.0, green: 0.42, blue: 0.42)) // #ff6b6b
-                            .frame(width: 44, height: 34)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(Color(red: 1.0, green: 0.28, blue: 0.28).opacity(0.18))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .stroke(Color(red: 1.0, green: 0.35, blue: 0.35).opacity(0.58), lineWidth: 1)
-                            )
-                            .contentShape(Rectangle())
-                    }
-                    Button(action: startVideo) {
-                        Image(systemName: "video.fill")
-                            .font(.system(size: 19, weight: .semibold))
-                            .foregroundStyle(Color(red: 0.41, green: 0.66, blue: 1.0)) // #69a8ff
-                            .frame(width: 44, height: 34)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(Color(red: 0.28, green: 0.57, blue: 1.0).opacity(0.20))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .stroke(Color(red: 0.28, green: 0.57, blue: 1.0).opacity(0.62), lineWidth: 1)
-                            )
-                            .contentShape(Rectangle())
-                    }
+                if #available(iOS 26.0, *) {
+                    // iOS 26 рисует под содержимым ToolbarItem общую стеклянную
+                    // капсулу (Олег: «осталась подложка, на которой лежат эти
+                    // обе кнопки») — глушим, у кнопок свои цветные пилюли.
+                    // Тот же приём, что в чат-листе (коммит bc21e31).
+                    HStack(spacing: 8) { callButtons }
+                        .sharedBackgroundVisibility(.hidden)
+                } else {
+                    HStack(spacing: 8) { callButtons }
                 }
             }
         }
@@ -253,6 +231,44 @@ struct ChatView: View {
 
     private func startAudio() { cm.startCall(peer: peer, video: false) }
     private func startVideo() { cm.startCall(peer: peer, video: true) }
+
+    /// Обе кнопки звонка — точный паритет pwa/styles.css #btn-call /
+    /// #btn-video-call: красная (аудио) и синяя (видео) пилюли.
+    /// Вынесены в свойство, чтобы один и тот же контент вставлять в
+    /// ToolbarItem и с iOS 26 sharedBackgroundVisibility(.hidden), и без
+    /// него (iOS 17–25) — см. toolbar в body.
+    @ViewBuilder private var callButtons: some View {
+        Button(action: startAudio) {
+            Image(systemName: "phone.fill")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(Color(red: 1.0, green: 0.42, blue: 0.42)) // #ff6b6b
+                .frame(width: 44, height: 34)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color(red: 1.0, green: 0.28, blue: 0.28).opacity(0.18))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color(red: 1.0, green: 0.35, blue: 0.35).opacity(0.58), lineWidth: 1)
+                )
+                .contentShape(Rectangle())
+        }
+        Button(action: startVideo) {
+            Image(systemName: "video.fill")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(Color(red: 0.41, green: 0.66, blue: 1.0)) // #69a8ff
+                .frame(width: 44, height: 34)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color(red: 0.28, green: 0.57, blue: 1.0).opacity(0.20))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color(red: 0.28, green: 0.57, blue: 1.0).opacity(0.62), lineWidth: 1)
+                )
+                .contentShape(Rectangle())
+        }
+    }
 
     private var composer: some View {
         HStack(spacing: 8) {
