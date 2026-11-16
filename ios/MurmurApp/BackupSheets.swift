@@ -175,15 +175,24 @@ struct BackupImportSheet: View {
         NavigationStack {
             Form {
                 Section("Файл .murmur") {
-                    SecureField("Пароль бэкапа", text: $password)
+                    // 2026-11-16 (Олег): правильный порядок — СНАЧАЛА файл,
+                    // ПОТОМ пароль (поле пароля появляется, только когда файл
+                    // уже выбран). Раньше пароль был первой строкой, до выбора
+                    // файла — сбивало с толку и провоцировало «ввёл пароль,
+                    // выбрал файл — ничего не произошло».
                     if let url = selectedURL {
                         LabeledContent("Файл", value: url.lastPathComponent)
-                        Button {
-                            restore(from: url)
-                        } label: {
-                            Label("Восстановить", systemImage: "arrow.counterclockwise")
+                        SecureField("Пароль бэкапа", text: $password)
+                            .submitLabel(.go)
+                            .onSubmit { if !password.isEmpty && !busy { restore(from: url) } }
+                        if !busy {
+                            Button {
+                                restore(from: url)
+                            } label: {
+                                Label("Восстановить", systemImage: "arrow.counterclockwise")
+                            }
+                            .disabled(password.isEmpty)
                         }
-                        .disabled(password.isEmpty || busy)
                     } else {
                         Button {
                             showImporter = true
@@ -226,15 +235,10 @@ struct BackupImportSheet: View {
             guard let url = try result.get().first else { return }
             selectedURL = url
             NSLog("murmur import: file selected \(url.lastPathComponent)")
-            // 2026-11-16 (Олег: «ввел пароль и выбрал файл — ничего не
-            // произошло»): после выбора файла восстановление НЕ запускалось
-            // само — надо было ещё заметить и нажать «Восстановить».
-            // Теперь: если пароль уже введён — запускаем сразу.
-            if password.isEmpty {
-                statusText = "Файл выбран — введите пароль и нажмите «Восстановить»"
-            } else {
-                restore(from: url)
-            }
+            // 2026-11-16: порядок «сначала файл, потом пароль» — после выбора
+            // файла появляется поле пароля, кнопка «Восстановить» активна,
+            // как только пароль введён (Enter тоже запускает).
+            statusText = "Файл выбран — введите пароль"
         } catch {
             errorText = error.localizedDescription
         }
