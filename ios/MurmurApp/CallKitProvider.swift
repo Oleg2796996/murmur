@@ -73,7 +73,7 @@ final class CallKitProvider: NSObject, ObservableObject {
            let dict = try? JSONDecoder().decode([String: String].self, from: data) {
             name = dict[peer]
         }
-        update.localizedCallerName = name ?? "MurMur"
+        update.localizedCallerName = name ?? "Без имени"
 
         let uuid = UUID()
         activeCallUUID = uuid

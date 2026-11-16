@@ -103,23 +103,31 @@ struct ChatView: View {
             composer
             }
         }
-        .navigationTitle(app.displayName(for: peer) ?? shortNpub(peer))
+        .navigationTitle(ChatListView.contactLabel(app, peer))
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(MurmurTheme.panel, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar { // call buttons — left side, PWA parity
             ToolbarItem(placement: .topBarLeading) {
-                HStack(spacing: 20) {
+                HStack(spacing: 2) {
+                    // 2026-11-16 (Олег): на скрине аудио- и видео-кнопки
+                    // сливались в ОДНУ капсулу (toolbar рисует под ними общую
+                    // стеклянную подложку). Разделяем: каждая кнопка — в своём
+                    // круге, как назад/карандаш; между ними зазор.
                     Button(action: startAudio) {
                         Image(systemName: "phone")
-                            .font(.system(size: 22))
+                            .font(.system(size: 17))
                             .foregroundStyle(MurmurTheme.accent)
+                            .frame(width: 34, height: 34)
+                            .background(Circle().fill(MurmurTheme.bubbleIn))
                     }
                     Button(action: startVideo) {
                         Image(systemName: "video")
-                            .font(.system(size: 22))
+                            .font(.system(size: 17))
                             .foregroundStyle(MurmurTheme.accent)
+                            .frame(width: 34, height: 34)
+                            .background(Circle().fill(MurmurTheme.bubbleIn))
                     }
                 }
             }

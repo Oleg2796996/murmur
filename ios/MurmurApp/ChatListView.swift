@@ -377,13 +377,14 @@ struct ChatListView: View {
     }
 
     private func row(_ chat: ChatSummary) -> some View {
-        let name = app.displayName(for: chat.peer) ?? shortNpub(chat.peer)
+        let name = contactLabel(app, chat.peer)
         return HStack(spacing: 10) {
             ZStack {
                 Circle()
                     .fill(MurmurTheme.avatarColor(chat.peer))
                     .frame(width: 40, height: 40)
-                Text(String(app.displayName(for: chat.peer)?.first ?? Character(shortNpub(chat.peer).prefix(1).uppercased())))
+                // PWA-паритет: буква ИМЕНИ; у «Без имени» — «Б».
+                Text(String(name.first ?? "Б").uppercased())
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.white)
             }
@@ -499,8 +500,14 @@ struct ChatListView: View {
     }
 }
 
-/// PWA never shows a full npub in the list — same rule here.
+/// PWA-паритет (app.js:4038 «npub не светим»): без заданного имени чат
+/// подписывается «Без имени», а не фрагментом npub (Олег, 16.11).
 func shortNpub(_ npub: String) -> String {
-    guard npub.count > 16 else { return npub }
-    return "\(npub.prefix(10))…\(npub.suffix(6))"
+    "Без имени"
+}
+
+/// Единая точка «как подписать чат»: имя контакта, иначе «Без имени».
+/// Используется чат-листом и шапкой чата.
+func contactLabel(_ app: AppState, _ peer: String) -> String {
+    app.displayName(for: peer) ?? "Без имени"
 }
