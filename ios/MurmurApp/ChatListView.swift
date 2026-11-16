@@ -176,11 +176,9 @@ struct ChatListView: View {
                     .padding(.horizontal, 12)
                     .padding(.top, 0)
                     .padding(.bottom, 6)
-
-                    // 2026-11-16: the outcome of the last restore is shown
-                    // here — a silent partial restore is what made the user
-                    // think «восстановилось как-то странно» (Олег 09:05).
-                    restoreStatus
+                    // 2026-11-16 17:52 (Олег): жёлтую плашку «Backup восстановлен —
+                    // …» из UI убрали — пользователь не должен её видеть (краткий
+                    // итог остаётся в шите импорта и в системном логе).
                 }
                 .background(MurmurTheme.bg)
             }
@@ -245,27 +243,6 @@ struct ChatListView: View {
     }
 
     // MARK: - Sidebar footer (PWA parity)
-
-    /// Result of the last backup restore (or an import error), shown right
-    /// under the action buttons. 2026-11-16.
-    @ViewBuilder private var restoreStatus: some View {
-        if let report = app.lastRestoreReport {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Backup восстановлен — \(report.summary)")
-                    .font(.caption)
-                    .foregroundStyle(report.identityChanged ? MurmurTheme.gold : MurmurTheme.textMuted)
-                if report.identityChanged {
-                    Text("Установлена другая личность — прежние чаты удалены")
-                        .font(.caption2)
-                        .foregroundStyle(MurmurTheme.gold)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.bottom, 4)
-            .background(MurmurTheme.bg)
-        }
-    }
 
     /// The chat-search field (PWA `chat-search` parity).
     ///
