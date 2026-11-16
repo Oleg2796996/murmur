@@ -80,6 +80,9 @@ struct ChatListView: View {
     @State private var newPeer = ""
     @State private var showNewChat = false
     @State private var showInvite = false
+    /// «Сканировать QR» — камера/фото распознают QR-код инвайта (Олег, 16.11).
+    @State private var showQRScanner = false
+    @State private var qrError: String?
     @State private var showKeyReveal = false
     @State private var showBackupExport = false
     @State private var showBackupImporter = false
@@ -162,6 +165,10 @@ struct ChatListView: View {
                     HStack(spacing: 8) {
                         GlassPillButton(title: "Пригласить друга") { showInvite = true }
                         Spacer(minLength: 0)
+                        // 2026-11-16 (Олег): скан QR-кода инвайта — камера,
+                        // код распознан → чат добавляется сразу (шит закрыт).
+                        GlassPillButton(title: "Сканировать QR") { showQRScanner = true }
+                        Spacer(minLength: 0)
                         GlassPillButton(title: "Вставить ссылку") { showNewChat = true }
                         Spacer(minLength: 0)
                         moreMenu
@@ -182,6 +189,17 @@ struct ChatListView: View {
             .toolbar(.hidden, for: .navigationBar)  // v9: empty navbar row removed
             .toolbarBackground(MurmurTheme.panel, for: .navigationBar)
             .sheet(isPresented: $showNewChat) { newChatSheet }
+            .sheet(isPresented: $showQRScanner) {
+                qrScannerSheet
+            }
+            .alert("QR-сканер", isPresented: Binding(
+                get: { qrError != nil },
+                set: { if !$0 { qrError = nil } }
+            )) {
+                Button("Понятно", role: .cancel) {}
+            } message: {
+                Text(qrError ?? "")
+            }
             .sheet(isPresented: $showInvite) {
                 InviteView(myNpub: app.myNpub)
             }
@@ -318,6 +336,31 @@ struct ChatListView: View {
 
     /// «…» menu (backup / restore / wipe) as its own view — keeps the
     /// toolbar expression small (Swift type-checker timeout fix).
+    /// «Сканировать QR» — живая камера (DataScanner на iOS 16+, AVFoundation
+    /// фолбэк) в шите поверх чат-листа (Олег, 16.11).
+    private var qrScannerSheet: some View {
+        QRScanView(
+            onCode: { payload in
+                showQRScanner = false
+                handleScannedCode(payload)
+            },
+            onError: { message in
+                qrError = message
+            }
+        )
+        .ignoresSafeArea()
+    }
+
+    /// Распознанная строка → чат. Тот же парсер, что у «Вставить ссылку»:
+    /// `…#invite=npub1…`, `/invite/npub1…`, `?invite=npub1…` или голый npub.
+    private func handleScannedCode(_ payload: String) {
+        if let peer = Self.extractInviteNpub(from: payload) {
+            openChat(with: peer)
+        } else {
+            app.statusLine = "В QR-коде нет ссылки-приглашения MurMur"
+        }
+    }
+
     private var moreMenu: some View {
         Menu {
             Button {
