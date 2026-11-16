@@ -150,10 +150,17 @@ struct BackupExportSheet: View {
 struct BackupImportSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var app: AppState
-    var onSuccess: (() -> Void)?
     /// Pre-selected file (e.g. opened from Files) — the sheet skips the
     /// picker and asks only for the password (2026-11-14).
+    ///
+    /// ВАЖНО: объявлен ПЕРЕД `onSuccess` — trailing closure привязывается к
+    /// ПЕРВОМУ closure-параметру структуры. Если первым объявлен `onSuccess`,
+    /// вызов `BackupImportSheet(initialURL: url) { ... }` не компилируется
+    /// («Incorrect argument label… expected 'onSuccess:initialURL:'») —
+    /// эта ошибка блокировала СБОРКУ и из-за неё ни одна сборка после
+    /// v160z28 не попадала на телефон (Олег, 16.11 16:41).
     var initialURL: URL? = nil
+    var onSuccess: (() -> Void)?
 
     @State private var password = ""
     @State private var showImporter = false
