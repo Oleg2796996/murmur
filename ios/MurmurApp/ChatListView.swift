@@ -508,6 +508,12 @@ func shortNpub(_ npub: String) -> String {
 
 /// Единая точка «как подписать чат»: имя контакта, иначе «Без имени».
 /// Используется чат-листом и шапкой чата.
+///
+/// `displayName(for:)` — метод @MainActor-класса AppState: сама функция
+/// обязана быть @MainActor, иначе вызов из ViewBuilder-контекста падает
+/// с «Call to main actor-isolated instance method in a synchronous
+/// nonisolated context» (Олег, Xcode 16.11 17:07).
+@MainActor
 func contactLabel(_ app: AppState, _ peer: String) -> String {
     app.displayName(for: peer) ?? "Без имени"
 }
