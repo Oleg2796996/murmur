@@ -56,11 +56,8 @@ enum MurmurI18N {
         "Пропущенный": Entry(en: "Missed", fr: "Manqué", es: "Perdida", de: "Verpasst"),
         "Исходящий": Entry(en: "Outgoing", fr: "Sortant", es: "Saliente", de: "Ausgehend"),
         "Входящий": Entry(en: "Incoming", fr: "Entrant", es: "Entrante", de: "Eingehend"),
-        // Типовые превью вложений (📎 фото/видео/аудио/файл).
-        "фото": Entry(en: "photo", fr: "photo", es: "foto", de: "Foto"),
-        "видео": Entry(en: "video", fr: "vidéo", es: "vídeo", de: "Video"),
-        "аудио": Entry(en: "audio", fr: "audio", es: "audio", de: "Audio"),
-        "файл": Entry(en: "file", fr: "fichier", es: "archivo", de: "Datei"),
+        // фото/видео/аудио/файл уже в словаре ниже — НЕ дублировать
+        // (Dictionary literal duplicate keys = runtime crash, сборка 17.11).
         // Композер и меню.
         "Сообщение": Entry(en: "Message", fr: "Message", es: "Mensaje", de: "Nachricht"),
         "Язык": Entry(en: "Language", fr: "Langue", es: "Idioma", de: "Sprache"),
