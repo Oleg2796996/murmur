@@ -188,36 +188,9 @@ struct ChatListView: View {
                         Spacer(minLength: 0)
                         GlassPillButton(title: MurmurI18N.t("Вставить ссылку").replacingOccurrences(of: " ", with: "\n")) { showNewChat = true }
                         Spacer(minLength: 0)
-                        // 🌐-кнопка смены языка — PWA parity (v160y33, call43):
-                        // показывает КОД текущего языка (🌐 RU/EN/FR/ES/DE),
-                        // цикл ru → en → fr → es → de.
-                        Button {
-                            MurmurI18N.setLanguage(MurmurI18N.current.next)
-                        } label: {
-                            Text("🌐 \(MurmurI18N.current.label)")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(MurmurTheme.accent)
-                                .frame(width: 52, height: 44)
-                                .background {
-                                    if #available(iOS 26.0, *) {
-                                        AnyView(
-                                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                                .fill(.clear)
-                                                .glassEffect(.regular.tint(.white.opacity(0.08)), in: .capsule)
-                                        )
-                                    } else {
-                                        AnyView(
-                                            Capsule()
-                                                .fill(.ultraThinMaterial)
-                                                .overlay(Capsule().stroke(.white.opacity(0.10), lineWidth: 0.5))
-                                                .shadow(color: .black.opacity(0.25), radius: 4, y: 1)
-                                        )
-                                    }
-                                }
-                                .contentShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        Spacer(minLength: 0)
+                        // Смена языка перенесена в moreMenu (Олег 17.11:
+                        // 🌐-кнопка в ряду лишняя — на узких экранах ряд
+                        // не помещался).
                         moreMenu
                     }
                     }
@@ -395,6 +368,25 @@ struct ChatListView: View {
 
     private var moreMenu: some View {
         Menu {
+            // Смена языка (Олег 17.11): перенесена сюда из ряда кнопок.
+            // Подменю с отметкой текущего языка; после выбора langEpoch
+            // пересобирает дерево со свежими t(...) строками.
+            Menu {
+                ForEach(MurmurI18N.Lang.allCases, id: \.self) { l in
+                    Button {
+                        MurmurI18N.setLanguage(l)
+                    } label: {
+                        if l == MurmurI18N.current {
+                            Label(l.label, systemImage: "checkmark")
+                        } else {
+                            Text(l.label)
+                        }
+                    }
+                }
+            } label: {
+                Label("Язык · \(MurmurI18N.current.label)", systemImage: "globe")
+            }
+            Divider()
             Button {
                 showBackupExport = true
             } label: { Label("Скачать backup", systemImage: "square.and.arrow.down") }
