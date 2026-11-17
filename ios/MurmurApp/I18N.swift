@@ -3,6 +3,8 @@
 // Keys are the RUSSIAN canonical strings — same convention as the PWA:
 // ru is the native language; en/fr/es/de are translations.
 
+import Foundation
+
 enum MurmurI18N {
 
     /// Languages, same set and cycle order as the PWA: ru → en → fr → es → de.
@@ -203,7 +205,7 @@ enum MurmurI18N {
     /// PWA htmlBlocks — подстрочные правила (длинные фразы лендинга,
     /// склеенные в предложения с интерполяцией). Применяются ВНУТРИ строк.
     /// Longest-first — как в PWA DOM-pass.
-    static let substringRules: [(String, Entry)] = [
+    private static let substringRules: [(String, Entry)] = [
         ("Почему это приватно", Entry(en: "Why this is private", fr: "Pourquoi c’est privé", es: "Por qué es privado", de: "Warum das privat ist")),
         ("Всё хранится на вашем устройстве", Entry(en: "Everything stays on your device", fr: "Tout reste sur votre appareil", es: "Todo queda en tu dispositivo", de: "Alles bleibt auf deinem Gerät")),
         ("— сервер видит только зашифрованные сообщения", Entry(en: "— the server sees only encrypted messages", fr: "— le serveur ne voit que du chiffré", es: "— el servidor solo ve cifrado", de: "— der Server sieht nur Verschlüsseltes")),
