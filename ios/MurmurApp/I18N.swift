@@ -47,6 +47,23 @@ enum MurmurI18N {
         "Вставить ссылку 📋": Entry(en: "Paste link 📋", fr: "Coller le lien 📋", es: "Pegar enlace 📋", de: "Link einfügen 📋"),
         // iOS-only кнопка (PWA-словарь не содержит): камера-сканер QR-инвайта.
         "Сканировать QR": Entry(en: "Scan QR", fr: "Scanner le QR", es: "Escanear QR", de: "QR scannen"),
+        // iOS-only пилюли без эмодзи (Олег 17.11: иконки на кнопках убрать).
+        "Пригласить друга": Entry(en: "Invite a friend", fr: "Inviter un ami", es: "Invitar a un amigo", de: "Freund einladen"),
+        "Вставить ссылку": Entry(en: "Paste link", fr: "Coller le lien", es: "Pegar enlace", de: "Link einfügen"),
+        // Call-event лейблы (Models.callEventText + превью чат-листа).
+        "Исходящий отклонен": Entry(en: "Outgoing declined", fr: "Appel sortant refusé", es: "Llamada saliente rechazada", de: "Ausgehender Anruf abgelehnt"),
+        "Входящий отменен": Entry(en: "Incoming cancelled", fr: "Appel entrant annulé", es: "Llamada entrante cancelada", de: "Eingehender Anruf abgebrochen"),
+        "Пропущенный": Entry(en: "Missed", fr: "Manqué", es: "Perdida", de: "Verpasst"),
+        "Исходящий": Entry(en: "Outgoing", fr: "Sortant", es: "Saliente", de: "Ausgehend"),
+        "Входящий": Entry(en: "Incoming", fr: "Entrant", es: "Entrante", de: "Eingehend"),
+        // Типовые превью вложений (📎 фото/видео/аудио/файл).
+        "фото": Entry(en: "photo", fr: "photo", es: "foto", de: "Foto"),
+        "видео": Entry(en: "video", fr: "vidéo", es: "vídeo", de: "Video"),
+        "аудио": Entry(en: "audio", fr: "audio", es: "audio", de: "Audio"),
+        "файл": Entry(en: "file", fr: "fichier", es: "archivo", de: "Datei"),
+        // Композер и меню.
+        "Сообщение": Entry(en: "Message", fr: "Message", es: "Mensaje", de: "Nachricht"),
+        "Язык": Entry(en: "Language", fr: "Langue", es: "Idioma", de: "Sprache"),
         "Скачать": Entry(en: "Download", fr: "Télécharger", es: "Descargar", de: "Herunterladen"),
         "Скачать backup": Entry(en: "Download backup", fr: "Télécharger la sauvegarde", es: "Descargar copia de seguridad", de: "Backup herunterladen"),
         "Восстановить backup": Entry(en: "Restore backup", fr: "Restaurer la sauvegarde", es: "Restaurar copia de seguridad", de: "Backup wiederherstellen"),

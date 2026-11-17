@@ -156,7 +156,7 @@ struct ChatView: View {
             return AnyView(
                 HStack {
                     Spacer(minLength: 0)
-                    Text(m.callEventText)
+                    Text(MurmurI18N.t(m.callEventText))
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(Color(white: 0.85))
                         .padding(.vertical, 3)
@@ -326,7 +326,7 @@ struct ChatView: View {
                 cameraMovieURL = nil
                 Task { await sendMovieFile(url, fallbackName: "video") }
             }
-            TextField("Сообщение", text: $draft, axis: .vertical)
+            TextField(MurmurI18N.t("Сообщение"), text: $draft, axis: .vertical)
                 .focused($draftFocused)
                 .lineLimit(1...5)
                 .padding(.horizontal, 12)

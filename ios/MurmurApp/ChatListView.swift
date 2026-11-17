@@ -180,9 +180,9 @@ struct ChatListView: View {
                     // без Spacer'ов и ScrollView — на любой ширине ряд
                     // растягивается край-в-край).
                     HStack(spacing: 6) {
-                        GlassPillButton(title: MurmurI18N.t("Пригласить друга ✉").replacingOccurrences(of: " ", with: "\n")) { showInvite = true }
+                        GlassPillButton(title: MurmurI18N.t("Пригласить друга").replacingOccurrences(of: " ", with: "\n")) { showInvite = true }
                         GlassPillButton(title: MurmurI18N.t("Сканировать QR").replacingOccurrences(of: " ", with: "\n")) { showQRScanner = true }
-                        GlassPillButton(title: MurmurI18N.t("Вставить ссылку 📋").replacingOccurrences(of: " ", with: "\n")) { showNewChat = true }
+                        GlassPillButton(title: MurmurI18N.t("Вставить ссылку").replacingOccurrences(of: " ", with: "\n")) { showNewChat = true }
                         // Смена языка в moreMenu (Олег 17.11).
                         moreMenu
                             .frame(width: 44, height: 44)
@@ -377,19 +377,19 @@ struct ChatListView: View {
                     }
                 }
             } label: {
-                Label("Язык · \(MurmurI18N.current.label)", systemImage: "globe")
+                Label(MurmurI18N.t("Язык") + " · \(MurmurI18N.current.label)", systemImage: "globe")
             }
             Divider()
             Button {
                 showBackupExport = true
-            } label: { Label("Скачать backup", systemImage: "square.and.arrow.down") }
+            } label: { Label(MurmurI18N.t("Скачать backup"), systemImage: "square.and.arrow.down") }
             Button {
                 showBackupImporter = true
-            } label: { Label("Восстановить из backup", systemImage: "square.and.arrow.up.on.square") }
+            } label: { Label(MurmurI18N.t("Восстановить из backup"), systemImage: "square.and.arrow.up.on.square") }
             Divider()
             Button(role: .destructive) {
                 showWipeConfirm = true
-            } label: { Label("Удалить все данные", systemImage: "trash") }
+            } label: { Label(MurmurI18N.t("Удалить все данные"), systemImage: "trash") }
         } label: {
             Image(systemName: "ellipsis.circle")
                 .font(.system(size: 17, weight: .semibold))
@@ -456,7 +456,7 @@ struct ChatListView: View {
                 if app.typingPeers.contains(chat.peer) {
                     Text("печатает…").font(.system(size: 12)).foregroundStyle(MurmurTheme.accent)
                 } else {
-                    Text(Self.previewText(chat))
+                    Text(MurmurI18N.t(Self.previewText(chat)))
                         .font(.system(size: 12, weight: app.unreadCount(for: chat.peer) > 0 ? .semibold : .regular))
                         .foregroundStyle(app.unreadCount(for: chat.peer) > 0 ? MurmurTheme.text : MurmurTheme.textMuted)
                         .lineLimit(1)
@@ -500,10 +500,10 @@ struct ChatListView: View {
     /// the body (they duplicate the attachment label).
     static func previewText(_ chat: ChatSummary) -> String {
         let kindOf: (String) -> String = { mime in
-            if mime.hasPrefix("image/") { return "фото" }
-            if mime.hasPrefix("video/") { return "видео" }
-            if mime.hasPrefix("audio/") { return "аудио" }
-            return "файл"
+            if mime.hasPrefix("image/") { return MurmurI18N.t("фото") }
+            if mime.hasPrefix("video/") { return MurmurI18N.t("видео") }
+            if mime.hasPrefix("audio/") { return MurmurI18N.t("аудио") }
+            return MurmurI18N.t("файл")
         }
         let attLabel: String?
         if chat.lastMimes.isEmpty {
@@ -526,7 +526,7 @@ struct ChatListView: View {
             return attLabel != nil ? attLabel! + " · " + t : t
         }
         if let attLabel { return attLabel }
-        return "…"
+        return MurmurI18N.t("…")
     }
 
     private var newChatSheet: some View {
