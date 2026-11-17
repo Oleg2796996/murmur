@@ -19,6 +19,8 @@
         "Восстановить": { en: "Restore", fr: "Restaurer", es: "Restaurar", de: "Wiederherstellen" },
         "Пригласить друга ✉": { en: "Invite a friend ✉", fr: "Inviter un ami ✉", es: "Invitar a un amigo ✉", de: "Freund einladen ✉" },
         "Вставить ссылку 📋": { en: "Paste link 📋", fr: "Coller le lien 📋", es: "Pegar enlace 📋", de: "Link einfügen 📋" },
+        // iOS-only (кнопки чат-листа iOS): камера-сканер QR-инвайта.
+        "Сканировать QR": { en: "Scan QR", fr: "Scanner le QR", es: "Escanear QR", de: "QR scannen" },
         "Скачать": { en: "Download", fr: "Télécharger", es: "Descargar", de: "Herunterladen" },
         "Скачать backup": { en: "Download backup", fr: "Télécharger la sauvegarde", es: "Descargar copia de seguridad", de: "Backup herunterladen" },
         "Восстановить backup": { en: "Restore backup", fr: "Restaurer la sauvegarde", es: "Restaurar copia de seguridad", de: "Backup wiederherstellen" },

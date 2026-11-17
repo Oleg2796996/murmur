@@ -45,6 +45,8 @@ enum MurmurI18N {
         "Восстановить": Entry(en: "Restore", fr: "Restaurer", es: "Restaurar", de: "Wiederherstellen"),
         "Пригласить друга ✉": Entry(en: "Invite a friend ✉", fr: "Inviter un ami ✉", es: "Invitar a un amigo ✉", de: "Freund einladen ✉"),
         "Вставить ссылку 📋": Entry(en: "Paste link 📋", fr: "Coller le lien 📋", es: "Pegar enlace 📋", de: "Link einfügen 📋"),
+        // iOS-only кнопка (PWA-словарь не содержит): камера-сканер QR-инвайта.
+        "Сканировать QR": Entry(en: "Scan QR", fr: "Scanner le QR", es: "Escanear QR", de: "QR scannen"),
         "Скачать": Entry(en: "Download", fr: "Télécharger", es: "Descargar", de: "Herunterladen"),
         "Скачать backup": Entry(en: "Download backup", fr: "Télécharger la sauvegarde", es: "Descargar copia de seguridad", de: "Backup herunterladen"),
         "Восстановить backup": Entry(en: "Restore backup", fr: "Restaurer la sauvegarde", es: "Restaurar copia de seguridad", de: "Backup wiederherstellen"),

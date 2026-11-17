@@ -55,7 +55,9 @@ struct GlassPillButton: View {
                 .minimumScaleFactor(0.75)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 3)
-                .frame(width: 96, height: 44, alignment: .center)
+                // 2026-11-17 (Олег): резиновая ширина — кнопки ряда
+                // распределяются равномерно по всей ширине экрана.
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .center)
                 .background {
                     if #available(iOS 26.0, *) {
                         AnyView(
@@ -173,26 +175,17 @@ struct ChatListView: View {
             // остальные в общую капсулу.
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
-                    // 2026-11-16 23:0x: 5 элементов ряда (3 пилюли + 🌐 + …) на
-                    // узких iPhone (mini/SE, 375pt) не помещаются — ряд в
-                    // горизонтальном ScrollView без индикатора: на широких
-                    // выглядит как раньше, на узких прокручивается.
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    // 2026-11-17 (Олег): кнопки распределены РАВНОМЕРНО по
+                    // ширине экрана (пилюли резиновые maxWidth .infinity,
+                    // без Spacer'ов и ScrollView — на любой ширине ряд
+                    // растягивается край-в-край).
                     HStack(spacing: 6) {
-                        // 2026-11-16 21:18 (Олег): слова не должны переноситься
-                        // по частям — разрывы строк заданы явно (\n), каждое
-                        // слово целиком на своей строке.
-                        GlassPillButton(title: MurmurI18N.t("Пригласить друга").replacingOccurrences(of: " ", with: "\n")) { showInvite = true }
-                        Spacer(minLength: 0)
+                        GlassPillButton(title: MurmurI18N.t("Пригласить друга ✉").replacingOccurrences(of: " ", with: "\n")) { showInvite = true }
                         GlassPillButton(title: MurmurI18N.t("Сканировать QR").replacingOccurrences(of: " ", with: "\n")) { showQRScanner = true }
-                        Spacer(minLength: 0)
-                        GlassPillButton(title: MurmurI18N.t("Вставить ссылку").replacingOccurrences(of: " ", with: "\n")) { showNewChat = true }
-                        Spacer(minLength: 0)
-                        // Смена языка перенесена в moreMenu (Олег 17.11:
-                        // 🌐-кнопка в ряду лишняя — на узких экранах ряд
-                        // не помещался).
+                        GlassPillButton(title: MurmurI18N.t("Вставить ссылку 📋").replacingOccurrences(of: " ", with: "\n")) { showNewChat = true }
+                        // Смена языка в moreMenu (Олег 17.11).
                         moreMenu
-                    }
+                            .frame(width: 44, height: 44)
                     }
                     .padding(.horizontal, 8)
                     .padding(.top, 0)
